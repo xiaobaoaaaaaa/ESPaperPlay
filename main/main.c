@@ -28,5 +28,5 @@ void app_main(void)
         ESP_LOGI(TAG, "WiFi initialization successful.");
     } else {
         ESP_LOGE(TAG, "WiFi initialization failed.");
-    }    
+    }
 }
