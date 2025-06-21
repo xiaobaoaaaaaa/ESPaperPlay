@@ -2,10 +2,22 @@
 #include <stdbool.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
-
 #include "wifi_ctrl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "main"
+
+void wifi_init_task(void *param)
+{
+    bool success = wifi_init();
+    if (success) {
+        ESP_LOGI(TAG, "WiFi initialization successful.");
+    } else {
+        ESP_LOGE(TAG, "WiFi initialization failed.");
+    }
+    vTaskDelete(NULL); // 任务完成后删除自身
+}
 
 void app_main(void)
 {
@@ -23,10 +35,6 @@ void app_main(void)
     ESP_LOGI(TAG, "NVS initialized successfully.");
 
     // 初始化 WiFi
-    bool success = wifi_init();
-    if (success) {
-        ESP_LOGI(TAG, "WiFi initialization successful.");
-    } else {
-        ESP_LOGE(TAG, "WiFi initialization failed.");
-    }
+    ESP_LOGI(TAG, "Starting WiFi initialization task...");
+    xTaskCreate(wifi_init_task, "wifi_init_task", 4096, NULL, 5, NULL);
 }
