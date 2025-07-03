@@ -5,6 +5,8 @@
 #include "wifi_ctrl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include"sntp.h"
+#include <time.h>
 
 #define TAG "main"
 
@@ -16,6 +18,20 @@ void wifi_init_task(void *param)
     } else {
         ESP_LOGE(TAG, "WiFi initialization failed.");
     }
+    vTaskDelete(NULL); // 任务完成后删除自身
+}
+
+void time_init_task(void *param)
+{
+    time_init();
+    //打印系统时间
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    char strftime_buf[64];
+    strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    ESP_LOGI(TAG, "Current time: %s", strftime_buf);
     vTaskDelete(NULL); // 任务完成后删除自身
 }
 
@@ -37,4 +53,8 @@ void app_main(void)
     // 初始化 WiFi
     ESP_LOGI(TAG, "Starting WiFi initialization task...");
     xTaskCreate(wifi_init_task, "wifi_init_task", 4096, NULL, 5, NULL);
+
+    // 初始化时间同步
+    ESP_LOGI(TAG, "Starting time initialization...");
+    xTaskCreate(time_init_task, "time_init_task", 4096, NULL, 5, NULL);
 }

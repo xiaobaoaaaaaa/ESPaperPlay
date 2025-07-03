@@ -1,9 +1,6 @@
 #include "wifi_ctrl.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_smartconfig.h"
@@ -14,7 +11,7 @@
 #define NVS_KEY_PASSWORD "password"
 #define MAX_WIFI_RETRY 5
 
-static EventGroupHandle_t s_wifi_event_group;
+EventGroupHandle_t s_wifi_event_group;
 
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
