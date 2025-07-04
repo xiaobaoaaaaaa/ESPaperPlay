@@ -7,6 +7,8 @@
 #include "freertos/task.h"
 #include"sntp.h"
 #include <time.h>
+#include "button.h"
+#include "driver/gpio.h"
 
 #define TAG "main"
 
@@ -57,4 +59,8 @@ void app_main(void)
     // 初始化时间同步
     ESP_LOGI(TAG, "Starting time initialization...");
     xTaskCreate(time_init_task, "time_init_task", 4096, NULL, 5, NULL);
+
+    // 初始化按钮
+    ESP_LOGI(TAG, "Initializing button...");
+    button_init(GPIO_NUM_0);
 }
