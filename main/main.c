@@ -9,6 +9,7 @@
 #include <time.h>
 #include "button.h"
 #include "driver/gpio.h"
+#include "buzzer.h"
 
 #define TAG "main"
 
@@ -63,4 +64,12 @@ void app_main(void)
     // 初始化按钮
     ESP_LOGI(TAG, "Initializing button...");
     button_init(GPIO_NUM_0);
+    
+
+    // 初始化蜂鸣器
+    ESP_LOGI(TAG, "Initializing buzzer...");
+    buzzer_init(15); 
+    buzzer(NOTE_C4, 4095, 1, 1, 1); // 蜂鸣器发出音符C4
+    buzzer(NOTE_E4, 4095, 1, 1, 1); // 蜂鸣器发出音符E4
+    buzzer(NOTE_G4, 4095, 1, 1, 1); // 蜂鸣器发出音符G4
 }

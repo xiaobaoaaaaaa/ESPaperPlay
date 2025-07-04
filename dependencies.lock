@@ -25,13 +25,25 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.1.1
+  hayschan/buzzer:
+    component_hash: 
+      ed8b35d8d2d662379010dd44624e3d0ac88ec9027a99f1091663dda821f3051d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.0
   idf:
     source:
       type: idf
     version: 5.4.1
 direct_dependencies:
 - espressif/button
+- hayschan/buzzer
 - idf
-manifest_hash: 0a4a56913a23f93dd6dbe192d8d70e63769d8c7e3c527e88e9b0ad4d0d0375a4
+manifest_hash: a502d348810e87a4bd9d3a4448f6f3ef72840d79643c632ac3a29943f1aa8c9f
 target: esp32
 version: 2.0.0

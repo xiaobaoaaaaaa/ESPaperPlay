@@ -1,0 +1,3 @@
+[submodule "Buzzer"]
+	path = Buzzer
+	url = https://github.com/BrandonElectronic/Buzzer.git

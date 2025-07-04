@@ -1,0 +1,7 @@
+dependencies:
+  idf:
+    version: '>=4.4.0'
+description: Buzzer component for ESP-IDF
+maintainers:
+- Hays Chan <blog@haysc.tech>
+version: 1.0.0

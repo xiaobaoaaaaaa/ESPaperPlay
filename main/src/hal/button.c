@@ -13,6 +13,7 @@
 #include "esp_sleep.h"
 #include "esp_idf_version.h"
 #include "button_gpio.h"
+#include "buzzer.h"
 
 /* Most development boards have "boot" button attached to GPIO0.
  * You can also change this to another pin.
@@ -28,7 +29,32 @@ static const char *TAG = "button";
 
 static void button_event_cb(void *arg, void *data)
 {
-    iot_button_print_event((button_handle_t)arg);
+    //iot_button_print_event((button_handle_t)arg);
+   button_event_t event = (button_event_t)data;
+
+    switch (event) {
+        case BUTTON_PRESS_DOWN:
+            // 处理按钮按下事件
+            break;
+        case BUTTON_PRESS_UP:
+            // 处理按钮释放事件
+            break;
+        case BUTTON_SINGLE_CLICK:
+            // 处理单击事件
+            buzzer(NOTE_C4, 7168, 1, 1, 1); // 蜂鸣器发出音符C4
+            break;
+        case BUTTON_DOUBLE_CLICK:
+            // 处理双击事件
+            buzzer(NOTE_E4, 7168, 1, 1, 1); // 蜂鸣器发出音符E4
+            break;
+        case BUTTON_LONG_PRESS_START:
+            //处理长按事件
+            break;
+
+        // 其他事件处理...
+        default:
+            break;
+    }
 }
 
 #if CONFIG_ENTER_LIGHT_SLEEP_MODE_MANUALLY
@@ -73,39 +99,3 @@ void button_init(uint32_t button_num)
 
     ESP_ERROR_CHECK(ret);
 }
-
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
-void power_save_init(void)
-{
-    esp_pm_config_t pm_config = {
-        .max_freq_mhz = 240,
-        .min_freq_mhz = 80,
-#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
-        .light_sleep_enable = true
-#endif
-    };
-    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
-}
-#else
-void power_save_init(void)
-{
-#if CONFIG_IDF_TARGET_ESP32
-    esp_pm_config_esp32_t pm_config = {
-#elif CONFIG_IDF_TARGET_ESP32S2
-    esp_pm_config_esp32s2_t pm_config = {
-#elif CONFIG_IDF_TARGET_ESP32C3
-    esp_pm_config_esp32c3_t pm_config = {
-#elif CONFIG_IDF_TARGET_ESP32S3
-    esp_pm_config_esp32s3_t pm_config = {
-#elif CONFIG_IDF_TARGET_ESP32C2
-    esp_pm_config_esp32c2_t pm_config = {
-#endif
-        .max_freq_mhz = CONFIG_EXAMPLE_MAX_CPU_FREQ_MHZ,
-        .min_freq_mhz = CONFIG_EXAMPLE_MIN_CPU_FREQ_MHZ,
-#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
-        .light_sleep_enable = true
-#endif
-    };
-    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
-}
-#endif
