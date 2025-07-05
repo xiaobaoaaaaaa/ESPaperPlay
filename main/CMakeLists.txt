@@ -2,7 +2,10 @@ idf_component_register(SRCS "main.c"
                     "src/network/wifi_ctrl.c"
                     "src/sntp/sntp.c"
                     "src/hal/button.c"
+                    "src/display/display.c"
+                    "src/display/img_bitmap.c"
                     INCLUDE_DIRS "."
                     "./include/network"
                     "./include/sntp"
-                    "./include/hal")
+                    "./include/hal"
+                    "./include/display")
