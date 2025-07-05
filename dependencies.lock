@@ -1,7 +1,6 @@
 dependencies:
   espressif/button:
-    component_hash: 
-      f53face2ab21fa0ffaf4cf0f6e513d393f56df6586bb2ad1146120f03f19ee05
+    component_hash: f53face2ab21fa0ffaf4cf0f6e513d393f56df6586bb2ad1146120f03f19ee05
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -15,8 +14,7 @@ dependencies:
       type: service
     version: 4.1.3
   espressif/cmake_utilities:
-    component_hash: 
-      05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
+    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
     dependencies:
     - name: idf
       require: private
@@ -26,8 +24,7 @@ dependencies:
       type: service
     version: 1.1.1
   hayschan/buzzer:
-    component_hash: 
-      ed8b35d8d2d662379010dd44624e3d0ac88ec9027a99f1091663dda821f3051d
+    component_hash: ed8b35d8d2d662379010dd44624e3d0ac88ec9027a99f1091663dda821f3051d
     dependencies:
     - name: idf
       require: private

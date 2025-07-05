@@ -29,29 +29,14 @@ static const char *TAG = "button";
 
 static void button_event_cb(void *arg, void *data)
 {
-    //iot_button_print_event((button_handle_t)arg);
-   button_event_t event = (button_event_t)data;
-
-    switch (event) {
-        case BUTTON_PRESS_DOWN:
-            // 处理按钮按下事件
-            break;
-        case BUTTON_PRESS_UP:
-            // 处理按钮释放事件
-            break;
+    button_event_t event = iot_button_get_event((button_handle_t)arg);
+    switch (event)
+    {
         case BUTTON_SINGLE_CLICK:
-            // 处理单击事件
-            buzzer(NOTE_C4, 7168, 1, 1, 1); // 蜂鸣器发出音符C4
-            break;
-        case BUTTON_DOUBLE_CLICK:
-            // 处理双击事件
-            buzzer(NOTE_E4, 7168, 1, 1, 1); // 蜂鸣器发出音符E4
-            break;
-        case BUTTON_LONG_PRESS_START:
-            //处理长按事件
+            ESP_LOGI(TAG, "Button single click");
+            buzzer(NOTE_A7, 6000, 0.07, 0, 1); // 蜂鸣器发出音符C5
             break;
 
-        // 其他事件处理...
         default:
             break;
     }

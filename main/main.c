@@ -38,6 +38,21 @@ void time_init_task(void *param)
     vTaskDelete(NULL); // 任务完成后删除自身
 }
 
+void button_init_task(void *param)
+{
+    button_init(GPIO_NUM_0);
+    vTaskDelete(NULL); // 任务完成后删除自身
+}
+
+void buzzer_init_task(void *param)
+{
+    buzzer_init(15); // 假设蜂鸣器连接在 GPIO 15
+    buzzer(NOTE_C7, 6000, 0.3, 0, 1); // 蜂鸣器发出音符C5
+    buzzer(NOTE_E7, 6000, 0.3, 0, 1); // 蜂鸣器发出音符E5
+    buzzer(NOTE_G7, 6000, 0.3, 0, 1); // 蜂鸣器发出音符G5
+    vTaskDelete(NULL); // 任务完成后删除自身
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello! System booting...");
@@ -63,13 +78,9 @@ void app_main(void)
 
     // 初始化按钮
     ESP_LOGI(TAG, "Initializing button...");
-    button_init(GPIO_NUM_0);
-    
+    xTaskCreate(button_init_task, "button_init_task", 4096, NULL, 5, NULL);
 
     // 初始化蜂鸣器
     ESP_LOGI(TAG, "Initializing buzzer...");
-    buzzer_init(15); 
-    buzzer(NOTE_C4, 4095, 1, 1, 1); // 蜂鸣器发出音符C4
-    buzzer(NOTE_E4, 4095, 1, 1, 1); // 蜂鸣器发出音符E4
-    buzzer(NOTE_G4, 4095, 1, 1, 1); // 蜂鸣器发出音符G4
+    xTaskCreate(buzzer_init_task, "buzzer_init_task", 2048, NULL, 5, NULL);
 }
