@@ -47,11 +47,19 @@ dependencies:
     source:
       type: idf
     version: 5.4.1
+  lvgl/lvgl:
+    component_hash: b702d642e03e95928046d5c6726558e6444e112420c77efa5fdb6650b0a13c5d
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.3.0
 direct_dependencies:
 - espressif/button
 - espressif/esp_lcd_ssd1681
 - hayschan/buzzer
 - idf
-manifest_hash: 753935325353fbf7fe47db08e81b516d04e66153b512f468fb21097b9684690a
+- lvgl/lvgl
+manifest_hash: c88997a7316b61600a8e3d02c43d3ea5011ce2b393510c788ab160509cf489dd
 target: esp32
 version: 2.0.0
