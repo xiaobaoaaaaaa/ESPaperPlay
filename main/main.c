@@ -10,6 +10,7 @@
 #include "button.h"
 #include "driver/gpio.h"
 #include "buzzer.h"
+#include "epaper_driver.h"
 
 #define TAG "main"
 
@@ -53,6 +54,12 @@ void buzzer_init_task(void *param)
     vTaskDelete(NULL); // 任务完成后删除自身
 }
 
+void epaper_init_task(void *param)
+{
+    lvgl_init_epaper_display();
+    vTaskDelete(NULL); // 初始化完成后删除自身
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello! System booting...");
@@ -67,7 +74,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "NVS initialized successfully.");
-
+/*
     // 初始化 WiFi
     ESP_LOGI(TAG, "Starting WiFi initialization task...");
     xTaskCreate(wifi_init_task, "wifi_init_task", 4096, NULL, 5, NULL);
@@ -82,5 +89,9 @@ void app_main(void)
 
     // 初始化蜂鸣器
     ESP_LOGI(TAG, "Initializing buzzer...");
-    xTaskCreate(buzzer_init_task, "buzzer_init_task", 2048, NULL, 5, NULL);
+    xTaskCreate(buzzer_init_task, "buzzer_init_task", 4096, NULL, 5, NULL);*/
+
+    // 初始化 e-Paper显示
+    ESP_LOGI(TAG, "Initializing e-Paper display...");
+    xTaskCreatePinnedToCore(epaper_init_task, "epaper_init_task", 4096, NULL, 5, NULL, 1); // 将 e-Paper 初始化任务绑定到核心 1
 }
