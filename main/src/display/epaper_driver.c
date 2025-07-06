@@ -20,7 +20,6 @@
 #include "driver/gpio.h"
 
 #include "ssd1681_waveshare_1in54_lut.h"
-#include "img_bitmap.h"
 #include "epaper_driver.h"
 #include "lvgl.h"
 #include "lv_demos.h"
