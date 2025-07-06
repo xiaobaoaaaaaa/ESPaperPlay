@@ -74,7 +74,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "NVS initialized successfully.");
-
+/*
     // 初始化 WiFi
     ESP_LOGI(TAG, "Starting WiFi initialization task...");
     xTaskCreate(wifi_init_task, "wifi_init_task", 4096, NULL, 5, NULL);
@@ -89,7 +89,7 @@ void app_main(void)
 
     // 初始化蜂鸣器
     ESP_LOGI(TAG, "Initializing buzzer...");
-    xTaskCreate(buzzer_init_task, "buzzer_init_task", 4096, NULL, 5, NULL);
+    xTaskCreate(buzzer_init_task, "buzzer_init_task", 4096, NULL, 5, NULL);*/
 
     // 初始化 e-Paper显示
     ESP_LOGI(TAG, "Initializing e-Paper display...");
