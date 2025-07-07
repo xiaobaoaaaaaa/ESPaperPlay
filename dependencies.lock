@@ -1,65 +1,17 @@
 dependencies:
-  espressif/button:
-    component_hash: f53face2ab21fa0ffaf4cf0f6e513d393f56df6586bb2ad1146120f03f19ee05
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: '*'
-    - name: idf
-      require: private
-      version: '>=4.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 4.1.3
   espressif/cmake_utilities:
-    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.1'
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com
-      type: service
+      path: E:\Projects\esp\newscreen\components\espressif__cmake_utilities
+      type: local
     version: 1.1.1
-  espressif/esp_lcd_ssd1681:
-    component_hash: fd5cdcc8e7e748838f8923cedc624eb85c0edc7a82e83db0fc4ba87cb51d1c49
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 0.1.0~1
-  hayschan/buzzer:
-    component_hash: ed8b35d8d2d662379010dd44624e3d0ac88ec9027a99f1091663dda821f3051d
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.4.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.0.0
   idf:
     source:
       type: idf
     version: 5.4.1
-  lvgl/lvgl:
-    component_hash: b702d642e03e95928046d5c6726558e6444e112420c77efa5fdb6650b0a13c5d
-    dependencies: []
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 9.3.0
 direct_dependencies:
-- espressif/button
-- espressif/esp_lcd_ssd1681
-- hayschan/buzzer
+- espressif/cmake_utilities
 - idf
-- lvgl/lvgl
-manifest_hash: c88997a7316b61600a8e3d02c43d3ea5011ce2b393510c788ab160509cf489dd
+manifest_hash: bc6f895b954039537df60c4b748bb901ace4783b39ebd53d3036c7d42f001c6f
 target: esp32
 version: 2.0.0
