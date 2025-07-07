@@ -11,6 +11,7 @@
 #include "driver/gpio.h"
 #include "buzzer.h"
 #include "epaper_driver.h"
+#include "touch.h"
 
 #define TAG "main"
 
@@ -90,5 +91,9 @@ void app_main(void)
 
     // 初始化 e-Paper显示
     ESP_LOGI(TAG, "Initializing e-Paper display...");
-    xTaskCreatePinnedToCore(epaper_init_task, "epaper_init_task", 4096, NULL, 5, NULL, 1); // 将 e-Paper 初始化任务绑定到核心 1
+    xTaskCreate(epaper_init_task, "epaper_init_task", 4096, NULL, 5, NULL); // 将 e-Paper 初始化任务绑定到核心 1
+
+    // 初始化触摸屏
+    ESP_LOGI(TAG, "Initializing touch screen...");
+    sd_touch_init();
 }
