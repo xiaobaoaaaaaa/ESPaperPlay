@@ -7,9 +7,11 @@ idf_component_register(SRCS "main.c"
                     "src/touch/gpioX.c"
                     "src/touch/i2c_ctp_ftxx06_xx36.c"
                     "src/touch/i2c_config.c"
+                    "src/lvgl/lvgl_init.c"
                     INCLUDE_DIRS "."
                     "./include/network"
                     "./include/sntp"
                     "./include/hal"
                     "./include/display"
-                    "./include/touch")
+                    "./include/touch"
+                    "./include/lvgl")

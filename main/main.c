@@ -10,7 +10,7 @@
 #include "button.h"
 #include "driver/gpio.h"
 #include "buzzer.h"
-#include "epaper_driver.h"
+#include "lvgl_init.h"
 #include "touch.h"
 
 #define TAG "main"
