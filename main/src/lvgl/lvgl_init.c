@@ -6,82 +6,71 @@
 #include "esp_log.h"
 #include <string.h>
 #include "lv_demos.h"
+#include "touch.h"
 
 #define TAG "lvgl_init"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS    2
+#define MAX_PARTIAL_REFRESH_COUNT 30
 
 #ifndef MY_DISP_HOR_RES
     #define MY_DISP_HOR_RES    200
 #endif
 
 #ifndef MY_DISP_VER_RES
-    #define MY_DISP_VER_RES    203
+    #define MY_DISP_VER_RES    200
 #endif
 
 #define BYTE_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_I1)) /*will be 2 for RGB565 */
 
 lv_display_t *disp = NULL;
+lv_indev_t *indev_touchpad = NULL;
 lv_color_t *buf1 = NULL, *buf2 = NULL;
-static uint8_t *converted_buffer_black, *converted_buffer_red;
-
 
 static uint8_t fast_refresh_lut[] = SSD1681_WAVESHARE_1IN54_V2_LUT_FAST_REFRESH_KEEP;
+int fast_refresh_count = 0;
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
-    ESP_LOGI(TAG, "Flush area: (%ld, %ld) - (%ld, %ld)", area->x1, area->y1, area->x2, area->y2);
-    int width = area->x2 - area->x1 + 1;
-    int height = area->y2 - area->y1 + 1;
-    int len = width * height;
-    int total_bytes = (len + 7) / 8;
+    int x1 = area->x1;
+    int y1 = area->y1;
+    int x2 = area->x2;
+    int y2 = area->y2;
 
-    memset(converted_buffer_black, 0, total_bytes);
+    int height = y2 - y1 + 1;
+    int width = x2 - x1 + 1;
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int i = y * width + x; // 像素在 px_map 中的线性索引
-            int byte_index = i / 8;
-            int bit_index = 7 - (i % 8);
-            bool pixel_on = (px_map[byte_index] >> bit_index) & 0x1;
+    ESP_LOGI(TAG, "Flush area: (%d, %d) - (%d, %d)", x1, y1, x2, y2);
 
-            if (pixel_on) {
-                int dst_byte_index = i / 8;
-                int dst_bit_index = 7 - (i % 8);
+    // px_map 总字节数
+    size_t size = height * width;
 
-                // 将字节向前循环移动 8 位
-                int shifted_index = (dst_byte_index + total_bytes - 8) % total_bytes;
-
-                converted_buffer_black[shifted_index] |= (1 << dst_bit_index);
-            }
-        }
+    if (size > 8) {
+        memmove(px_map, px_map + 8, size - 8);
+        // 最后8字节不填充，数据残留可能无意义
+        // 或者你可以手动清理最后8字节，避免显示残影：
+        memset(px_map + size - 8, 0xFF, 8); // 以白色填充
     }
 
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
-    ESP_ERROR_CHECK(epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, 159));
+    esp_lcd_panel_disp_on_off(panel_handle, true);
+
+    if(fast_refresh_count < MAX_PARTIAL_REFRESH_COUNT)
+    {
+        epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
+        fast_refresh_count++;
+    }
+    else
+    {
+        fast_refresh_count = 0;
+    }
 
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
-    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2, area->y2, converted_buffer_black);
+    esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, px_map);
 
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_RED);
-    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2, area->y2, converted_buffer_black);
+    esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, px_map);
 
     epaper_panel_refresh_screen(panel_handle);
-
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, false));
-}
-
-static void display_event_cb(lv_event_t * e)
-{
-    lv_area_t *area = lv_event_get_param(e);
-     // 调整x1到当前块的起始（8的倍数）
-    area->x1 = (area->x1 / 8) * 8;
-    // 调整x2到下一个块的末尾（8的倍数减1）
-    area->x2 = ((area->x2 / 8) + 1) * 8 - 1;
-    
-    // 确保不超出屏幕右边界
-    if(area->x2 >= 200) {
-        area->x2 = 200 - 1;
-    }
+    esp_lcd_panel_disp_on_off(panel_handle, false);
 }
 
 void lv_port_disp_init(void)
@@ -95,17 +84,13 @@ void lv_port_disp_init(void)
     }
 
     lv_display_set_flush_cb(disp, disp_flush);
-    lv_display_add_event_cb(disp, display_event_cb, LV_EVENT_INVALIDATE_AREA, disp);
+    //lv_display_add_event_cb(disp, display_event_cb, LV_EVENT_INVALIDATE_AREA, disp);
     size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES * sizeof(lv_color_t) / 8;
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
     buf2 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
-    size_t conv_buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES / 8;
-    converted_buffer_black = heap_caps_malloc(conv_buf_size, MALLOC_CAP_DMA);
-    converted_buffer_red   = heap_caps_malloc(conv_buf_size, MALLOC_CAP_DMA);
-
-    if (!buf1 || !buf2 || !converted_buffer_black || !converted_buffer_red) {
-        ESP_LOGE(TAG, "Display buffer malloc failed! buf1=%p, buf2=%p, black=%p, red=%p", buf1, buf2, converted_buffer_black, converted_buffer_red);
+    if (!buf1 || !buf2) {
+        ESP_LOGE(TAG, "Display buffer malloc failed! buf1=%p, buf2=%p", buf1, buf2);
         ESP_LOGE(TAG, "Free DMA heap: %u, largest free block: %u", heap_caps_get_free_size(MALLOC_CAP_DMA), heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
         return;
     }
@@ -127,13 +112,51 @@ void lvgl_timer_task(void *param)
     }
 }
 
+static void touchpad_read(lv_indev_t * indev_drv, lv_indev_data_t * data)
+{
+    static int32_t last_x = 0;
+    static int32_t last_y = 0;
+
+    ctp_tp_t ctp;
+    i2c_ctp_FTxxxx_read_all(I2C_NUM_0, &ctp);
+
+    /*Save the pressed coordinates and the state*/
+    if( ctp.tp_num > 0) {
+        ctp.tp[0].x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1; // 去除`FT6236U`触摸屏的x坐标固有偏移，再对屏幕倒立的x轴进行补偿
+        last_x = ctp.tp[0].x;
+        last_y = ctp.tp[0].y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    }
+    else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+
+    /*Set the last pressed coordinates*/
+    data->point.x = last_x;
+    data->point.y = last_y;
+}
+
+void lv_port_indev_init(void)
+{
+    sd_touch_init();
+
+    /*Register a touchpad input device*/
+    indev_touchpad = lv_indev_create();
+    lv_indev_set_type(indev_touchpad, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev_touchpad, touchpad_read);
+}
+
 void lvgl_init_epaper_display(void)
 {
     epaper_init();
 
+    //epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
+
     lv_init();
 
     lv_port_disp_init();
+
+    lv_port_indev_init();
 
     // init lvgl tick
     ESP_LOGI(TAG, "Installing LVGL tick timer");
@@ -147,7 +170,7 @@ void lvgl_init_epaper_display(void)
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000));
 
     ESP_LOGI(TAG, "Display LVGL Meter Widget");
-    lv_demo_music();
+    lv_demo_widgets();
 
     xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_task", 8192, NULL, 5, NULL, 1);
 }

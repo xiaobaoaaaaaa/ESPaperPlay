@@ -1,7 +1,10 @@
 #include "driver/gpio.h"
+#include "esp_log.h"
 
 #include "touch.h"
 #include "gpioX.h"
+
+#define TAG "touch"
 
 void sd_touch_init()
 {
@@ -9,7 +12,11 @@ void sd_touch_init()
     //gpiox_set_ppOutput(5, 1); // 如电容触摸屏不能正常初始化，建议加上此句，将RESET拉高。如仍不可以，则触摸屏硬件可能损坏
     //vTaskDelay(200 / portTICK_PERIOD_MS);
     // 配置I2C0-主机模式，100K，指定 SCL-32，SDA-33
-    i2c_master_init(I2C_NUM_0, 100000, GPIO_NUM_32, GPIO_NUM_33);
+    esp_err_t err = i2c_master_init(I2C_NUM_0, 100000, GPIO_NUM_32, GPIO_NUM_33);
+    if (err == ESP_ERR_INVALID_STATE) 
+    {
+        ESP_LOGE(TAG, "I2C driver already installed");
+    }
     // FTxxxx触控芯片初始化
     i2c_ctp_FTxxxx_init(I2C_NUM_0);
 

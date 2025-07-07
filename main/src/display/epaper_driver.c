@@ -93,11 +93,11 @@ void epaper_init(void)
     // --- Reset the display
     ESP_LOGI(TAG, "Resetting e-Paper display...");
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
     // --- Initialize LCD panel
     ESP_LOGI(TAG, "Initializing e-Paper display...");
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(50 / portTICK_PERIOD_MS);
     // Turn on the screen
     ESP_LOGI(TAG, "Turning e-Paper display on...");
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
@@ -105,16 +105,6 @@ void epaper_init(void)
     // NOTE: Setting custom LUT is not necessary. Panel built-in LUT is used calling after esp_lcd_panel_disp_on_off()
     // NOTE: Uncomment code below to see difference between full refresh & fast refresh
     // NOTE: epaper_panel_set_custom_lut() must be called AFTER calling esp_lcd_panel_disp_on_off()
-
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-
-    // --- Configurate the screen
-    // NOTE: the configurations below are all FALSE by default
-    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, false, false));
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, false));
-    esp_lcd_panel_invert_color(panel_handle, false);
-    // NOTE: Calling esp_lcd_panel_disp_on_off(panel_handle, true) will reset the LUT to the panel built-in one,
-    // custom LUT will not take effect any more after calling esp_lcd_panel_disp_on_off(panel_handle, true)
 
     epaper_panel_callbacks_t cbs = {
         .on_epaper_refresh_done = epaper_flush_ready_callback,

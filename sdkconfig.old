@@ -1960,14 +1960,15 @@ CONFIG_LV_DPI_DEF=130
 #
 # Operating System (OS)
 #
-CONFIG_LV_OS_NONE=y
+# CONFIG_LV_OS_NONE is not set
 # CONFIG_LV_OS_PTHREAD is not set
-# CONFIG_LV_OS_FREERTOS is not set
+CONFIG_LV_OS_FREERTOS=y
 # CONFIG_LV_OS_CMSIS_RTOS2 is not set
 # CONFIG_LV_OS_RTTHREAD is not set
 # CONFIG_LV_OS_WINDOWS is not set
 # CONFIG_LV_OS_MQX is not set
 # CONFIG_LV_OS_CUSTOM is not set
+CONFIG_LV_USE_FREERTOS_TASK_NOTIFY=y
 # end of Operating System (OS)
 
 #

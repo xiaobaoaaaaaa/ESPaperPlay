@@ -2,8 +2,7 @@ dependencies:
   espressif/cmake_utilities:
     dependencies: []
     source:
-      path: 
-        /home/xiaobao/Documents/ESP/newscreen/components/espressif__cmake_utilities
+      path: E:\Projects\esp\newscreen\components\espressif__cmake_utilities
       type: local
     version: 1.1.1
   idf:
