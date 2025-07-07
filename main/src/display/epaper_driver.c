@@ -47,7 +47,7 @@
 #endif
 
 #ifndef MY_DISP_VER_RES
-    #define MY_DISP_VER_RES    200
+    #define MY_DISP_VER_RES    203
 #endif
 
 #define BYTE_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_I1)) /*will be 2 for RGB565 */
@@ -74,8 +74,15 @@ IRAM_ATTR bool epaper_flush_ready_callback(const esp_lcd_panel_handle_t handle, 
 static void display_event_cb(lv_event_t * e)
 {
     lv_area_t *area = lv_event_get_param(e);
-    area->x1 = (area->x1 & ~0x7);
-    area->x2 = (area->x2 | 0x7);
+     // 调整x1到当前块的起始（8的倍数）
+    area->x1 = (area->x1 / 8) * 8;
+    // 调整x2到下一个块的末尾（8的倍数减1）
+    area->x2 = ((area->x2 / 8) + 1) * 8 - 1;
+    
+    // 确保不超出屏幕右边界
+    if(area->x2 >= 200) {
+        area->x2 = 200 - 1;
+    }
 }
 
 void lv_port_disp_init(void)
@@ -90,7 +97,7 @@ void lv_port_disp_init(void)
 
     lv_display_set_flush_cb(disp, disp_flush);
     lv_display_add_event_cb(disp, display_event_cb, LV_EVENT_INVALIDATE_AREA, disp);
-    size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES * sizeof(lv_color_t) / 2;
+    size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES * sizeof(lv_color_t) / 8;
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
     buf2 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
@@ -107,46 +114,47 @@ void lv_port_disp_init(void)
     lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 }
 
-const uint8_t bayer[4][4] = {
-  {  0,  8,  2, 10},
-  { 12,  4, 14,  6},
-  {  3, 11,  1,  9},
-  { 15,  7, 13,  5}
-};
-static uint8_t fast_refresh_lut[] = SSD1681_WAVESHARE_1IN54_V2_LUT_FAST_REFRESH;
+static uint8_t fast_refresh_lut[] = SSD1681_WAVESHARE_1IN54_V2_LUT_FAST_REFRESH_KEEP;
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
+    ESP_LOGI(TAG, "Flush area: (%ld, %ld) - (%ld, %ld)", area->x1, area->y1, area->x2, area->y2);
     int width = area->x2 - area->x1 + 1;
     int height = area->y2 - area->y1 + 1;
     int len = width * height;
-    
-    memset(converted_buffer_black, 0, len / 8);
-    memset(converted_buffer_red, 0, len / 8);  // 这里保留如果你后面有双色需求
+    int total_bytes = (len + 7) / 8;
+
+    memset(converted_buffer_black, 0, total_bytes);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            int i = y * width + x;
-            uint8_t pixel = px_map[i];
-            // 根据阈值矩阵做有序抖动
-            uint8_t threshold = bayer[y % 4][x % 4] * 16; // 0~240
-            bool bw = pixel > threshold;
-            // 设置converted_buffer_black对应位
+            int i = y * width + x; // 像素在 px_map 中的线性索引
             int byte_index = i / 8;
             int bit_index = 7 - (i % 8);
-            if (!bw) {
-            converted_buffer_black[byte_index] |= (1 << bit_index);
+            bool pixel_on = (px_map[byte_index] >> bit_index) & 0x1;
+
+            if (pixel_on) {
+                int dst_byte_index = i / 8;
+                int dst_bit_index = 7 - (i % 8);
+
+                // 将字节向前循环移动 8 位
+                int shifted_index = (dst_byte_index + total_bytes - 8) % total_bytes;
+
+                converted_buffer_black[shifted_index] |= (1 << dst_bit_index);
             }
         }
     }
 
-
-    // 发送图像到电子纸
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
     ESP_ERROR_CHECK(epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, 159));
+
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
     esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2, area->y2, converted_buffer_black);
 
+    epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_RED);
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2, area->y2, converted_buffer_black);
+
     epaper_panel_refresh_screen(panel_handle);
+
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, false));
 }
 
@@ -201,7 +209,7 @@ void epaper_init(void)
     };
     // NOTE: Please call gpio_install_isr_service() manually before esp_lcd_new_panel_ssd1681()
     // because gpio_isr_handler_add() is called in esp_lcd_new_panel_ssd1681()
-    gpio_install_isr_service(0);
+    //gpio_install_isr_service(0);
     ret = esp_lcd_new_panel_ssd1681(io_handle, &panel_config, &panel_handle);
     ESP_ERROR_CHECK(ret);
     // --- Reset the display
