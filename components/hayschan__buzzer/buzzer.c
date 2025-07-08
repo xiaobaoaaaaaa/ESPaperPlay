@@ -1,4 +1,25 @@
 #include "buzzer.h"
+#include "esp_pm.h"
+
+// 设置固定频率的函数
+void set_fixed_frequency() {
+    esp_pm_config_esp32_t pm_config = {
+        .max_freq_mhz = 240,  // 设置最大频率为240MHz
+        .min_freq_mhz = 240,  // 设置最小频率为240MHz
+        .light_sleep_enable = false
+    };
+    esp_pm_configure(&pm_config);
+}
+
+// 恢复动态频率的函数
+void restore_dynamic_frequency() {
+    esp_pm_config_esp32_t pm_config = {
+        .max_freq_mhz = 240,  // 设置最大频率为240MHz
+        .min_freq_mhz = 80,   // 设置最小频率为80MHz，允许动态调整
+        .light_sleep_enable = false
+    };
+    esp_pm_configure(&pm_config);
+}
 
 const uint16_t notes[]  ={
     0,31,33,35,37,39,41,44,46,49,52,55,58,62,65,69,73,78,82,87,93,98,104,110,117,123,131,139,147,156,165,175,185,196,208,220,
@@ -35,6 +56,7 @@ esp_err_t buzzer_init(int buzzerPin)
 
 void buzzer(piano_note_t current_note, uint32_t current_loudness, float loud_time, float no_loud_time, uint8_t loud_cycle_time)
 {
+    set_fixed_frequency();
     uint8_t current_loud_cycle_time = 0;
     ledc_set_freq(BUZZER_TIMER_SPEED_MODE, BUZZER_TIMER_SOURCE, notes[current_note]);
     for(current_loud_cycle_time = 0; current_loud_cycle_time < loud_cycle_time; current_loud_cycle_time++)
@@ -47,4 +69,5 @@ void buzzer(piano_note_t current_note, uint32_t current_loudness, float loud_tim
         ledc_update_duty(BUZZER_TIMER_SPEED_MODE, BUZZER_CHANNEL_NUM);
         vTaskDelay((1000 * no_loud_time) / portTICK_PERIOD_MS);
     }
+    restore_dynamic_frequency();
 }

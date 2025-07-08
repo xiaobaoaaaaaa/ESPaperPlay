@@ -1,7 +1,6 @@
 #include "lvgl_init.h"
 #include "epaper_driver.h"
 #include "esp_timer.h"
-#include "esp_lcd_panel_ssd1681.h"
 #include "ssd1681_waveshare_1in54_lut.h"
 #include "esp_log.h"
 #include <string.h>
@@ -11,7 +10,7 @@
 #define TAG "lvgl_init"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS    2
-#define MAX_PARTIAL_REFRESH_COUNT 30
+#define MAX_PARTIAL_REFRESH_COUNT 7
 
 #ifndef MY_DISP_HOR_RES
     #define MY_DISP_HOR_RES    200
