@@ -99,7 +99,7 @@ uint8_t i2c_ctp_FTxxxx_read_tp_num(i2c_port_t i2c_num)
 void i2c_ctp_FTxxxx_read_all(i2c_port_t i2c_num, ctp_tp_t* ctp)
 {
 	uint8_t tmp[31];
-    uint16_t pos;
+    //uint16_t pos;
     // 一次性从 0x02开始读，每次读 1+6*5=31 字节，里面包含5个触摸点的信息。
     i2c_ctp_FTxxxx_read(i2c_num, CTP_FTxxxx_TD_STATUS, tmp, 31);
 

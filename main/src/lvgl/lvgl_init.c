@@ -31,24 +31,16 @@ static uint8_t fast_refresh_lut[] = SSD1681_WAVESHARE_1IN54_V2_LUT_FAST_REFRESH_
 int fast_refresh_count = 0;
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
-    int x1 = area->x1;
-    int y1 = area->y1;
-    int x2 = area->x2;
-    int y2 = area->y2;
 
-    int height = y2 - y1 + 1;
-    int width = x2 - x1 + 1;
-
-    ESP_LOGI(TAG, "Flush area: (%d, %d) - (%d, %d)", x1, y1, x2, y2);
+    int height = area->y2 - area->y1 + 1;
+    int width = area->x2 - area->x1 + 1;
 
     // px_map 总字节数
     size_t size = height * width;
 
     if (size > 8) {
         memmove(px_map, px_map + 8, size - 8);
-        // 最后8字节不填充，数据残留可能无意义
-        // 或者你可以手动清理最后8字节，避免显示残影：
-        memset(px_map + size - 8, 0xFF, 8); // 以白色填充
+        memset(px_map + size - 8, 0xFF, 8);
     }
 
     esp_lcd_panel_disp_on_off(panel_handle, true);
@@ -64,10 +56,10 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
     }
 
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
-    esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, px_map);
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
 
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_RED);
-    esp_lcd_panel_draw_bitmap(panel_handle, x1, y1, x2 + 1, y2 + 1, px_map);
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
 
     epaper_panel_refresh_screen(panel_handle);
     esp_lcd_panel_disp_on_off(panel_handle, false);
@@ -149,8 +141,6 @@ void lv_port_indev_init(void)
 void lvgl_init_epaper_display(void)
 {
     epaper_init();
-
-    //epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
 
     lv_init();
 
