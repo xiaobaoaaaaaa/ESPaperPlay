@@ -35,22 +35,29 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
     int width = area->x2 - area->x1 + 1;
 
     // px_map 总字节数
-    size_t size = height * width;
+    size_t size = height * width / 8;
 
     if (size > 8) {
-        memmove(px_map, px_map + 8, size - 8);
-        memset(px_map + size - 8, 0xFF, 8);
+        memmove(px_map, px_map + 8, size);
+        //memset(px_map + size - 8, 0xFF, 8);
+    }
+
+    uint8_t inverted[size];
+    for (unsigned i = 0; i < size; i++) {
+        inverted[i] = ~px_map[i];
     }
 
     esp_lcd_panel_disp_on_off(panel_handle, true);
 
     if(fast_refresh_count < MAX_PARTIAL_REFRESH_COUNT)
     {
-        epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
+        //epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
+        epaper_panel_set_refresh_mode(panel_handle, true);
         fast_refresh_count++;
     }
     else
     {
+        epaper_panel_set_refresh_mode(panel_handle, false);
         fast_refresh_count = 0;
     }
 
@@ -58,7 +65,7 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
     esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
 
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_RED);
-    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, inverted);
 
     epaper_panel_refresh_screen(panel_handle);
     esp_lcd_panel_disp_on_off(panel_handle, false);

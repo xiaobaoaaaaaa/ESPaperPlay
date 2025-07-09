@@ -61,6 +61,7 @@ typedef struct {
     bool _mirror_x;
     uint8_t *_framebuffer;
     bool _invert_color;
+    bool partial_refresh;
 } epaper_panel_t;
 
 // --- Utility functions
@@ -213,28 +214,37 @@ esp_err_t epaper_panel_refresh_screen(esp_lcd_panel_t *panel)
 {
     ESP_RETURN_ON_FALSE(panel, ESP_ERR_INVALID_ARG, TAG, "panel handler is NULL");
     epaper_panel_t *epaper_panel = __containerof(panel, epaper_panel_t, base);
-    // --- Set color invert
-    uint8_t duc_flag = 0x00;
-    if (!(epaper_panel->_invert_color)) {
-        duc_flag |= SSD1681_PARAM_COLOR_BW_INVERSE_BIT;
-        duc_flag &= (~SSD1681_PARAM_COLOR_RW_INVERSE_BIT);
-    } else {
-        duc_flag &= (~SSD1681_PARAM_COLOR_BW_INVERSE_BIT);
-        duc_flag |= SSD1681_PARAM_COLOR_RW_INVERSE_BIT;
-    }
-    /*ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, SSD1681_CMD_DISP_UPDATE_CTRL, (uint8_t[]) {
-        duc_flag  // Color invert flag
-    }, 1), TAG, "SSD1681_CMD_DISP_UPDATE_CTRL err");*/
-    // --- Enable refresh done handler isr
+    
+    // 设置边界波形控制（关键区别）
+    uint8_t border_waveform = epaper_panel->partial_refresh ? 0x80 : 0x01;
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, 
+        SSD1681_CMD_SET_BORDER_WAVEFORM, 
+        &border_waveform, 1), 
+        TAG, "Border waveform err");
+    
+    // 设置显示更新控制（关键区别）
+    uint8_t refresh_mode = epaper_panel->partial_refresh ? 0xFF : 0xCF;
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, 
+        SSD1681_CMD_SET_DISP_UPDATE_CTRL, 
+        &refresh_mode, 1), 
+        TAG, "Disp update ctrl err");
+    
+    // 激活显示更新序列
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, 
+        SSD1681_CMD_ACTIVE_DISP_UPDATE_SEQ, NULL, 0), 
+        TAG, "Activate disp seq err");
+    
+    // 启用BUSY引脚中断
     gpio_intr_enable(epaper_panel->busy_gpio_num);
-    // --- Send refresh command
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, SSD1681_CMD_SET_DISP_UPDATE_CTRL, (uint8_t[]) {
-        SSD1681_PARAM_DISP_WITH_MODE_2
-    }, 1), TAG, "SSD1681_CMD_SET_DISP_UPDATE_CTRL err");
+    
+    return ESP_OK;
+}
 
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, SSD1681_CMD_ACTIVE_DISP_UPDATE_SEQ, NULL, 0), TAG,
-                        "SSD1681_CMD_ACTIVE_DISP_UPDATE_SEQ err");
-
+esp_err_t epaper_panel_set_refresh_mode(esp_lcd_panel_t *panel, bool partial)
+{
+    ESP_RETURN_ON_FALSE(panel, ESP_ERR_INVALID_ARG, TAG, "panel handler is NULL");
+    epaper_panel_t *epaper_panel = __containerof(panel, epaper_panel_t, base);
+    epaper_panel->partial_refresh = partial;
     return ESP_OK;
 }
 
@@ -406,6 +416,8 @@ static esp_err_t epaper_panel_init(esp_lcd_panel_t *panel)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(io, SSD1681_CMD_ACTIVE_DISP_UPDATE_SEQ, NULL, 0), TAG,
                         "param SSD1681_CMD_SET_DISP_UPDATE_CTRL err");
     panel_epaper_wait_busy(panel);
+    epaper_panel->partial_refresh = false;
+
 
     return ESP_OK;
 }

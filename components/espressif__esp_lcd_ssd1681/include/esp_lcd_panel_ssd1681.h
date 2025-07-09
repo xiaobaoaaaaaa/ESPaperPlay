@@ -85,6 +85,8 @@ esp_err_t esp_lcd_new_panel_ssd1681(const esp_lcd_panel_io_handle_t io, const es
  */
 esp_err_t epaper_panel_refresh_screen(esp_lcd_panel_t *panel);
 
+esp_err_t epaper_panel_set_refresh_mode(esp_lcd_panel_t *panel, bool partial);
+
 /**
  * @brief Set the color of the next bitmap
  *
