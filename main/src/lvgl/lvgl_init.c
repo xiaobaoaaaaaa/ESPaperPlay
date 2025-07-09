@@ -6,11 +6,12 @@
 #include <string.h>
 #include "lv_demos.h"
 #include "touch.h"
+#include "ui.h"
 
 #define TAG "lvgl_init"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS    2
-#define MAX_PARTIAL_REFRESH_COUNT 7
+#define MAX_PARTIAL_REFRESH_COUNT 30
 
 #ifndef MY_DISP_HOR_RES
     #define MY_DISP_HOR_RES    200
@@ -26,7 +27,6 @@ lv_display_t *disp = NULL;
 lv_indev_t *indev_touchpad = NULL;
 lv_color_t *buf1 = NULL, *buf2 = NULL;
 
-static uint8_t fast_refresh_lut[] = SSD1681_WAVESHARE_1IN54_V2_LUT_FAST_REFRESH_KEEP;
 int fast_refresh_count = 0;
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
@@ -106,6 +106,7 @@ void lvgl_timer_task(void *param)
 {
     while (1) {
         lv_timer_handler();
+        ui_tick(); 
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
@@ -166,7 +167,8 @@ void lvgl_init_epaper_display(void)
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000));
 
     ESP_LOGI(TAG, "Display LVGL Meter Widget");
-    lv_demo_widgets();
+
+    ui_init();
 
     xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_task", 8192, NULL, 5, NULL, 1);
 }
