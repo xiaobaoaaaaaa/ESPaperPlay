@@ -107,7 +107,7 @@ void lvgl_timer_task(void *param)
     while (1) {
         lv_timer_handler();
         ui_tick(); 
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 

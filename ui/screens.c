@@ -13,6 +13,17 @@
 objects_t objects;
 lv_obj_t *tick_value_change_obj;
 
+static void event_handler_cb_main_main(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_GESTURE) {
+        e->user_data = (void *)0;
+        action_main_page_change_screen(e);
+    }
+}
+
 static void event_handler_cb_main_to_menu(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
@@ -42,6 +53,7 @@ void create_screen_main() {
     objects.main = obj;
     lv_obj_set_pos(obj, 0, 0);
     lv_obj_set_size(obj, 200, 200);
+    lv_obj_add_event_cb(obj, event_handler_cb_main_main, LV_EVENT_ALL, flowState);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -59,6 +71,7 @@ void create_screen_main() {
             lv_obj_set_pos(obj, 62, 122);
             lv_obj_set_size(obj, 77, 33);
             lv_obj_add_event_cb(obj, event_handler_cb_main_to_menu, LV_EVENT_ALL, flowState);
+            add_style_epaper_button(obj);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
                 lv_obj_t *parent_obj = obj;
@@ -103,6 +116,7 @@ void create_screen_menu() {
             lv_obj_set_pos(obj, 62, 122);
             lv_obj_set_size(obj, 77, 33);
             lv_obj_add_event_cb(obj, event_handler_cb_menu_to_main, LV_EVENT_ALL, flowState);
+            add_style_epaper_button(obj);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
             {
                 lv_obj_t *parent_obj = obj;
@@ -126,8 +140,12 @@ void tick_screen_menu() {
 }
 
 
+extern void add_style(lv_obj_t *obj, int32_t styleIndex);
+extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
+
 static const char *screen_names[] = { "Main", "menu" };
 static const char *object_names[] = { "main", "menu", "to_menu", "to_main", "hello_world" };
+static const char *style_names[] = { "epaper_button" };
 
 
 typedef void (*tick_screen_func_t)();
@@ -143,8 +161,11 @@ void tick_screen_by_id(enum ScreensEnum screenId) {
 }
 
 void create_screens() {
+    eez_flow_init_styles(add_style, remove_style);
+    
     eez_flow_init_screen_names(screen_names, sizeof(screen_names) / sizeof(const char *));
     eez_flow_init_object_names(object_names, sizeof(object_names) / sizeof(const char *));
+    eez_flow_init_style_names(style_names, sizeof(style_names) / sizeof(const char *));
     
     lv_disp_t *dispp = lv_disp_get_default();
     lv_theme_t *theme = lv_theme_default_init(dispp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), false, LV_FONT_DEFAULT);

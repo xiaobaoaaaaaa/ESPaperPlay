@@ -7,6 +7,7 @@
 extern "C" {
 #endif
 
+extern void action_main_page_change_screen(lv_event_t * e);
 
 
 #ifdef __cplusplus
