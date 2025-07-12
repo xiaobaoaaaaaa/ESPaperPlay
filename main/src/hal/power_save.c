@@ -10,7 +10,7 @@
 #include "wifi_ctrl.h"
 
 #define POWER_SAVE_BIT  BIT0
-#define POWER_SAVE_TIMEOUT_MIN  1
+#define POWER_SAVE_TIMEOUT_MIN  3
 #define TAG "power_save"
 
 static EventGroupHandle_t pwr_save_event_group ;
@@ -44,6 +44,7 @@ void sleep_wakeup()
         esp_wifi_disconnect();
         esp_wifi_stop();
     }
+    vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
     esp_light_sleep_start();
 
     ESP_LOGI(TAG, "Woke up from sleep mode");
@@ -89,13 +90,13 @@ void power_save(void *param)
         //无操作三分钟后激活睡眠
         if (no_activity_minutes >= POWER_SAVE_TIMEOUT_MIN) 
         {
-            ESP_LOGI(TAG, "No activity for 3 minutes, entering deep sleep");
+            ESP_LOGI(TAG, "No activity for %d minutes, entering deep sleep", POWER_SAVE_TIMEOUT_MIN);
             sleep_wakeup();
         }
         else
         {
             ESP_LOGI(TAG, "Will enter light sleep in %d minutes", POWER_SAVE_TIMEOUT_MIN - no_activity_minutes);
-            vTaskDelay(pdMS_TO_TICKS(1000 * 60));
+            vTaskDelay(pdMS_TO_TICKS(1000 * 61));
         }
     }
     

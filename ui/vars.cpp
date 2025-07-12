@@ -30,3 +30,13 @@ extern "C" int32_t get_var_wifi_rssi() {
 extern "C" void set_var_wifi_rssi(int32_t value) {
     wifi_rssi = value;
 }
+
+bool is_power_save;
+
+bool get_var_is_power_save() {
+    return is_power_save;
+}
+
+void set_var_is_power_save(bool value) {
+    is_power_save = value;
+}

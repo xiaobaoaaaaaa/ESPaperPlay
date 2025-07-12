@@ -5,6 +5,7 @@
 #include "esp_event.h"
 #include "esp_smartconfig.h"
 #include <string.h>
+#include "vars.h"
 
 #define NVS_NAMESPACE_WIFI "wifi_config"
 #define NVS_KEY_SSID "ssid"
@@ -48,6 +49,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        set_var_wifi_connected(false);
         if (s_wifi_retry_count < MAX_WIFI_RETRY) {
             esp_wifi_connect();
             s_wifi_retry_count++;
@@ -67,6 +69,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         s_wifi_retry_count = 0; // 连接成功，重置重试计数
         s_wifi_init_phase = false; // 只要连上一次，初始化阶段结束
         xEventGroupSetBits(s_wifi_event_group, CONNECTED_BIT);
+        set_var_wifi_connected(true);
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SCAN_DONE) {
         ESP_LOGI(TAG, "Scan done");
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_FOUND_CHANNEL) {
