@@ -10,9 +10,13 @@ extern "C" {
 typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *menu;
-    lv_obj_t *to_menu;
-    lv_obj_t *to_main;
-    lv_obj_t *hello_world;
+    lv_obj_t *obj0;
+    lv_obj_t *obj0__state_time;
+    lv_obj_t *current_time;
+    lv_obj_t *current_weekday;
+    lv_obj_t *current_date;
+    lv_obj_t *obj1;
+    lv_obj_t *obj2;
 } objects_t;
 
 extern objects_t objects;
@@ -27,6 +31,9 @@ void tick_screen_main();
 
 void create_screen_menu();
 void tick_screen_menu();
+
+void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex);
+void tick_user_widget_state_bar(void *flowState, int startWidgetIndex);
 
 void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);

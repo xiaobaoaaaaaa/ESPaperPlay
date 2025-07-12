@@ -15,11 +15,13 @@ extern "C" {
 // Flow global variables
 
 enum FlowGlobalVariables {
-    FLOW_GLOBAL_VARIABLE_NONE
+    FLOW_GLOBAL_VARIABLE_CURRENT_TIME = 0
 };
 
 // Native global variables
 
+extern const char *get_var_current_weekday();
+extern void set_var_current_weekday(const char *value);
 
 
 #ifdef __cplusplus

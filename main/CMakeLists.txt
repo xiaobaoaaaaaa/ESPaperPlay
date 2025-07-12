@@ -1,4 +1,4 @@
-file(GLOB EEZ_CPP_FILES "../ui/*.cpp" "../ui/screens/*.cpp")
+file(GLOB EEZ_CPP_FILES "../ui/*.cpp")
 file(GLOB EEZ_C_FILES "../ui/*.c")
 
 idf_component_register(SRCS "main.c"
@@ -11,6 +11,7 @@ idf_component_register(SRCS "main.c"
                     "src/touch/i2c_ctp_ftxx06_xx36.c"
                     "src/touch/i2c_config.c"
                     "src/lvgl/lvgl_init.c"
+                    "../ui/ui_image_wifi_off.c"
 
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}

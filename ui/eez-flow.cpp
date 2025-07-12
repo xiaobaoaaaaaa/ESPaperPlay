@@ -5821,7 +5821,7 @@ static struct {
     { { First, Sun, Oct, 2 }, { First, Sun, Apr, 3 } },  
 };
 Format g_localeFormat = FORMAT_DMY_24;
-int g_timeZone = 0;
+int g_timeZone = 800;
 DstRule g_dstRule = DST_RULE_OFF;
 static void convertTime24to12(int &hours, bool &am);
 static bool isDst(Date time, DstRule dstRule);
