@@ -14,6 +14,7 @@ idf_component_register(SRCS "main.c"
                     "src/lvgl/lvgl_init.c"
                     "../ui/ui_image_wifi_off.c"
                     "../ui/ui_image_wifi_connected_filled.c"
+                    "../ui/ui_image_power_save.c"
                     
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}

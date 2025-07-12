@@ -8,6 +8,7 @@
 #include "esp_wifi.h"
 #include <time.h>
 #include "wifi_ctrl.h"
+#include "vars.h"
 
 #define POWER_SAVE_BIT  BIT0
 #define POWER_SAVE_TIMEOUT_MIN  3
@@ -37,6 +38,7 @@ void start_inactivity_timer() {
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
+    set_var_is_power_save(true);
     //关闭wifi
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
     if(bits & BIT0) {
@@ -53,6 +55,7 @@ void sleep_wakeup()
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {
         ESP_LOGI(TAG, "Woken up by GPIO interrupt");
+        set_var_is_power_save(false);
         //重新连接WiFi
         if(!wifi_manually_stopped)
         {

@@ -103,6 +103,14 @@ void create_screen_main() {
             lv_image_set_src(obj, &img_wifi_off);
             lv_obj_set_style_align(obj, LV_ALIGN_TOP_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
+        {
+            // power_save
+            lv_obj_t *obj = lv_image_create(parent_obj);
+            objects.power_save = obj;
+            lv_obj_set_pos(obj, 172, 0);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_image_set_src(obj, &img_power_save);
+        }
     }
     
     tick_screen_main();
@@ -177,6 +185,15 @@ void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int sta
             lv_image_set_src(obj, &img_wifi_off);
             lv_obj_set_style_align(obj, LV_ALIGN_RIGHT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
+        {
+            // power_save
+            lv_obj_t *obj = lv_image_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
+            lv_obj_set_pos(obj, 172, 3);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_image_set_src(obj, &img_power_save);
+            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -190,7 +207,7 @@ extern void add_style(lv_obj_t *obj, int32_t styleIndex);
 extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
 
 static const char *screen_names[] = { "Main", "menu" };
-static const char *object_names[] = { "main", "menu", "obj0", "obj0__state_time", "obj0__state_wifi", "current_time", "current_weekday", "current_date", "obj1", "obj2", "state_wifi_main" };
+static const char *object_names[] = { "main", "menu", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "current_time", "current_weekday", "current_date", "obj1", "obj2", "state_wifi_main", "power_save" };
 static const char *style_names[] = { "epaper_button" };
 
 

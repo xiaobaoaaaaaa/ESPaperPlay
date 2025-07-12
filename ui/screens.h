@@ -13,12 +13,14 @@ typedef struct _objects_t {
     lv_obj_t *obj0;
     lv_obj_t *obj0__state_time;
     lv_obj_t *obj0__state_wifi;
+    lv_obj_t *obj0__power_save;
     lv_obj_t *current_time;
     lv_obj_t *current_weekday;
     lv_obj_t *current_date;
     lv_obj_t *obj1;
     lv_obj_t *obj2;
     lv_obj_t *state_wifi_main;
+    lv_obj_t *power_save;
 } objects_t;
 
 extern objects_t objects;

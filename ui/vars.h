@@ -26,6 +26,8 @@ extern bool get_var_wifi_connected();
 extern void set_var_wifi_connected(bool value);
 extern int32_t get_var_wifi_rssi();
 extern void set_var_wifi_rssi(int32_t value);
+extern bool get_var_is_power_save();
+extern void set_var_is_power_save(bool value);
 
 
 #ifdef __cplusplus
