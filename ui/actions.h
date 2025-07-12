@@ -9,6 +9,7 @@ extern "C" {
 
 extern void action_user_change_screen(lv_event_t * e);
 extern void action_get_current_week(lv_event_t * e);
+extern void action_check_wifi_status(lv_event_t * e);
 
 
 #ifdef __cplusplus

@@ -7,6 +7,7 @@
     #include "lv_demos.h"
     #include "touch.h"
     #include "ui.h"
+    #include "power_save.h"
 
     #define TAG "lvgl_init"
 
@@ -37,10 +38,7 @@
         // px_map 总字节数
         size_t size = height * width / 8;
 
-        if (size > 8) {
-            memmove(px_map, px_map + 8, size);
-            //memset(px_map + size - 8, 0xFF, 8);
-        }
+        memmove(px_map, px_map + 8, size);
 
         uint8_t inverted[size];
         for (unsigned i = 0; i < size; i++) {
@@ -51,7 +49,6 @@
 
         if(fast_refresh_count < MAX_PARTIAL_REFRESH_COUNT)
         {
-            //epaper_panel_set_custom_lut(panel_handle, fast_refresh_lut, sizeof(fast_refresh_lut));
             epaper_panel_set_refresh_mode(panel_handle, true);
             fast_refresh_count++;
         }
@@ -60,6 +57,8 @@
             epaper_panel_set_refresh_mode(panel_handle, false);
             fast_refresh_count = 0;
         }
+
+        ESP_LOGI(TAG, "Flushing area: x1=%ld, y1=%ld, x2=%ld, y2=%ld", area->x1, area->y1, area->x2, area->y2);
 
         epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
         esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
@@ -124,7 +123,15 @@
             ctp.tp[0].x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1; // 去除`FT6236U`触摸屏的x坐标固有偏移，再对屏幕倒立的x轴进行补偿
             last_x = ctp.tp[0].x;
             last_y = ctp.tp[0].y;
-            data->state = LV_INDEV_STATE_PRESSED;
+            if(last_x < 200 && last_y < 200) 
+            {
+                data->state = LV_INDEV_STATE_PRESSED;
+                reset_inactivity_timer();
+            }
+            else 
+            {
+                data->state = LV_INDEV_STATE_RELEASED;
+            }
         }
         else {
             data->state = LV_INDEV_STATE_RELEASED;

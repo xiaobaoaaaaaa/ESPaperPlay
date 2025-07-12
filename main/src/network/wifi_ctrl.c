@@ -19,6 +19,7 @@ static const char *TAG = "smartconfig";
 
 static int s_wifi_retry_count = 0;
 static bool s_wifi_init_phase = true; // 标记是否为初始化阶段
+bool wifi_manually_stopped = false;
 
 static void start_smartconfig(void);
 static TaskHandle_t smartconfig_task_handle = NULL;

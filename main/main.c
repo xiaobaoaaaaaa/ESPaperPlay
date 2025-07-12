@@ -12,6 +12,7 @@
 #include "buzzer.h"
 #include "lvgl_init.h"
 #include "touch.h"
+#include "power_save.h"
 
 #define TAG "main"
 
@@ -58,6 +59,11 @@ void epaper_init_task(void *param)
     vTaskDelete(NULL); // 初始化完成后删除自身
 }
 
+void power_save_init_task(void *param)
+{
+    power_save_init();
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello! System booting...");
@@ -96,4 +102,8 @@ void app_main(void)
     // 初始化触摸屏
     ESP_LOGI(TAG, "Initializing touch screen...");
     sd_touch_init();
+
+    // 初始化睡眠
+    ESP_LOGI(TAG, "Initializing power save mode...");
+    xTaskCreate(power_save_init_task, "power_save_init_task", 4096, NULL, 5, NULL);
 }

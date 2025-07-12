@@ -5,6 +5,7 @@ idf_component_register(SRCS "main.c"
                     "src/network/wifi_ctrl.c"
                     "src/sntp/sntp.c"
                     "src/hal/button.c"
+                    "src/hal/power_save.c"
                     "src/display/epaper_driver.c"
                     "src/touch/touch.c"
                     "src/touch/gpioX.c"
@@ -12,7 +13,8 @@ idf_component_register(SRCS "main.c"
                     "src/touch/i2c_config.c"
                     "src/lvgl/lvgl_init.c"
                     "../ui/ui_image_wifi_off.c"
-
+                    "../ui/ui_image_wifi_connected_filled.c"
+                    
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}
 

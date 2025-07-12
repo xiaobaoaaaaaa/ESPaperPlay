@@ -5,6 +5,7 @@
 #include "ui.h"
 #include "screens.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -61,3 +62,30 @@ void action_get_current_week(lv_event_t *e)
     set_var_current_weekday(week_days[timeinfo.tm_wday]);
 }
 
+bool wifi_signal_strength_check = false;
+
+void action_check_wifi_status(lv_event_t *e) 
+{
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+
+    if (ret == ESP_OK) 
+    {
+        int rssi = ap_info.rssi;
+        if(rssi > -60 && !wifi_signal_strength_check)
+        {
+            set_var_wifi_rssi(rssi);
+            wifi_signal_strength_check = true;
+        }
+        else if(rssi <= -60 && wifi_signal_strength_check)
+        {
+            set_var_wifi_rssi(rssi);
+            wifi_signal_strength_check = false;
+        }
+        set_var_wifi_connected(true);
+    } 
+    else 
+    {
+        set_var_wifi_connected(false);
+    }
+}

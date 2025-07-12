@@ -22,6 +22,10 @@ enum FlowGlobalVariables {
 
 extern const char *get_var_current_weekday();
 extern void set_var_current_weekday(const char *value);
+extern bool get_var_wifi_connected();
+extern void set_var_wifi_connected(bool value);
+extern int32_t get_var_wifi_rssi();
+extern void set_var_wifi_rssi(int32_t value);
 
 
 #ifdef __cplusplus

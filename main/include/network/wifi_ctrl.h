@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 
 extern EventGroupHandle_t s_wifi_event_group;
+extern bool wifi_manually_stopped;
 
 bool wifi_init(void);
 
