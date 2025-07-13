@@ -9,6 +9,7 @@
 #include <time.h>
 #include "wifi_ctrl.h"
 #include "vars.h"
+#include "sntp.h"
 
 #define POWER_SAVE_BIT  BIT0
 #define POWER_SAVE_TIMEOUT_MIN  3
@@ -17,6 +18,7 @@
 static EventGroupHandle_t pwr_save_event_group ;
 static int no_activity_minutes = 0;
 esp_timer_handle_t inactivity_timer;
+int time_correction_count = 0;
 
 void inactivity_timer_callback(void* arg) {
     no_activity_minutes++;
@@ -38,6 +40,7 @@ void start_inactivity_timer() {
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
+    time_correction_count++;
     set_var_is_power_save(true);
     //关闭wifi
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
@@ -68,6 +71,24 @@ void sleep_wakeup()
         vTaskDelay(pdMS_TO_TICKS(2000)); // 等待1秒，确保系统稳定
     } else {
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause);
+    }
+
+    if(time_correction_count >= 180)
+    {
+        time_correction_count = 0;
+        ESP_LOGI(TAG, "Time correction triggered");
+        esp_wifi_start();
+        esp_wifi_connect();
+        bits = xEventGroupGetBits(s_wifi_event_group);
+        while (!(bits & BIT0)) {
+            ESP_LOGI(TAG, "Waiting for WiFi to connect...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            bits = xEventGroupGetBits(s_wifi_event_group);
+        }
+        obtain_time(); 
+        ESP_LOGI(TAG, "Time corrected after waking up from sleep");
+        esp_wifi_disconnect();
+        esp_wifi_stop();
     }
 }
 

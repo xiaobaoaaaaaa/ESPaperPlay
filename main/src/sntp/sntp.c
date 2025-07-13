@@ -16,7 +16,7 @@
 
 static const char *TAG = "sntp";
 
-static void obtain_time(void);
+void obtain_time(void);
 static void initialize_sntp(void);
 
 void time_sync_notification_cb(struct timeval *tv)
@@ -46,7 +46,7 @@ void time_init(void)
     }
 }
 
-static void obtain_time(void)
+void obtain_time(void)
 {
     initialize_sntp();
 
