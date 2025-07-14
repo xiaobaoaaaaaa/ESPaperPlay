@@ -3,6 +3,7 @@ file(GLOB EEZ_C_FILES "../ui/*.c")
 
 idf_component_register(SRCS "main.c"
                     "src/network/wifi_ctrl.c"
+                    "src/network/yiyan.c"
                     "src/sntp/sntp.c"
                     "src/hal/button.c"
                     "src/hal/power_save.c"

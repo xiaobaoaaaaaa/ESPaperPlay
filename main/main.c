@@ -13,6 +13,7 @@
 #include "lvgl_init.h"
 #include "touch.h"
 #include "power_save.h"
+#include "yiyan.h"
 
 #define TAG "main"
 

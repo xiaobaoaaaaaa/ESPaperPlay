@@ -21,6 +21,7 @@ typedef struct _objects_t {
     lv_obj_t *obj2;
     lv_obj_t *state_wifi_main;
     lv_obj_t *power_save;
+    lv_obj_t *yiyan;
 } objects_t;
 
 extern objects_t objects;

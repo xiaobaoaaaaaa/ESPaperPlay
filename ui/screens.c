@@ -49,7 +49,7 @@ void create_screen_main() {
             // current_time
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.current_time = obj;
-            lv_obj_set_pos(obj, 0, -48);
+            lv_obj_set_pos(obj, 0, -53);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_48, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -59,7 +59,7 @@ void create_screen_main() {
             // current_weekday
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.current_weekday = obj;
-            lv_obj_set_pos(obj, 127, 78);
+            lv_obj_set_pos(obj, 127, 73);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_label_set_text(obj, "Sun");
         }
@@ -67,7 +67,7 @@ void create_screen_main() {
             // current_date
             lv_obj_t *obj = lv_label_create(parent_obj);
             objects.current_date = obj;
-            lv_obj_set_pos(obj, -19, -14);
+            lv_obj_set_pos(obj, -19, -19);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_label_set_text(obj, "2025-01-01");
@@ -75,7 +75,7 @@ void create_screen_main() {
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
             objects.obj1 = obj;
-            lv_obj_set_pos(obj, -2, 103);
+            lv_obj_set_pos(obj, -2, 93);
             lv_obj_set_size(obj, 45, 26);
             lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -110,6 +110,15 @@ void create_screen_main() {
             lv_obj_set_pos(obj, 172, 0);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_image_set_src(obj, &img_power_save);
+        }
+        {
+            // yiyan
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            objects.yiyan = obj;
+            lv_obj_set_pos(obj, 0, 119);
+            lv_obj_set_size(obj, 200, 81);
+            lv_obj_set_style_text_font(obj, &ui_font_siyuanheiti_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_label_set_text(obj, "Text");
         }
     }
     
@@ -207,7 +216,7 @@ extern void add_style(lv_obj_t *obj, int32_t styleIndex);
 extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
 
 static const char *screen_names[] = { "Main", "menu" };
-static const char *object_names[] = { "main", "menu", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "current_time", "current_weekday", "current_date", "obj1", "obj2", "state_wifi_main", "power_save" };
+static const char *object_names[] = { "main", "menu", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "current_time", "current_weekday", "current_date", "obj1", "obj2", "state_wifi_main", "power_save", "yiyan" };
 static const char *style_names[] = { "epaper_button" };
 
 

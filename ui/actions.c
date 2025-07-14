@@ -6,6 +6,7 @@
 #include "screens.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
+#include "yiyan.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -88,4 +89,9 @@ void action_check_wifi_status(lv_event_t *e)
     {
         set_var_wifi_connected(false);
     }
+}
+
+void action_get_yiyan(lv_event_t *e) 
+{
+    get_yiyan();
 }

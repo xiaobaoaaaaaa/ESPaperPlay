@@ -28,6 +28,8 @@ extern int32_t get_var_wifi_rssi();
 extern void set_var_wifi_rssi(int32_t value);
 extern bool get_var_is_power_save();
 extern void set_var_is_power_save(bool value);
+extern const char *get_var_yiyan();
+extern void set_var_yiyan(const char *value);
 
 
 #ifdef __cplusplus

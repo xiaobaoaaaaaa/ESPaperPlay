@@ -40,3 +40,13 @@ bool get_var_is_power_save() {
 void set_var_is_power_save(bool value) {
     is_power_save = value;
 }
+
+std::string yiyan;
+
+extern "C" const char *get_var_yiyan() {
+    return yiyan.c_str();
+}
+
+extern "C" void set_var_yiyan(const char *value) {
+    yiyan = value;
+}
