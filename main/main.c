@@ -14,6 +14,7 @@
 #include "touch.h"
 #include "power_save.h"
 #include "yiyan.h"
+#include <esp_task_wdt.h>
 
 #define TAG "main"
 
@@ -68,6 +69,14 @@ void power_save_init_task(void *param)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello! System booting...");
+    
+    // 初始化任务看门狗
+    esp_task_wdt_config_t cfg = {
+        .timeout_ms = 10000,         // 设置超时时长
+        .idle_core_mask = BIT(0)|BIT(1),
+        .trigger_panic = true        // 触发 panic
+    };
+    esp_task_wdt_init(&cfg);
 
     // 初始化 NVS
     esp_err_t ret = nvs_flash_init();
