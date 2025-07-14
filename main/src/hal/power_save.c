@@ -13,7 +13,7 @@
 #include "lvgl_init.h"
 
 #define POWER_SAVE_BIT  BIT0
-#define POWER_SAVE_TIMEOUT_MIN  5
+#define POWER_SAVE_TIMEOUT_MIN  3
 #define TAG "power_save"
 
 static EventGroupHandle_t pwr_save_event_group ;
@@ -41,18 +41,6 @@ void start_inactivity_timer() {
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
-    ESP_LOGI(TAG, "Waiting for LVGL flush to complete before sleeping...");
-
-    // 最多等 3 秒，防止无限等待
-    if (xSemaphoreTake(lvgl_flush_sem, pdMS_TO_TICKS(3000)) == pdTRUE)
-    {
-        ESP_LOGI(TAG, "Flush complete, entering sleep...");
-    }
-    else
-    {
-        ESP_LOGW(TAG, "Timeout waiting for flush to complete, skipping sleep");
-        return;
-    }
     time_correction_count++;
     set_var_is_power_save(true);
     //关闭wifi
@@ -62,12 +50,12 @@ void sleep_wakeup()
         esp_wifi_disconnect();
         esp_wifi_stop();
     }
+    xEventGroupClearBits(lvgl_flush_event_group, BIT0);
     vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
-
     esp_light_sleep_start();
-    xSemaphoreGive(lvgl_flush_sem);
 
     ESP_LOGI(TAG, "Woke up from sleep mode");
+    xEventGroupSetBits(lvgl_flush_event_group, BIT0);
     gpio_wakeup_disable(GPIO_NUM_4);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
@@ -83,7 +71,7 @@ void sleep_wakeup()
         reset_inactivity_timer();
     } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
         ESP_LOGI(TAG, "Woken up by timer");
-        vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保系统稳定
+        vTaskDelay(pdMS_TO_TICKS(2000)); // 等待1秒，确保系统稳定
     } else {
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause);
     }
@@ -144,8 +132,6 @@ void power_save(void *param)
 void power_save_init(void)
 {
     pwr_save_event_group = xEventGroupCreate();
-    lvgl_flush_sem = xSemaphoreCreateBinary();
-    xSemaphoreGive(lvgl_flush_sem);
     xEventGroupSetBits(pwr_save_event_group, POWER_SAVE_BIT); // Initialize the event group with no bits set
     start_inactivity_timer();
     power_save(NULL);

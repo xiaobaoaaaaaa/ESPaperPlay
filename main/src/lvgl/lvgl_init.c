@@ -1,5 +1,5 @@
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include "lvgl_init.h"
 #include "epaper_driver.h"
 #include "esp_timer.h"
@@ -29,7 +29,7 @@
 lv_display_t *disp = NULL;
 lv_indev_t *indev_touchpad = NULL;
 lv_color_t *buf1 = NULL, *buf2 = NULL;
-SemaphoreHandle_t lvgl_flush_sem;
+EventGroupHandle_t lvgl_flush_event_group = NULL;
 
 int fast_refresh_count = 0;
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
@@ -106,18 +106,12 @@ static void increase_lvgl_tick(void *arg)
 
 void lvgl_timer_task(void *param)
 {
-    while (1) {
-        if (xSemaphoreTake(lvgl_flush_sem, 0) == pdTRUE)
-        {
-            lv_timer_handler();
-            ui_tick(); 
-            vTaskDelay(pdMS_TO_TICKS(50));
-            xSemaphoreGive(lvgl_flush_sem);
-        }
-        else
-        {
-            ESP_LOGW("LVGL", "Flush called while previous flush not completed");
-        }
+    while (1) 
+    {
+        xEventGroupWaitBits(lvgl_flush_event_group, BIT0, pdFALSE, pdFALSE, portMAX_DELAY);
+        lv_timer_handler();
+        ui_tick(); 
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -165,6 +159,9 @@ void lv_port_indev_init(void)
 
 void lvgl_init_epaper_display(void)
 {
+    lvgl_flush_event_group = xEventGroupCreate();
+    xEventGroupSetBits(lvgl_flush_event_group, BIT0);
+
     epaper_init();
 
     lv_init();

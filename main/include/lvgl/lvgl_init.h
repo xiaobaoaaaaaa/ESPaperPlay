@@ -4,7 +4,7 @@
 #include "lvgl.h"
 
 extern lv_display_t *disp;
-extern SemaphoreHandle_t lvgl_flush_sem;
+extern EventGroupHandle_t lvgl_flush_event_group;
 
 void lvgl_init_epaper_display(void);
 
