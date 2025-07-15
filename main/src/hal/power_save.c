@@ -76,7 +76,7 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause);
     }
 
-    if(time_correction_count >= 180)
+    if(time_correction_count >= 60)
     {
         time_correction_count = 0;
         ESP_LOGI(TAG, "Time correction triggered");
