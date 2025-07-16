@@ -16,7 +16,11 @@ idf_component_register(SRCS "main.c"
                     "../ui/ui_image_wifi_off.c"
                     "../ui/ui_image_wifi_connected_filled.c"
                     "../ui/ui_image_power_save.c"
-                    
+                    "../ui/ui_image_icon_clock.c"
+                    "../ui/ui_image_icon_settings.c"
+                    "../ui/ui_image_icon_smart_home_manager.c"
+                    "../ui/ui_image_icon_weather.c"
+
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}
 

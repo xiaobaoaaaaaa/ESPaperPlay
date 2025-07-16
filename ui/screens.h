@@ -22,6 +22,15 @@ typedef struct _objects_t {
     lv_obj_t *state_wifi_main;
     lv_obj_t *power_save;
     lv_obj_t *yiyan;
+    lv_obj_t *label_menu;
+    lv_obj_t *img_settings;
+    lv_obj_t *label_settings;
+    lv_obj_t *img_weather;
+    lv_obj_t *label_weather;
+    lv_obj_t *img_clock;
+    lv_obj_t *label_clock;
+    lv_obj_t *img_smart_home;
+    lv_obj_t *label_smart_home;
 } objects_t;
 
 extern objects_t objects;

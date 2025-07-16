@@ -59,8 +59,14 @@ void action_get_current_week(lv_event_t *e)
     time(&now);
     localtime_r(&now, &timeinfo);
 
-    const char *week_days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    if (timeinfo.tm_year < 2025-1900) {
+        ESP_LOGE("action_get_current_week", "Year is before 2016, cannot determine current weekday");
+        return;
+    }
+
+    const char *week_days[] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
     set_var_current_weekday(week_days[timeinfo.tm_wday]);
+    ESP_LOGI("action_get_current_week", "Current weekday: %s", week_days[timeinfo.tm_wday]);
 }
 
 bool wifi_signal_strength_check = false;
