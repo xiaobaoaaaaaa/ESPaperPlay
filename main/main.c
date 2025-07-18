@@ -41,7 +41,6 @@ void time_init_task(void *param)
     char strftime_buf[64];
     strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
     ESP_LOGI(TAG, "Current time: %s", strftime_buf);
-    action_get_current_week(NULL); // 获取当前星期
     vTaskDelete(NULL); // 任务完成后删除自身
 }
 
