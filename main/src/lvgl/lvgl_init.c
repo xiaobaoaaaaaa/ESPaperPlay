@@ -185,5 +185,5 @@ void lvgl_init_epaper_display(void)
 
     ui_init();
 
-    xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_task", 8192, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_task", 8192, NULL, 10, NULL, 1);
 }

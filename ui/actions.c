@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "yiyan.h"
+#include "wifi_ctrl.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -42,7 +43,7 @@ void action_user_change_screen(lv_event_t *e)
                 anim_type = LV_SCR_LOAD_ANIM_MOVE_LEFT;
                 break;
             }
-            eez_flow_set_screen(screen_id, anim_type, 400, 0);
+            eez_flow_set_screen(screen_id, anim_type, 200, 0);
         }
         else
         {
@@ -51,28 +52,38 @@ void action_user_change_screen(lv_event_t *e)
     }
 }
 
+int week_day = -1;
+const char *week_days[] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
 void action_get_current_week(lv_event_t *e) 
 {
     time_t now;
     struct tm timeinfo;
+    if(week_day == -1)
+    {
     
-    time(&now);
-    localtime_r(&now, &timeinfo);
+        time(&now);
+        localtime_r(&now, &timeinfo);
 
-    if (timeinfo.tm_year < 2025-1900) {
-        ESP_LOGE("action_get_current_week", "Year is before 2016, cannot determine current weekday");
-        return;
+        if (timeinfo.tm_year < 2025-1900) {
+            ESP_LOGE("action_get_current_week", "Year is before 2016, cannot determine current weekday");
+            return;
+        }
+
+        week_day = timeinfo.tm_wday;
+        set_var_current_weekday(week_days[timeinfo.tm_wday]);
     }
-
-    const char *week_days[] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
-    set_var_current_weekday(week_days[timeinfo.tm_wday]);
-    ESP_LOGI("action_get_current_week", "Current weekday: %s", week_days[timeinfo.tm_wday]);
+    else
+        set_var_current_weekday(week_days[++week_day % 7]);
 }
 
 bool wifi_signal_strength_check = false;
 
 void action_check_wifi_status(lv_event_t *e) 
 {
+    set_var_ui_wifi_on_off(wifi_on_off);
+    ESP_LOGI("action_check_wifi_status", "ui_wifi status: %d", get_var_ui_wifi_on_off());
+    if(!wifi_on_off) return;
+
     wifi_ap_record_t ap_info;
     esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
 
@@ -100,4 +111,34 @@ void action_check_wifi_status(lv_event_t *e)
 void action_get_yiyan(lv_event_t *e) 
 {
     get_yiyan();
+}
+
+void action_set_wifi_on_off(lv_event_t *e) 
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool on_off = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    if(on_off)
+    {
+        if(wifi_on_off)
+            return;
+        else
+        {
+            ESP_LOGI("action_set_wifi_on_off", "Set WiFi on");
+            esp_wifi_start();
+            esp_wifi_connect();
+            set_wifi_on_off(true);
+        }
+    }
+    else
+    {
+        if(!wifi_on_off) 
+            return;
+        else
+        {
+            ESP_LOGI("action_set_wifi_on_off", "Set WiFi off");
+            esp_wifi_disconnect();
+            esp_wifi_stop();
+            set_wifi_on_off(false);
+        }
+    }
 }

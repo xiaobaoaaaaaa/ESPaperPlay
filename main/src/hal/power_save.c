@@ -49,6 +49,7 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "WiFi disconnecting...");
         esp_wifi_disconnect();
         esp_wifi_stop();
+        set_wifi_on_off(false);
     }
     xEventGroupClearBits(lvgl_flush_event_group, BIT0);
     vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
@@ -67,6 +68,7 @@ void sleep_wakeup()
         {
             esp_wifi_start();
             esp_wifi_connect();
+            set_wifi_on_off(true);
         }
         reset_inactivity_timer();
     } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
@@ -82,6 +84,7 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "Time correction triggered");
         esp_wifi_start();
         esp_wifi_connect();
+        set_wifi_on_off(true);
         bits = xEventGroupGetBits(s_wifi_event_group);
         while (!(bits & BIT0)) {
             ESP_LOGI(TAG, "Waiting for WiFi to connect...");
@@ -92,6 +95,7 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "Time corrected after waking up from sleep");
         esp_wifi_disconnect();
         esp_wifi_stop();
+        set_wifi_on_off(false);
     }
 }
 
@@ -134,5 +138,5 @@ void power_save_init(void)
     pwr_save_event_group = xEventGroupCreate();
     xEventGroupSetBits(pwr_save_event_group, POWER_SAVE_BIT); // Initialize the event group with no bits set
     start_inactivity_timer();
-    power_save(NULL);
+    xTaskCreate(power_save, "power_save_task", 4096, NULL, 15, NULL);
 }

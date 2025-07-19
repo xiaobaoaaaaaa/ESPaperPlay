@@ -15,13 +15,15 @@ extern "C" {
 // Flow global variables
 
 enum FlowGlobalVariables {
-    FLOW_GLOBAL_VARIABLE_CURRENT_TIME = 0
+    FLOW_GLOBAL_VARIABLE_NONE
 };
 
 // Native global variables
 
 extern const char *get_var_current_weekday();
 extern void set_var_current_weekday(const char *value);
+extern const char *get_var_current_time();
+extern void set_var_current_time(const char *value);
 extern bool get_var_wifi_connected();
 extern void set_var_wifi_connected(bool value);
 extern int32_t get_var_wifi_rssi();
@@ -30,6 +32,10 @@ extern bool get_var_is_power_save();
 extern void set_var_is_power_save(bool value);
 extern const char *get_var_yiyan();
 extern void set_var_yiyan(const char *value);
+extern bool get_var_ui_wifi_on_off();
+extern void set_var_ui_wifi_on_off(bool value);
+extern const char *get_var_current_date();
+extern void set_var_current_date(const char *value);
 
 
 #ifdef __cplusplus

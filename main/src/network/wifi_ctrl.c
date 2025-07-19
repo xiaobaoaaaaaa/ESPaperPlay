@@ -220,9 +220,27 @@ static void start_smartconfig(void)
     }
 }
 
+bool wifi_on_off;
+void set_wifi_on_off(bool op)
+{
+    if(op && !wifi_on_off)
+    {
+        esp_wifi_start();
+        esp_wifi_connect();
+        wifi_on_off = true;
+    }
+    else
+    {
+        esp_wifi_disconnect();
+        esp_wifi_stop();
+        wifi_on_off = false;
+    }
+}
+
 bool wifi_init(void)
 {
     s_wifi_init_phase = true; // 初始化阶段开始
+    wifi_on_off = true;
     initialise_wifi_base();
     // 尝试从 NVS 中获取 WiFi 配置
     int result = get_wifi_from_nvs();

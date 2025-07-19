@@ -11,6 +11,26 @@ extern "C" void set_var_current_weekday(const char *value) {
     current_weekday = value;
 }
 
+std::string current_time;
+
+extern "C" const char *get_var_current_time() {
+    return current_time.c_str();
+}
+
+extern "C" void set_var_current_time(const char *value) {
+    current_time = value;
+}
+
+std::string current_date;
+
+extern "C" const char *get_var_current_date() {
+    return current_date.c_str();
+}
+
+extern "C" void set_var_current_date(const char *value) {
+    current_date = value;
+}
+
 bool wifi_connected;
 
 extern "C" bool get_var_wifi_connected() {
@@ -49,4 +69,14 @@ extern "C" const char *get_var_yiyan() {
 
 extern "C" void set_var_yiyan(const char *value) {
     yiyan = value;
+}
+
+bool ui_wifi_on_off;
+
+extern "C" bool get_var_ui_wifi_on_off() {
+    return ui_wifi_on_off;
+}
+
+extern "C" void set_var_ui_wifi_on_off(bool value) {
+    ui_wifi_on_off = value;
 }
