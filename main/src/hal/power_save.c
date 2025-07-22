@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include <time.h>
@@ -85,13 +86,20 @@ void sleep_wakeup()
         esp_wifi_start();
         esp_wifi_connect();
         set_wifi_on_off(true);
+        int retry_count = 0;
         bits = xEventGroupGetBits(s_wifi_event_group);
         while (!(bits & BIT0)) {
+            if(retry_count++ > 10)
+            {
+                ESP_LOGE(TAG, "Cannot obtain time: Network Error");
+                return;
+            }
             ESP_LOGI(TAG, "Waiting for WiFi to connect...");
             vTaskDelay(pdMS_TO_TICKS(1000));
             bits = xEventGroupGetBits(s_wifi_event_group);
         }
-        obtain_time(); 
+        esp_sntp_restart();
+        vTaskDelay(pdMS_TO_TICKS(5000));
         ESP_LOGI(TAG, "Time corrected after waking up from sleep");
         esp_wifi_disconnect();
         esp_wifi_stop();

@@ -10,7 +10,7 @@ static int last_weekday = -1;
 
 void date_update()
 {
-    time_t now;
+    time_t now = time(NULL);
     struct tm timeinfo;
 
     time(&now);

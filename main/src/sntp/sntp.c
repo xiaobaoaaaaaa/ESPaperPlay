@@ -61,6 +61,9 @@ void obtain_time(void)
     }
     time(&now);
     localtime_r(&now, &timeinfo);
+
+    setenv("TZ", "CST-8", 1);
+    tzset();
 }
 
 static void initialize_sntp(void)

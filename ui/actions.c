@@ -52,36 +52,10 @@ void action_user_change_screen(lv_event_t *e)
     }
 }
 
-int week_day = -1;
-const char *week_days[] = {"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
-void action_get_current_week(lv_event_t *e) 
-{
-    time_t now;
-    struct tm timeinfo;
-    if(week_day == -1)
-    {
-    
-        time(&now);
-        localtime_r(&now, &timeinfo);
-
-        if (timeinfo.tm_year < 2025-1900) {
-            ESP_LOGE("action_get_current_week", "Year is before 2016, cannot determine current weekday");
-            return;
-        }
-
-        week_day = timeinfo.tm_wday;
-        set_var_current_weekday(week_days[timeinfo.tm_wday]);
-    }
-    else
-        set_var_current_weekday(week_days[++week_day % 7]);
-}
-
 bool wifi_signal_strength_check = false;
-
 void action_check_wifi_status(lv_event_t *e) 
 {
     set_var_ui_wifi_on_off(wifi_on_off);
-    ESP_LOGI("action_check_wifi_status", "ui_wifi status: %d", get_var_ui_wifi_on_off());
     if(!wifi_on_off) return;
 
     wifi_ap_record_t ap_info;
