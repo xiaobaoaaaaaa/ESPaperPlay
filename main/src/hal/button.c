@@ -34,7 +34,7 @@ static void button_event_cb(void *arg, void *data)
     {
         case BUTTON_SINGLE_CLICK:
             ESP_LOGI(TAG, "Button single click");
-            buzzer(NOTE_A7, 6000, 0.07, 0, 1); // 蜂鸣器发出音符C5
+            buzzer(NOTE_A7, 6000, 0.07, 0, 1); // 蜂鸣器发出音符A7
             break;
 
         default:

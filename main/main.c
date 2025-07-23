@@ -72,6 +72,12 @@ void button_init_task(void *param)
 void buzzer_init_task(void *param)
 {
     buzzer_init(15); // 假设蜂鸣器连接在 GPIO 15
+
+    //鸣响蜂鸣器三次
+    buzzer(NOTE_F7, 6000, 0.3, 0, 1);
+    buzzer(NOTE_G7, 6000, 0.3, 0, 1);
+    buzzer(NOTE_A7, 6000, 0.3, 0, 1);
+    
     xEventGroupSetBits(init_event_group, BUZZER_INIT_BIT);
     vTaskDelete(NULL); // 任务完成后删除自身
 }

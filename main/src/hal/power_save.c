@@ -92,10 +92,11 @@ void sleep_wakeup()
             if(retry_count++ > 10)
             {
                 ESP_LOGE(TAG, "Cannot obtain time: Network Error");
+                time_correction_count = 30;  //将同步间隔缩短为半小时
                 return;
             }
             ESP_LOGI(TAG, "Waiting for WiFi to connect...");
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(3000));
             bits = xEventGroupGetBits(s_wifi_event_group);
         }
         esp_sntp_restart();
@@ -121,6 +122,7 @@ void power_save(void *param)
         struct tm timeinfo;
         time(&now);
         localtime_r(&now, &timeinfo);
+        
         // 计算距下一分钟的秒数
         int seconds_to_next_minute = 60 - timeinfo.tm_sec;
         esp_sleep_enable_timer_wakeup(1000000 * seconds_to_next_minute); // 设置唤醒时间为下一分钟
