@@ -20,7 +20,6 @@
 static EventGroupHandle_t pwr_save_event_group ;
 static int no_activity_minutes = 0;
 esp_timer_handle_t inactivity_timer;
-int time_correction_count = 0;
 
 void inactivity_timer_callback(void* arg) {
     no_activity_minutes++;
@@ -39,6 +38,8 @@ void start_inactivity_timer() {
     esp_timer_start_periodic(inactivity_timer, 60 * 1000 * 1000);  // 每分钟（单位：微秒）
 }
 
+int time_correction_count = 0;
+bool wifi_off_autoly = false; //标记自动睡眠程序是否关闭了WiFi
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
@@ -48,6 +49,7 @@ void sleep_wakeup()
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
     if(bits & BIT0) {
         ESP_LOGI(TAG, "WiFi disconnecting...");
+        wifi_off_autoly = true;
         esp_wifi_disconnect();
         esp_wifi_stop();
         set_wifi_on_off(false);
@@ -65,8 +67,9 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "Woken up by GPIO interrupt");
         set_var_is_power_save(false);
         //重新连接WiFi
-        if(!wifi_manually_stopped)
+        if(!wifi_manually_stopped && wifi_off_autoly)
         {
+            wifi_off_autoly = false;
             esp_wifi_start();
             esp_wifi_connect();
             set_wifi_on_off(true);
