@@ -11,6 +11,8 @@ extern void action_user_change_screen(lv_event_t * e);
 extern void action_check_wifi_status(lv_event_t * e);
 extern void action_get_yiyan(lv_event_t * e);
 extern void action_set_wifi_on_off(lv_event_t * e);
+extern void action_get_wifi_ap_info(lv_event_t * e);
+extern void action_wifi_reconnect(lv_event_t * e);
 
 
 #ifdef __cplusplus

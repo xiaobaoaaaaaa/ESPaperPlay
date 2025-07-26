@@ -22,7 +22,7 @@ static int s_wifi_retry_count = 0;
 static bool s_wifi_init_phase = true; // 标记是否为初始化阶段
 bool wifi_manually_stopped = false;
 
-static void start_smartconfig(void);
+void start_smartconfig(void);
 static TaskHandle_t smartconfig_task_handle = NULL;
 
 static void smartconfig_task(void * parm)
@@ -208,7 +208,7 @@ static void connect_wifi_from_nvs(void)
     ESP_ERROR_CHECK( esp_wifi_connect() );
 }
 
-static void start_smartconfig(void)
+void start_smartconfig(void)
 {
     if (smartconfig_task_handle == NULL) { // 只允许一个任务
         ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );

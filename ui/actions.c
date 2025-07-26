@@ -8,6 +8,7 @@
 #include "esp_wifi.h"
 #include "yiyan.h"
 #include "wifi_ctrl.h"
+#include "esp_mac.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -74,6 +75,7 @@ void action_check_wifi_status(lv_event_t *e)
             set_var_wifi_rssi(rssi);
             wifi_signal_strength_check = false;
         }
+
         set_var_wifi_connected(true);
     } 
     else 
@@ -115,4 +117,82 @@ void action_set_wifi_on_off(lv_event_t *e)
             set_wifi_on_off(false);
         }
     }
+}
+
+void action_get_wifi_ap_info(lv_event_t *e) 
+{
+    if(!wifi_on_off) return;
+
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+
+    if (ret == ESP_OK) 
+    {
+        set_var_wifi_rssi(ap_info.rssi);
+
+        char ssid[43];
+        sprintf(ssid, "%s", ap_info.ssid);
+        set_var_wifi_ssid(ssid);
+
+        char ip[16]; // IPv4最大长度"255.255.255.255"
+        esp_netif_ip_info_t ip_info;
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) 
+        {
+            sprintf(ip, IPSTR, IP2STR(&ip_info.ip));
+            set_var_wifi_ip(ip);
+        }
+
+        uint8_t mac[6];
+        char mac_char[18]; // MAC地址长度17字符+1
+        esp_err_t ret = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        if (ret != ESP_OK) {
+            ESP_LOGE("wifi settings page", "Failed to get MAC address");
+        } else {
+            sprintf(mac_char, "%02X:%02X:%02X:%02X:%02X:%02X", 
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            set_var_wifi_mac(mac_char);
+        }
+
+        set_var_wifi_primary(ap_info.primary);
+
+        static const char* auth_mode_strs[] = {
+        [WIFI_AUTH_OPEN] = "OPEN",
+        [WIFI_AUTH_WEP] = "WEP",
+        [WIFI_AUTH_WPA_PSK] = "WPA_PSK",
+        [WIFI_AUTH_WPA2_PSK] = "WPA2_PSK",
+        [WIFI_AUTH_WPA_WPA2_PSK] = "WPA_WPA2_PSK",
+        [WIFI_AUTH_ENTERPRISE] = "ENTERPRISE",
+        [WIFI_AUTH_WPA3_PSK] = "WPA3_PSK",
+        [WIFI_AUTH_WPA2_WPA3_PSK] = "WPA2_WPA3_PSK",
+        [WIFI_AUTH_WAPI_PSK] = "WAPI_PSK",
+        [WIFI_AUTH_OWE] = "OWE",
+        [WIFI_AUTH_WPA3_ENT_192] = "WPA3_ENT_192",
+        [WIFI_AUTH_WPA3_EXT_PSK] = "WPA3_EXT_PSK (Deprecated)",
+        [WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE] = "WPA3_EXT_PSK_MIXED (Deprecated)",
+        [WIFI_AUTH_DPP] = "DPP",
+        [WIFI_AUTH_WPA3_ENTERPRISE] = "WPA3_ENTERPRISE",
+        [WIFI_AUTH_WPA2_WPA3_ENTERPRISE] = "WPA2_WPA3_ENTERPRISE",
+        // 添加默认项防止越界
+        [WIFI_AUTH_MAX] = "UNKNOWN"
+        };
+
+        set_var_wifi_authmode(auth_mode_strs[ap_info.authmode]);
+
+        static const char* bandwidth[] = {
+        [WIFI_BW20] = "20MHz",
+        [WIFI_BW40] = "40MHz",
+        [WIFI_BW80] = "80MHz",
+        [WIFI_BW160] = "160HMz",
+        [WIFI_BW80_BW80] = "80+80MHz"
+        };
+
+        set_var_wifi_bandwidth(bandwidth[ap_info.authmode]);
+    } 
+}
+
+void action_wifi_reconnect(lv_event_t *e) 
+{
+    set_wifi_on_off(false);
+    start_smartconfig();
 }

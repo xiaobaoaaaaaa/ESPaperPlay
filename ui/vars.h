@@ -24,10 +24,6 @@ extern const char *get_var_current_weekday();
 extern void set_var_current_weekday(const char *value);
 extern const char *get_var_current_time();
 extern void set_var_current_time(const char *value);
-extern bool get_var_wifi_connected();
-extern void set_var_wifi_connected(bool value);
-extern int32_t get_var_wifi_rssi();
-extern void set_var_wifi_rssi(int32_t value);
 extern bool get_var_is_power_save();
 extern void set_var_is_power_save(bool value);
 extern const char *get_var_yiyan();
@@ -36,6 +32,22 @@ extern bool get_var_ui_wifi_on_off();
 extern void set_var_ui_wifi_on_off(bool value);
 extern const char *get_var_current_date();
 extern void set_var_current_date(const char *value);
+extern bool get_var_wifi_connected();
+extern void set_var_wifi_connected(bool value);
+extern int32_t get_var_wifi_rssi();
+extern void set_var_wifi_rssi(int32_t value);
+extern const char *get_var_wifi_ssid();
+extern void set_var_wifi_ssid(const char *value);
+extern const char *get_var_wifi_ip();
+extern void set_var_wifi_ip(const char *value);
+extern const char *get_var_wifi_mac();
+extern void set_var_wifi_mac(const char *value);
+extern int32_t get_var_wifi_primary();
+extern void set_var_wifi_primary(int32_t value);
+extern const char *get_var_wifi_authmode();
+extern void set_var_wifi_authmode(const char *value);
+extern const char *get_var_wifi_bandwidth();
+extern void set_var_wifi_bandwidth(const char *value);
 
 
 #ifdef __cplusplus

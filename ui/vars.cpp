@@ -80,3 +80,63 @@ extern "C" bool get_var_ui_wifi_on_off() {
 extern "C" void set_var_ui_wifi_on_off(bool value) {
     ui_wifi_on_off = value;
 }
+
+std::string wifi_ssid;
+
+extern "C" const char *get_var_wifi_ssid() {
+    return wifi_ssid.c_str();
+}
+
+extern "C" void set_var_wifi_ssid(const char *value) {
+    wifi_ssid = value;
+}
+
+std::string wifi_ip;
+
+extern "C" const char *get_var_wifi_ip() {
+    return wifi_ip.c_str();
+}
+
+extern "C" void set_var_wifi_ip(const char *value) {
+    wifi_ip = value;
+}
+
+std::string wifi_mac;
+
+extern "C" const char *get_var_wifi_mac() {
+    return wifi_mac.c_str();
+}
+
+extern "C" void set_var_wifi_mac(const char *value) {
+    wifi_mac = value;
+}
+
+int32_t wifi_primary;
+
+extern "C" int32_t get_var_wifi_primary() {
+    return wifi_primary;
+}
+
+extern "C" void set_var_wifi_primary(int32_t value) {
+    wifi_primary = value;
+}
+
+std::string wifi_authmode;
+
+extern "C" const char *get_var_wifi_authmode() {
+    return wifi_authmode.c_str();
+}
+
+extern "C" void set_var_wifi_authmode(const char *value) {
+    wifi_authmode = value;
+}
+
+std::string wifi_bandwidth;
+
+extern "C" const char *get_var_wifi_bandwidth() {
+    return wifi_bandwidth.c_str();
+}
+
+extern "C" void set_var_wifi_bandwidth(const char *value) {
+    wifi_bandwidth = value;
+}

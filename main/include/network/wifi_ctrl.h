@@ -14,4 +14,6 @@ void set_wifi_on_off(bool op);
 
 bool wifi_init(void);
 
+void start_smartconfig(void);
+
 #endif
