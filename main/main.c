@@ -20,6 +20,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include "date_update.h"
+#include "config_manager.h"
 
 #define TAG "main"
 
@@ -129,6 +130,9 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     ESP_LOGI(TAG, "NVS initialized successfully.");
+
+    //初始化系统配置
+    config_manager_init();
 
     init_event_group = xEventGroupCreate();
 

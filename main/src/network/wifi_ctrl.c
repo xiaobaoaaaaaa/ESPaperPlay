@@ -6,6 +6,7 @@
 #include "esp_smartconfig.h"
 #include <string.h>
 #include "vars.h"
+#include "config_manager.h"
 
 #define NVS_NAMESPACE_WIFI "wifi_config"
 #define NVS_KEY_SSID "ssid"
@@ -75,99 +76,36 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_FOUND_CHANNEL) {
         ESP_LOGI(TAG, "Found channel");
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_GOT_SSID_PSWD) {
-        ESP_LOGI(TAG, "Got SSID and password");
-
         smartconfig_event_got_ssid_pswd_t *evt = (smartconfig_event_got_ssid_pswd_t *)event_data;
-        wifi_config_t wifi_config;
-        uint8_t ssid[33] = { 0 };
-        uint8_t password[65] = { 0 };
-        uint8_t rvd_data[33] = { 0 };
 
-        bzero(&wifi_config, sizeof(wifi_config_t));
-        memcpy(wifi_config.sta.ssid, evt->ssid, sizeof(wifi_config.sta.ssid));
-        memcpy(wifi_config.sta.password, evt->password, sizeof(wifi_config.sta.password));
+    wifi_config_t wifi_config = {0};
+    strncpy((char*)wifi_config.sta.ssid, (const char*)evt->ssid, sizeof(wifi_config.sta.ssid));
+    strncpy((char*)wifi_config.sta.password, (const char*)evt->password, sizeof(wifi_config.sta.password));
 
-        // 保存到NVS
-        nvs_handle_t nvs_handle_wifi;
-        esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READWRITE, &nvs_handle_wifi);
-        if (err == ESP_OK) {
-            nvs_set_str(nvs_handle_wifi, NVS_KEY_SSID, (const char*)wifi_config.sta.ssid);
-            nvs_set_str(nvs_handle_wifi, NVS_KEY_PASSWORD, (const char*)wifi_config.sta.password);
-            nvs_commit(nvs_handle_wifi);
-            nvs_close(nvs_handle_wifi);
-            ESP_LOGI(TAG, "WiFi config saved to NVS");
-        } else {
-            ESP_LOGE(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(err));
-        }
+    // 保存到全局配置结构体中
+    system_config_t *cfg = config_get_mutable();
+    strncpy(cfg->wifi_ssid, (const char*)evt->ssid, sizeof(cfg->wifi_ssid));
+    strncpy(cfg->wifi_password, (const char*)evt->password, sizeof(cfg->wifi_password));
+    config_save();
+    ESP_LOGI(TAG, "WiFi config saved to config_manager");
 
-#ifdef CONFIG_SET_MAC_ADDRESS_OF_TARGET_AP
-        wifi_config.sta.bssid_set = evt->bssid_set;
-        if (wifi_config.sta.bssid_set == true) {
-            ESP_LOGI(TAG, "Set MAC address of target AP: "MACSTR" ", MAC2STR(evt->bssid));
-            memcpy(wifi_config.sta.bssid, evt->bssid, sizeof(wifi_config.sta.bssid));
-        }
-#endif
-
-        memcpy(ssid, evt->ssid, sizeof(evt->ssid));
-        memcpy(password, evt->password, sizeof(evt->password));
-        ESP_LOGI(TAG, "SSID:%s", ssid);
-        ESP_LOGI(TAG, "PASSWORD:%s", password);
-        if (evt->type == SC_TYPE_ESPTOUCH_V2) {
-            ESP_ERROR_CHECK( esp_smartconfig_get_rvd_data(rvd_data, sizeof(rvd_data)) );
-            ESP_LOGI(TAG, "RVD_DATA:");
-            for (int i=0; i<33; i++) {
-                printf("%02x ", rvd_data[i]);
-            }
-            printf("\n");
-        }
-
-        ESP_ERROR_CHECK( esp_wifi_disconnect() );
-        ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-        esp_wifi_connect();
+    // 连接 WiFi
+    ESP_ERROR_CHECK( esp_wifi_disconnect() );
+    ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
+    esp_wifi_connect();
     } else if (event_base == SC_EVENT && event_id == SC_EVENT_SEND_ACK_DONE) {
         xEventGroupSetBits(s_wifi_event_group, ESPTOUCH_DONE_BIT);
     }
 }
 
-int get_wifi_from_nvs()
+int get_wifi_from_config()
 {
-    //从 NVS 中读取 WiFi 配置
-    nvs_handle_t nvs_handle_wifi;
-    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READONLY, &nvs_handle_wifi);
-    if (err != ESP_OK) {
-        ESP_LOGE("wifi_ctrl", "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_WIFI, esp_err_to_name(err));
-        return 0;
+    const system_config_t *cfg = config_get();
+    if (strlen(cfg->wifi_ssid) == 0 || strlen(cfg->wifi_password) == 0) {
+        ESP_LOGW("wifi_ctrl", "SSID or password not set in config.");
+        return 1;  // Not found
     }
-    char ssid[32];
-    size_t ssid_len = sizeof(ssid);
-    err = nvs_get_str(nvs_handle_wifi, NVS_KEY_SSID, ssid, &ssid_len);
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW("wifi_ctrl", "SSID not found in NVS, please set it first.");
-            nvs_close(nvs_handle_wifi);
-            return 1; // SSID not found, return 1 to indicate this
-        } else {
-            ESP_LOGE("wifi_ctrl", "Failed to read SSID from NVS: %s", esp_err_to_name(err));
-            nvs_close(nvs_handle_wifi);
-            return 0;
-        }
-    }
-    char password[64];
-    size_t password_len = sizeof(password);
-    err = nvs_get_str(nvs_handle_wifi, NVS_KEY_PASSWORD, password, &password_len);
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW("wifi_ctrl", "Password not found in NVS, please set it first.");
-            nvs_close(nvs_handle_wifi);
-            return 1; // Password not found, return 1 to indicate this
-        } else {
-            ESP_LOGE("wifi_ctrl", "Failed to read password from NVS: %s", esp_err_to_name(err));
-            nvs_close(nvs_handle_wifi);
-            return 0;
-        }
-    }
-    nvs_close(nvs_handle_wifi);
-    return -1; // WiFi config found and read successfully
+    return -1; // Found
 }
 
 static void initialise_wifi_base(void)
@@ -186,27 +124,20 @@ static void initialise_wifi_base(void)
     ESP_ERROR_CHECK( esp_event_handler_register(SC_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL) );
 }
 
-static void connect_wifi_from_nvs(void)
+static void connect_wifi_from_config(void)
 {
-    // 从 NVS 读取配置并连接
-    nvs_handle_t nvs_handle_wifi;
-    esp_err_t err = nvs_open(NVS_NAMESPACE_WIFI, NVS_READONLY, &nvs_handle_wifi);
-    if (err != ESP_OK) {
-        ESP_LOGE("wifi_ctrl", "Failed to open NVS namespace for connect: %s", esp_err_to_name(err));
-        return;
-    }
+    const system_config_t *cfg = config_get();
+
     wifi_config_t wifi_config = {0};
-    size_t ssid_len = sizeof(wifi_config.sta.ssid);
-    size_t pwd_len = sizeof(wifi_config.sta.password);
-    nvs_get_str(nvs_handle_wifi, NVS_KEY_SSID, (char*)wifi_config.sta.ssid, &ssid_len);
-    nvs_get_str(nvs_handle_wifi, NVS_KEY_PASSWORD, (char*)wifi_config.sta.password, &pwd_len);
-    nvs_close(nvs_handle_wifi);
+    strncpy((char*)wifi_config.sta.ssid, cfg->wifi_ssid, sizeof(wifi_config.sta.ssid));
+    strncpy((char*)wifi_config.sta.password, cfg->wifi_password, sizeof(wifi_config.sta.password));
 
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
     ESP_ERROR_CHECK( esp_wifi_start() );
     ESP_ERROR_CHECK( esp_wifi_connect() );
 }
+
 
 void start_smartconfig(void)
 {
@@ -239,21 +170,19 @@ void set_wifi_on_off(bool op)
 
 bool wifi_init(void)
 {
-    s_wifi_init_phase = true; // 初始化阶段开始
+    s_wifi_init_phase = true;
     wifi_on_off = true;
+
     initialise_wifi_base();
-    // 尝试从 NVS 中获取 WiFi 配置
-    int result = get_wifi_from_nvs();
-    if (result == 0) {
-        ESP_LOGE("wifi_ctrl", "Failed to retrieve WiFi configuration from NVS, start smartconfig.");
-        start_smartconfig();
-        return false;
-    } else if (result == 1) {
-        ESP_LOGW("wifi_ctrl", "WiFi configuration not found in NVS, start smartconfig.");
+
+    int result = get_wifi_from_config(); // 使用 config
+    if (result != -1) {
+        ESP_LOGW("wifi_ctrl", "WiFi config missing, start smartconfig");
         start_smartconfig();
         return false;
     }
-    ESP_LOGI("wifi_ctrl", "WiFi configuration retrieved successfully from NVS, connecting...");
-    connect_wifi_from_nvs();
+
+    ESP_LOGI("wifi_ctrl", "WiFi config found, connecting...");
+    connect_wifi_from_config(); // 使用 config
     return true;
 }
