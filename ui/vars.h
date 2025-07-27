@@ -48,6 +48,10 @@ extern const char *get_var_wifi_authmode();
 extern void set_var_wifi_authmode(const char *value);
 extern const char *get_var_wifi_bandwidth();
 extern void set_var_wifi_bandwidth(const char *value);
+extern bool get_var_is_power_save_enabled();
+extern void set_var_is_power_save_enabled(bool value);
+extern int32_t get_var_power_save_min();
+extern void set_var_power_save_min(int32_t value);
 
 
 #ifdef __cplusplus

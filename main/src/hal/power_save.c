@@ -12,14 +12,16 @@
 #include "vars.h"
 #include "sntp.h"
 #include "lvgl_init.h"
+#include "config_manager.h"
 
 #define POWER_SAVE_BIT  BIT0
-#define POWER_SAVE_TIMEOUT_MIN  3
 #define TAG "power_save"
 
-static EventGroupHandle_t pwr_save_event_group ;
+static EventGroupHandle_t pwr_save_event_group;
 static int no_activity_minutes = 0;
 esp_timer_handle_t inactivity_timer;
+static bool power_save_enabled = true;
+static int power_save_min = 3;
 
 void inactivity_timer_callback(void* arg) {
     no_activity_minutes++;
@@ -116,6 +118,12 @@ void power_save(void *param)
     ESP_LOGI(TAG, "Initializing power save mode");
     while (1)
     {
+        if (!power_save_enabled)
+        {
+            vTaskDelay(pdMS_TO_TICKS(30 * 1000));
+            continue;
+        }
+        
         gpio_wakeup_enable(GPIO_NUM_4, GPIO_INTR_LOW_LEVEL);
         //gpio_wakeup_enable(GPIO_NUM_0, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
@@ -132,14 +140,14 @@ void power_save(void *param)
 
         xEventGroupWaitBits(pwr_save_event_group, POWER_SAVE_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
         //无操作三分钟后激活睡眠
-        if (no_activity_minutes >= POWER_SAVE_TIMEOUT_MIN) 
+        if (no_activity_minutes >= power_save_min) 
         {
-            ESP_LOGI(TAG, "No activity for %d minutes, entering deep sleep", POWER_SAVE_TIMEOUT_MIN);
+            ESP_LOGI(TAG, "No activity for %d minutes, entering deep sleep", power_save_min);
             sleep_wakeup();
         }
         else
         {
-            ESP_LOGI(TAG, "Will enter light sleep in %d minutes", POWER_SAVE_TIMEOUT_MIN - no_activity_minutes);
+            ESP_LOGI(TAG, "Will enter light sleep in %d minutes", power_save_min - no_activity_minutes);
             vTaskDelay(pdMS_TO_TICKS(1000 * 61));
         }
     }
@@ -148,6 +156,16 @@ void power_save(void *param)
 
 void power_save_init(void)
 {
+    const system_config_t *cfg = config_get();
+    power_save_enabled = cfg->power_save_enabled;
+    if(!power_save_enabled)
+        ESP_LOGW(TAG, "Power save not enabled");
+    power_save_min = cfg->power_save_min;
+    if(power_save_min < 1)
+    {
+        power_save_min = 3;
+        ESP_LOGW(TAG, "Invalid power save min, reseted to %d", power_save_min);
+    }
     pwr_save_event_group = xEventGroupCreate();
     xEventGroupSetBits(pwr_save_event_group, POWER_SAVE_BIT); // Initialize the event group with no bits set
     start_inactivity_timer();

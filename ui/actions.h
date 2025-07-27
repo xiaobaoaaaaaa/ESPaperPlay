@@ -13,6 +13,9 @@ extern void action_get_yiyan(lv_event_t * e);
 extern void action_set_wifi_on_off(lv_event_t * e);
 extern void action_get_wifi_ap_info(lv_event_t * e);
 extern void action_wifi_reconnect(lv_event_t * e);
+extern void action_power_save_on_off(lv_event_t * e);
+extern void action_check_power_save_mode(lv_event_t * e);
+extern void action_set_power_save_min(lv_event_t * e);
 
 
 #ifdef __cplusplus

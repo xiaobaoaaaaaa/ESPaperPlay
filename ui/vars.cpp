@@ -140,3 +140,23 @@ extern "C" const char *get_var_wifi_bandwidth() {
 extern "C" void set_var_wifi_bandwidth(const char *value) {
     wifi_bandwidth = value;
 }
+
+bool is_power_save_enabled;
+
+extern "C" bool get_var_is_power_save_enabled() {
+    return is_power_save_enabled;
+}
+
+extern "C" void set_var_is_power_save_enabled(bool value) {
+    is_power_save_enabled = value;
+}
+
+int32_t power_save_min;
+
+extern "C" int32_t get_var_power_save_min() {
+    return power_save_min;
+}
+
+extern "C" void set_var_power_save_min(int32_t value) {
+    power_save_min = value;
+}

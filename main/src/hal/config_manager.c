@@ -46,6 +46,8 @@ esp_err_t config_reset_defaults(void) {
     memset(&s_cfg, 0, sizeof(s_cfg));
     strcpy(s_cfg.wifi_ssid, "");
     strcpy(s_cfg.wifi_password, "");
+    s_cfg.power_save_enabled = true;
+    s_cfg.power_save_min = 3;
     return config_save();
 }
 
@@ -60,10 +62,7 @@ esp_err_t config_manager_init(void) {
 
     if (err != ESP_OK) {
         // 设置默认值
-        memset(&s_cfg, 0, sizeof(s_cfg));
-        strcpy(s_cfg.wifi_ssid, "");
-        strcpy(s_cfg.wifi_password, "");
-        return config_save(); // 保存默认值
+        config_reset_defaults();
     }
 
     return ESP_OK;

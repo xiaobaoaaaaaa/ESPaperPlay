@@ -9,6 +9,7 @@
 #include "yiyan.h"
 #include "wifi_ctrl.h"
 #include "esp_mac.h"
+#include "config_manager.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -195,4 +196,50 @@ void action_wifi_reconnect(lv_event_t *e)
 {
     set_wifi_on_off(false);
     start_smartconfig();
+}
+
+void action_power_save_on_off(lv_event_t *e) 
+{
+    system_config_t *cfg = config_get_mutable();
+    lv_obj_t *sw = lv_event_get_target(e);
+    cfg->power_save_enabled = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    config_save();
+    ESP_LOGI("action_power_save_on_off", "Power save mode turned %s", cfg->power_save_enabled ? "on" : "off");
+}
+
+void action_check_power_save_mode(lv_event_t *e) 
+{
+    const system_config_t *cfg = config_get();
+    set_var_is_power_save_enabled(cfg->power_save_enabled);
+    set_var_power_save_min(cfg->power_save_min);
+}
+
+void action_set_power_save_min(lv_event_t *e) 
+{
+    lv_obj_t *dropdown = lv_event_get_target(e);
+    system_config_t *cfg = config_get_mutable();
+    switch (lv_dropdown_get_selected(dropdown))
+    {
+        case 0:
+            cfg->power_save_min = 3;
+            break;
+
+        case 1:
+            cfg->power_save_min = 5;
+            break;
+
+        case 2:
+            cfg->power_save_min = 10;
+            break;
+
+        case 3:
+            cfg->power_save_min = 30;
+            break;
+        
+        default:
+            cfg->power_save_min = 3;
+            break;
+    }
+    ESP_LOGI("action_set_power_save_min", "Set power save min: %d", cfg->power_save_min);
+    config_save();
 }
