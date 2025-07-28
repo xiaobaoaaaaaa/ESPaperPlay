@@ -136,6 +136,10 @@ static void event_handler_cb_sleep_settings_sleep_settings(lv_event_t *e) {
         e->user_data = (void *)0;
         flowPropagateValueLVGLEvent(flowState, 1, 0, e);
     }
+    if (event == LV_EVENT_GESTURE) {
+        e->user_data = (void *)23;
+        action_user_change_screen(e);
+    }
 }
 
 static void event_handler_cb_sleep_settings_sleep_settings_sw(lv_event_t *e) {
@@ -986,6 +990,7 @@ void create_screen_sleep_settings() {
                     lv_obj_set_style_text_font(obj, &ui_font_siyuanheiti_14, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_border_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &ui_font_siyuanheiti_14, LV_PART_SELECTED | LV_STATE_DEFAULT);
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
