@@ -160,3 +160,13 @@ extern "C" int32_t get_var_power_save_min() {
 extern "C" void set_var_power_save_min(int32_t value) {
     power_save_min = value;
 }
+
+std::string weather_city;
+
+extern "C" const char *get_var_weather_city() {
+    return weather_city.c_str();
+}
+
+extern "C" void set_var_weather_city(const char *value) {
+    weather_city = value;
+}
