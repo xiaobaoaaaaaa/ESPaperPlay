@@ -22,6 +22,7 @@ static const char *TAG = "smartconfig";
 static int s_wifi_retry_count = 0;
 static bool s_wifi_init_phase = true; // 标记是否为初始化阶段
 bool wifi_manually_stopped = false;
+bool wifi_on_off;
 
 void start_smartconfig(void);
 static TaskHandle_t smartconfig_task_handle = NULL;
@@ -41,6 +42,7 @@ static void smartconfig_task(void * parm)
             ESP_LOGI(TAG, "smartconfig over");
             esp_smartconfig_stop();
             smartconfig_task_handle = NULL; // 任务即将结束，清空句柄
+            wifi_on_off = true;
             vTaskDelete(NULL);
         }
     }
@@ -148,10 +150,10 @@ void start_smartconfig(void)
         ESP_LOGI(TAG, "smartconfig task started");
     } else {
         ESP_LOGW(TAG, "smartconfig task already running");
+        return;
     }
 }
 
-bool wifi_on_off;
 void set_wifi_on_off(bool op)
 {
     if(op && !wifi_on_off)

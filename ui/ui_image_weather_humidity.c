@@ -1,0 +1,65 @@
+#ifdef __has_include
+    #if __has_include("lvgl.h")
+        #ifndef LV_LVGL_H_INCLUDE_SIMPLE
+            #define LV_LVGL_H_INCLUDE_SIMPLE
+        #endif
+    #endif
+#endif
+
+#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_WEATHER_HUMIDITY
+#define LV_ATTRIBUTE_IMG_WEATHER_HUMIDITY
+#endif
+
+static const
+LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_WEATHER_HUMIDITY
+uint8_t img_weather_humidity_map[] = {
+
+    0x00,0x00,0x00,0xe0,0x00,0x00,0x00,0x07,
+
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0x9f,0xf0,
+    0xff,0x0f,0xf0,
+    0xfe,0x07,0xf0,
+    0xfe,0x07,0xf0,
+    0xfd,0x93,0xf0,
+    0xfd,0xa3,0xf0,
+    0xf9,0xa1,0xf0,
+    0xf8,0x59,0xf0,
+    0xf8,0x55,0xf0,
+    0xfc,0x1b,0xf0,
+    0xfc,0x03,0xf0,
+    0xfe,0x07,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+
+};
+
+const lv_image_dsc_t img_weather_humidity = {
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  .header.cf = LV_COLOR_FORMAT_I1,
+  .header.flags = 0,
+  .header.w = 20,
+  .header.h = 20,
+  .header.stride = 3,
+  .data_size = sizeof(img_weather_humidity_map),
+  .data = img_weather_humidity_map,
+};
+

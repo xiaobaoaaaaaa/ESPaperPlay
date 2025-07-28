@@ -52,6 +52,34 @@ extern bool get_var_is_power_save_enabled();
 extern void set_var_is_power_save_enabled(bool value);
 extern int32_t get_var_power_save_min();
 extern void set_var_power_save_min(int32_t value);
+extern const char *get_var_weather_city();
+extern void set_var_weather_city(const char *value);
+extern const char *get_var_weather();
+extern void set_var_weather(const char *value);
+extern float get_var_weather_temp();
+extern void set_var_weather_temp(float value);
+extern float get_var_weather_feels_like();
+extern void set_var_weather_feels_like(float value);
+extern const char *get_var_weather_wind_dir();
+extern void set_var_weather_wind_dir(const char *value);
+extern const char *get_var_weather_wind_scale();
+extern void set_var_weather_wind_scale(const char *value);
+extern float get_var_weather_wind_speed();
+extern void set_var_weather_wind_speed(float value);
+extern float get_var_weather_precip();
+extern void set_var_weather_precip(float value);
+extern float get_var_weather_pressure();
+extern void set_var_weather_pressure(float value);
+extern float get_var_weather_visibility();
+extern void set_var_weather_visibility(float value);
+extern float get_var_weather_cloud();
+extern void set_var_weather_cloud(float value);
+extern float get_var_weather_dew_point();
+extern void set_var_weather_dew_point(float value);
+extern const char *get_var_weather_update_time();
+extern void set_var_weather_update_time(const char *value);
+extern float get_var_weather_humidity();
+extern void set_var_weather_humidity(float value);
 
 
 #ifdef __cplusplus

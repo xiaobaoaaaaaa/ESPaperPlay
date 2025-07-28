@@ -152,18 +152,25 @@ static char* weather_http_request(const char *url) {
 
 location_info_t* get_city_by_ip(const char *ip) {
     char url[128];
-    // 使用ip-api.com的API
-    snprintf(url, sizeof(url), "http://ip-api.com/json/%s?lang=zh-CN", ip ? ip : "");
-    
+    // 使用新 API（假设你已经更新为新 API 地址）
+    snprintf(url, sizeof(url), "https://api.vore.top/api/IPdata?ip=%s", ip ? ip : "");
+
     char *response = weather_http_request(url);
     if (!response) return NULL;
-    
+
     cJSON *root = cJSON_Parse(response);
     if (!root) {
         free(response);
         return NULL;
     }
-    
+
+    cJSON *code = cJSON_GetObjectItem(root, "code");
+    if (!code || !cJSON_IsNumber(code) || code->valueint != 200) {
+        cJSON_Delete(root);
+        free(response);
+        return NULL;
+    }
+
     location_info_t *loc_info = calloc(1, sizeof(location_info_t));
     if (!loc_info) {
         cJSON_Delete(root);
@@ -171,29 +178,34 @@ location_info_t* get_city_by_ip(const char *ip) {
         return NULL;
     }
 
-    // 解析IP信息
-    cJSON *status = cJSON_GetObjectItem(root, "status");
-    if (status && cJSON_IsString(status) && strcmp(status->valuestring, "success") == 0) {
-        // 解析省份和城市信息
-        cJSON *regionName = cJSON_GetObjectItem(root, "regionName");
-        cJSON *city = cJSON_GetObjectItem(root, "city");
-        cJSON *isp = cJSON_GetObjectItem(root, "isp");
-        cJSON *query = cJSON_GetObjectItem(root, "query");
-        
-        if (regionName && cJSON_IsString(regionName)) 
-            loc_info->province = strdup(regionName->valuestring);
-        if (city && cJSON_IsString(city)) 
+    // 获取嵌套字段
+    cJSON *ipdata = cJSON_GetObjectItem(root, "ipdata");
+    cJSON *ipinfo = cJSON_GetObjectItem(root, "ipinfo");
+
+    if (ipdata) {
+        cJSON *province = cJSON_GetObjectItem(ipdata, "info1");
+        cJSON *city = cJSON_GetObjectItem(ipdata, "info2");
+        cJSON *isp = cJSON_GetObjectItem(ipdata, "isp");
+
+        if (province && cJSON_IsString(province))
+            loc_info->province = strdup(province->valuestring);
+        if (city && cJSON_IsString(city))
             loc_info->city = strdup(city->valuestring);
-        if (isp && cJSON_IsString(isp)) 
+        if (isp && cJSON_IsString(isp))
             loc_info->isp = strdup(isp->valuestring);
-        if (query && cJSON_IsString(query)) 
-            loc_info->ip_address = strdup(query->valuestring);
+    }
+
+    if (ipinfo) {
+        cJSON *ipaddr = cJSON_GetObjectItem(ipinfo, "text");
+        if (ipaddr && cJSON_IsString(ipaddr))
+            loc_info->ip_address = strdup(ipaddr->valuestring);
     }
 
     cJSON_Delete(root);
     free(response);
     return loc_info;
 }
+
 
 // 解析高德天气
 static weather_info_t* parse_gaode(const char *json) {

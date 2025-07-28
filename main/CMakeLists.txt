@@ -22,6 +22,12 @@ idf_component_register(SRCS "main.c"
                     "../ui/ui_image_icon_settings.c"
                     "../ui/ui_image_icon_smart_home_manager.c"
                     "../ui/ui_image_icon_weather.c"
+                    "../ui/ui_image_weather_dew_point.c"
+                    "../ui/ui_image_weather_humidity.c"
+                    "../ui/ui_image_weather_precip.c"
+                    "../ui/ui_image_weather_pressure.c"
+                    "../ui/ui_image_weather_visibility.c"
+                    "../ui/ui_image_weather_wind.c"
 
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}

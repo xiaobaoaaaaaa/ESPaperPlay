@@ -1,0 +1,65 @@
+#ifdef __has_include
+    #if __has_include("lvgl.h")
+        #ifndef LV_LVGL_H_INCLUDE_SIMPLE
+            #define LV_LVGL_H_INCLUDE_SIMPLE
+        #endif
+    #endif
+#endif
+
+#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_WEATHER_PRECIP
+#define LV_ATTRIBUTE_IMG_WEATHER_PRECIP
+#endif
+
+static const
+LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_WEATHER_PRECIP
+uint8_t img_weather_precip_map[] = {
+
+    0x00,0x00,0x00,0xc7,0x00,0x00,0x00,0x04,
+
+    0xff,0xff,0xf0,
+    0xff,0x9f,0xf0,
+    0xff,0x9f,0xf0,
+    0xff,0x0f,0xf0,
+    0xff,0x6f,0xf0,
+    0xfe,0x67,0xf0,
+    0xfe,0xf7,0xf0,
+    0xfc,0xf3,0xf0,
+    0xfd,0xfb,0xf0,
+    0xf9,0xf9,0xf0,
+    0xfb,0xfd,0xf0,
+    0xf3,0xfc,0xf0,
+    0xf7,0xfe,0xf0,
+    0xf7,0xfe,0xf0,
+    0xf7,0xfe,0xf0,
+    0xf7,0xfc,0xf0,
+    0xf3,0xfc,0xf0,
+    0xf9,0xf9,0xf0,
+    0xfc,0x43,0xf0,
+    0xff,0x07,0xf0,
+
+};
+
+const lv_image_dsc_t img_weather_precip = {
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  .header.cf = LV_COLOR_FORMAT_I1,
+  .header.flags = 0,
+  .header.w = 20,
+  .header.h = 20,
+  .header.stride = 3,
+  .data_size = sizeof(img_weather_precip_map),
+  .data = img_weather_precip_map,
+};
+

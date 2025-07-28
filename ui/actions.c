@@ -10,6 +10,7 @@
 #include "wifi_ctrl.h"
 #include "esp_mac.h"
 #include "config_manager.h"
+#include "weather.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -242,4 +243,39 @@ void action_set_power_save_min(lv_event_t *e)
     }
     ESP_LOGI("action_set_power_save_min", "Set power save min: %d", cfg->power_save_min);
     config_save();
+}
+
+void action_get_weather(lv_event_t *e) 
+{
+    weather_config_t config = {
+        .api_key = "REMOVED",
+        .api_host = "REMOVED",
+        .city = NULL,
+        .type = WEATHER_HEFENG
+    };
+
+    weather_info_t *info = weather_get(&config);
+    if (info) {
+        if (info->weather) set_var_weather(info->weather);
+        set_var_weather_temp(info->temperature);
+        set_var_weather_feels_like(info->feels_like);
+        set_var_weather_humidity(info->humidity);
+        if (info->wind_dir) set_var_weather_wind_dir(info->wind_dir);
+        if (info->wind_scale) set_var_weather_wind_scale(info->wind_scale);
+        set_var_weather_wind_speed(info->wind_speed);
+        set_var_weather_precip(info->precip);
+        set_var_weather_pressure(info->pressure);
+        set_var_weather_visibility(info->visibility);
+        set_var_weather_cloud(info->cloud);
+        set_var_weather_dew_point(info->dew_point);
+        if (info->update_time) set_var_weather_update_time(info->update_time);
+
+        if (info->location_info) {
+            if (info->location_info->city)
+                set_var_weather_city(info->location_info->city);
+        }
+
+        weather_info_free(info);
+    }
+
 }

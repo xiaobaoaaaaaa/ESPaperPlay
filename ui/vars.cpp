@@ -170,3 +170,133 @@ extern "C" const char *get_var_weather_city() {
 extern "C" void set_var_weather_city(const char *value) {
     weather_city = value;
 }
+
+std::string weather;
+
+extern "C" const char *get_var_weather() {
+    return weather.c_str();
+}
+
+extern "C" void set_var_weather(const char *value) {
+    weather = value;
+}
+
+float weather_temp;
+
+extern "C" float get_var_weather_temp() {
+    return weather_temp;
+}
+
+extern "C" void set_var_weather_temp(float value) {
+    weather_temp = value;
+}
+
+float weather_feels_like;
+
+extern "C" float get_var_weather_feels_like() {
+    return weather_feels_like;
+}
+
+extern "C" void set_var_weather_feels_like(float value) {
+    weather_feels_like = value;
+}
+
+float weather_humidity;
+
+extern "C" float get_var_weather_humidity() {
+    return weather_humidity;
+}
+
+extern "C" void set_var_weather_humidity(float value) {
+    weather_humidity = value;
+}
+
+std::string weather_wind_dir;
+
+extern "C" const char *get_var_weather_wind_dir() {
+    return weather_wind_dir.c_str();
+}
+
+extern "C" void set_var_weather_wind_dir(const char *value) {
+    weather_wind_dir = value;
+}
+
+std::string weather_wind_scale;
+
+extern "C" const char *get_var_weather_wind_scale() {
+    return weather_wind_scale.c_str();
+}
+
+extern "C" void set_var_weather_wind_scale(const char *value) {
+    weather_wind_scale = value;
+}
+
+float weather_wind_speed;
+
+extern "C" float get_var_weather_wind_speed() {
+    return weather_wind_speed;
+}
+
+extern "C" void set_var_weather_wind_speed(float value) {
+    weather_wind_speed = value;
+}
+
+float weather_precip;
+
+extern "C" float get_var_weather_precip() {
+    return weather_precip;
+}
+
+extern "C" void set_var_weather_precip(float value) {
+    weather_precip = value;
+}
+
+float weather_pressure;
+
+extern "C" float get_var_weather_pressure() {
+    return weather_pressure;
+}
+
+extern "C" void set_var_weather_pressure(float value) {
+    weather_pressure = value;
+}
+
+float weather_visibility;
+
+extern "C" float get_var_weather_visibility() {
+    return weather_visibility;
+}
+
+extern "C" void set_var_weather_visibility(float value) {
+    weather_visibility = value;
+}
+
+float weather_cloud;
+
+extern "C" float get_var_weather_cloud() {
+    return weather_cloud;
+}
+
+extern "C" void set_var_weather_cloud(float value) {
+    weather_cloud = value;
+}
+
+float weather_dew_point;
+
+extern "C" float get_var_weather_dew_point() {
+    return weather_dew_point;
+}
+
+extern "C" void set_var_weather_dew_point(float value) {
+    weather_dew_point = value;
+}
+
+std::string weather_update_time;
+
+extern "C" const char *get_var_weather_update_time() {
+    return weather_update_time.c_str();
+}
+
+extern "C" void set_var_weather_update_time(const char *value) {
+    weather_update_time = value;
+}

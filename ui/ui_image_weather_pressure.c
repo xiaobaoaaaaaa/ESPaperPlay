@@ -1,0 +1,65 @@
+#ifdef __has_include
+    #if __has_include("lvgl.h")
+        #ifndef LV_LVGL_H_INCLUDE_SIMPLE
+            #define LV_LVGL_H_INCLUDE_SIMPLE
+        #endif
+    #endif
+#endif
+
+#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef LV_ATTRIBUTE_IMG_WEATHER_PRESSURE
+#define LV_ATTRIBUTE_IMG_WEATHER_PRESSURE
+#endif
+
+static const
+LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_WEATHER_PRESSURE
+uint8_t img_weather_pressure_map[] = {
+
+    0x00,0x00,0x00,0xe4,0x00,0x00,0x00,0x0b,
+
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0x0f,0xf0,
+    0xfc,0x01,0xf0,
+    0xf0,0x98,0xf0,
+    0xe1,0xfc,0x70,
+    0xe0,0xf8,0x70,
+    0xc0,0x7f,0x30,
+    0xc8,0x7f,0x30,
+    0xc9,0x1f,0xb0,
+    0xcc,0x9f,0x30,
+    0xc4,0xce,0x30,
+    0xc6,0x1e,0x30,
+    0xfe,0x1f,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+    0xff,0xff,0xf0,
+
+};
+
+const lv_image_dsc_t img_weather_pressure = {
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  .header.cf = LV_COLOR_FORMAT_I1,
+  .header.flags = 0,
+  .header.w = 20,
+  .header.h = 20,
+  .header.stride = 3,
+  .data_size = sizeof(img_weather_pressure_map),
+  .data = img_weather_pressure_map,
+};
+
