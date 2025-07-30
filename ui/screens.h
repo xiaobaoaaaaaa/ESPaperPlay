@@ -72,6 +72,7 @@ typedef struct _objects_t {
     lv_obj_t *sleep_settings_con;
     lv_obj_t *sleep_settings_con_1;
     lv_obj_t *obj14;
+    lv_obj_t *panel_wait;
     lv_obj_t *obj15;
     lv_obj_t *obj16;
     lv_obj_t *obj17;
@@ -81,6 +82,7 @@ typedef struct _objects_t {
     lv_obj_t *obj21;
     lv_obj_t *obj22;
     lv_obj_t *obj23;
+    lv_obj_t *obj24;
 } objects_t;
 
 extern objects_t objects;

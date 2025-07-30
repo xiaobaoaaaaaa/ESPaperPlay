@@ -87,15 +87,14 @@ void lv_port_disp_init(void)
     //lv_display_add_event_cb(disp, display_event_cb, LV_EVENT_INVALIDATE_AREA, disp);
     size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES * sizeof(lv_color_t) / 8;
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
-    buf2 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
-    if (!buf1 || !buf2) {
-        ESP_LOGE(TAG, "Display buffer malloc failed! buf1=%p, buf2=%p", buf1, buf2);
+    if (!buf1) {
+        ESP_LOGE(TAG, "Display buffer malloc failed! buf1=%p", buf1);
         ESP_LOGE(TAG, "Free DMA heap: %u, largest free block: %u", heap_caps_get_free_size(MALLOC_CAP_DMA), heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
         return;
     }
 
-    lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(disp, buf1, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 }
 
 static void increase_lvgl_tick(void *arg)
