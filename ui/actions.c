@@ -278,4 +278,7 @@ void action_get_weather(lv_event_t *e)
         weather_info_free(info);
     }
 
+    forecast_weather_t* forecast = weather_forecast(&config, 7);
+    forecast_weather_print_info(forecast);
+    forecast_weather_free(forecast);
 }

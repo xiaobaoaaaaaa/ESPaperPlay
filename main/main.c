@@ -165,5 +165,8 @@ void app_main(void)
     xTaskCreate(power_save_init_task, "power_save_init_task", 4096, NULL, 5, NULL);
 
     // 初始化时间更新
+    ESP_LOGI(TAG, "Initializing date-update task...");
     xTaskCreate(time_tick_task, "time_tick_task", 2048, NULL, 5, NULL);
+
+    return;
 }
