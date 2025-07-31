@@ -80,6 +80,8 @@ extern const char *get_var_weather_update_time();
 extern void set_var_weather_update_time(const char *value);
 extern float get_var_weather_humidity();
 extern void set_var_weather_humidity(float value);
+extern bool get_var_weather_updated();
+extern void set_var_weather_updated(bool value);
 
 
 #ifdef __cplusplus

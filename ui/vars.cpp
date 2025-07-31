@@ -300,3 +300,13 @@ extern "C" const char *get_var_weather_update_time() {
 extern "C" void set_var_weather_update_time(const char *value) {
     weather_update_time = value;
 }
+
+bool weather_updated;
+
+extern "C" bool get_var_weather_updated() {
+    return weather_updated;
+}
+
+extern "C" void set_var_weather_updated(bool value) {
+    weather_updated = value;
+}

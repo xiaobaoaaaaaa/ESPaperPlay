@@ -245,7 +245,8 @@ void action_set_power_save_min(lv_event_t *e)
     config_save();
 }
 
-void action_get_weather(lv_event_t *e) 
+TaskHandle_t weather_get_task_handle;
+void task_get_weather(void* param)
 {
     weather_config_t config = {
         .api_key = "REMOVED",
@@ -255,6 +256,7 @@ void action_get_weather(lv_event_t *e)
     };
 
     weather_info_t *info = weather_get(&config);
+    set_var_weather_updated(true);
     if (info) {
         if (info->weather) set_var_weather(info->weather);
         set_var_weather_temp(info->temperature);
@@ -281,4 +283,15 @@ void action_get_weather(lv_event_t *e)
     forecast_weather_t* forecast = weather_forecast(&config, 7);
     forecast_weather_print_info(forecast);
     forecast_weather_free(forecast);
+    weather_get_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+void action_get_weather(lv_event_t *e) 
+{
+    if(weather_get_task_handle == NULL)
+    {
+        xTaskCreate(task_get_weather, "task_get_weather", 4500, NULL, 7, &weather_get_task_handle);
+    }
+    else ESP_LOGW("action_get_weather", "Weather update no finish yet. Please wait");
 }
