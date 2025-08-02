@@ -58,6 +58,21 @@ void sleep_wakeup()
     }
     xEventGroupClearBits(lvgl_flush_event_group, BIT0);
     vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
+    if(no_activity_minutes < power_save_min)
+    {
+        ESP_LOGW(TAG, "Skipping sleep due to touch detected");
+                set_var_is_power_save(false);
+        //重新连接WiFi
+        if(!wifi_manually_stopped && wifi_off_autoly)
+        {
+            wifi_off_autoly = false;
+            esp_wifi_start();
+            esp_wifi_connect();
+            set_wifi_on_off(true);
+        }
+        reset_inactivity_timer();
+        return;
+    }
     esp_light_sleep_start();
 
     ESP_LOGI(TAG, "Woke up from sleep mode");
@@ -79,7 +94,7 @@ void sleep_wakeup()
         reset_inactivity_timer();
     } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
         ESP_LOGI(TAG, "Woken up by timer");
-        vTaskDelay(pdMS_TO_TICKS(2000)); // 等待1秒，确保系统稳定
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保系统稳定
     } else {
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause);
     }
