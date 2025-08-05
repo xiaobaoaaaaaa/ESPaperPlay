@@ -253,10 +253,11 @@ static lv_chart_series_t *ser_min = NULL;
 TaskHandle_t weather_get_task_handle;
 void task_get_weather(void* param)
 {
+    system_config_t *cfg = config_get_mutable();
     weather_config_t config = {
         .api_key = "REMOVED",
         .api_host = "REMOVED",
-        .city = "西安市",
+        .city = cfg->weather_city,
         .type = WEATHER_HEFENG
     };
 
@@ -377,10 +378,11 @@ void action_set_chart_temp(lv_event_t *e) {
         ser_min = lv_chart_add_series(chart, lv_color_hex(0xff000000), LV_CHART_AXIS_PRIMARY_Y);
         lv_obj_set_style_text_font(chart, &ui_font_siyuanheiti_14, LV_PART_ITEMS | LV_STATE_DEFAULT);
 
+        system_config_t *cfg = config_get_mutable();
         weather_config_t config = {
             .api_key = "REMOVED",
             .api_host = "REMOVED",
-            .city = "西安市",
+            .city = cfg->weather_city,
             .type = WEATHER_HEFENG
         };
         forecast_weather_t* forecast = weather_forecast(&config, 7);

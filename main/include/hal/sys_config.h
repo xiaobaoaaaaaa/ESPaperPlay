@@ -8,6 +8,9 @@ typedef struct {
     char wifi_password[64];
     bool power_save_enabled;
     int power_save_min;
+    char weather_city[32];
+    char weather_api_key[64];
+    char weather_api_host[64];
 } system_config_t;
 
 #endif

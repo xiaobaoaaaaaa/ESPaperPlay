@@ -48,6 +48,9 @@ esp_err_t config_reset_defaults(void) {
     strcpy(s_cfg.wifi_password, "");
     s_cfg.power_save_enabled = true;
     s_cfg.power_save_min = 3;
+    strcpy(s_cfg.weather_city, "");
+    strcpy(s_cfg.weather_api_key, "");
+    strcpy(s_cfg.weather_api_host, "");
     return config_save();
 }
 
