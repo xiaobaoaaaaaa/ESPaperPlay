@@ -11,6 +11,8 @@
 #include "esp_mac.h"
 #include "config_manager.h"
 #include "weather.h"
+#include "lvgl.h"
+#include "fonts.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -245,13 +247,16 @@ void action_set_power_save_min(lv_event_t *e)
     config_save();
 }
 
+lv_obj_t *chart = NULL;
+static lv_chart_series_t *ser_max = NULL;
+static lv_chart_series_t *ser_min = NULL;
 TaskHandle_t weather_get_task_handle;
 void task_get_weather(void* param)
 {
     weather_config_t config = {
         .api_key = "REMOVED",
         .api_host = "REMOVED",
-        .city = NULL,
+        .city = "西安市",
         .type = WEATHER_HEFENG
     };
 
@@ -281,9 +286,70 @@ void task_get_weather(void* param)
     }
 
     forecast_weather_t* forecast = weather_forecast(&config, 7);
-    forecast_weather_print_info(forecast);
+    if(forecast && forecast->daily_count)
+    {
+        int temp_max = -999;
+        int temp_min = 999;
+        for (int i = 0; i < 7; i++) 
+        {
+            if(atoi(forecast->daily[i].temp_max) > temp_max)
+            {
+                temp_max = atoi(forecast->daily[i].temp_max);
+            }
+            if(atoi(forecast->daily[i].temp_min) < temp_min)
+            {
+                temp_min = atoi(forecast->daily[i].temp_min);
+            }
+            if(ser_max && ser_min)
+            {
+                ser_max->y_points[i] = atoi(forecast->daily[i].temp_max);
+                ser_min->y_points[i] = atoi(forecast->daily[i].temp_min);
+            }
+        }
+
+        char temp_str[128] = {0};
+        char weather_str[128] = {0};
+        int temp_len = 0;
+        int weather_len = 0;
+
+        for (int i = 0; i < 7; i++) {
+            temp_len += snprintf(temp_str + temp_len, sizeof(temp_str) - temp_len, "%s%s",
+                            forecast->daily[i].temp_max,
+                            (i < 6) ? "," : "");
+            weather_len += snprintf(weather_str + weather_len, sizeof(weather_str) - weather_len, "%s%s" ,
+                            forecast->daily[i].text_day,
+                            (i < 6) ? "," : "");
+        }
+        set_var_temp_max(temp_str);
+        set_var_weather_day(weather_str);
+
+        memcpy(temp_str, "", sizeof(temp_str));
+        memcpy(weather_str, "", sizeof(weather_str));
+        weather_len = 0;
+        temp_len = 0;
+        for (int i = 0; i < 7; i++)
+        {
+            temp_len += snprintf(temp_str + temp_len, sizeof(temp_str) - temp_len, "%s%s",
+                            forecast->daily[i].temp_min,
+                            (i < 6) ? "," : "");
+            weather_len += snprintf(weather_str + weather_len, sizeof(weather_str) - weather_len, "%s%s" ,
+                            forecast->daily[i].text_night,
+                            (i < 6) ? "," : "");
+        }
+        set_var_temp_min(temp_str);
+        set_var_weather_night(weather_str);
+
+        ESP_LOGI("task_get_weather", "Max temperature: %d, Min temperature: %d", temp_max, temp_min);
+
+        if(ser_max && ser_min)
+        {
+            lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, temp_min, temp_max);
+            lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, temp_min, temp_max);
+        }
+    }
     forecast_weather_free(forecast);
     weather_get_task_handle = NULL;
+    ESP_LOGI("task_get_weather", "Weather data updated successfully");
     vTaskDelete(NULL);
 }
 
@@ -291,7 +357,89 @@ void action_get_weather(lv_event_t *e)
 {
     if(weather_get_task_handle == NULL)
     {
-        xTaskCreate(task_get_weather, "task_get_weather", 4500, NULL, 7, &weather_get_task_handle);
+        xTaskCreate(task_get_weather, "task_get_weather", 5100, NULL, 7, &weather_get_task_handle);
     }
     else ESP_LOGW("action_get_weather", "Weather update no finish yet. Please wait");
+}
+
+void action_set_chart_temp(lv_event_t *e) {
+    if(chart == NULL)
+    {
+        chart = lv_event_get_target(e);
+        ESP_LOGI("action_set_chart_temp", "Chart object initialized");
+        lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
+        lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_CIRCULAR);
+        lv_chart_set_point_count(chart, 7);
+        lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, -10, 40);
+        lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, -10, 40);
+        lv_chart_set_div_line_count(chart, 0, 7);
+        ser_max = lv_chart_add_series(chart, lv_color_hex(0xff000000), LV_CHART_AXIS_PRIMARY_Y);
+        ser_min = lv_chart_add_series(chart, lv_color_hex(0xff000000), LV_CHART_AXIS_PRIMARY_Y);
+        lv_obj_set_style_text_font(chart, &ui_font_siyuanheiti_14, LV_PART_ITEMS | LV_STATE_DEFAULT);
+
+        weather_config_t config = {
+            .api_key = "REMOVED",
+            .api_host = "REMOVED",
+            .city = "西安市",
+            .type = WEATHER_HEFENG
+        };
+        forecast_weather_t* forecast = weather_forecast(&config, 7);
+        if(forecast && forecast->daily_count && ser_max && ser_min)
+        {
+            int temp_max = -999;
+            int temp_min = 999;
+            for (int i = 0; i < 7; i++) 
+            {
+                if(atoi(forecast->daily[i].temp_max) > temp_max)
+                {
+                    temp_max = atoi(forecast->daily[i].temp_max);
+                }
+                if(atoi(forecast->daily[i].temp_min) < temp_min)
+                {
+                    temp_min = atoi(forecast->daily[i].temp_min);
+                }
+                ser_max->y_points[i] = atoi(forecast->daily[i].temp_max);
+                ser_min->y_points[i] = atoi(forecast->daily[i].temp_min);
+            }
+
+            char temp_str[128] = {0};
+            char weather_str[128] = {0};
+            int temp_len = 0;
+            int weather_len = 0;
+
+            for (int i = 0; i < 7; i++) {
+                temp_len += snprintf(temp_str + temp_len, sizeof(temp_str) - temp_len, "%s%s",
+                                forecast->daily[i].temp_max,
+                                (i < 6) ? "," : "");
+                weather_len += snprintf(weather_str + weather_len, sizeof(weather_str) - weather_len, "%s%s" ,
+                                forecast->daily[i].text_day,
+                                (i < 6) ? "," : "");
+            }
+            set_var_temp_max(temp_str);
+            set_var_weather_day(weather_str);
+
+            memcpy(temp_str, "", sizeof(temp_str));
+            memcpy(weather_str, "", sizeof(weather_str));
+            weather_len = 0;
+            temp_len = 0;
+            for (int i = 0; i < 7; i++)
+            {
+                temp_len += snprintf(temp_str + temp_len, sizeof(temp_str) - temp_len, "%s%s",
+                                forecast->daily[i].temp_min,
+                                (i < 6) ? "," : "");
+                weather_len += snprintf(weather_str + weather_len, sizeof(weather_str) - weather_len, "%s%s" ,
+                                forecast->daily[i].text_night,
+                                (i < 6) ? "," : "");
+            }
+            set_var_temp_min(temp_str);
+            set_var_weather_night(weather_str);
+
+            ESP_LOGI("task_get_weather", "Max temperature: %d, Min temperature: %d", temp_max, temp_min);
+            
+            lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, temp_min, temp_max);
+            lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, temp_min, temp_max);
+        }
+        forecast_weather_free(forecast);
+        return;
+    }
 }

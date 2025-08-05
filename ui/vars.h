@@ -82,6 +82,14 @@ extern float get_var_weather_humidity();
 extern void set_var_weather_humidity(float value);
 extern bool get_var_weather_updated();
 extern void set_var_weather_updated(bool value);
+extern const char *get_var_temp_max();
+extern void set_var_temp_max(const char *value);
+extern const char *get_var_temp_min();
+extern void set_var_temp_min(const char *value);
+extern const char *get_var_weather_day();
+extern void set_var_weather_day(const char *value);
+extern const char *get_var_weather_night();
+extern void set_var_weather_night(const char *value);
 
 
 #ifdef __cplusplus

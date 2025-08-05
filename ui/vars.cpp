@@ -310,3 +310,43 @@ extern "C" bool get_var_weather_updated() {
 extern "C" void set_var_weather_updated(bool value) {
     weather_updated = value;
 }
+
+std::string temp_max;
+
+extern "C" const char *get_var_temp_max() {
+    return temp_max.c_str();
+}
+
+extern "C" void set_var_temp_max(const char *value) {
+    temp_max = value;
+}
+
+std::string temp_min;
+
+extern "C" const char *get_var_temp_min() {
+    return temp_min.c_str();
+}
+
+extern "C" void set_var_temp_min(const char *value) {
+    temp_min = value;
+}
+
+std::string weather_day;
+
+extern "C" const char *get_var_weather_day() {
+    return weather_day.c_str();
+}
+
+extern "C" void set_var_weather_day(const char *value) {
+    weather_day = value;
+}
+
+std::string weather_night;
+
+extern "C" const char *get_var_weather_night() {
+    return weather_night.c_str();
+}
+
+extern "C" void set_var_weather_night(const char *value) {
+    weather_night = value;
+}
