@@ -40,7 +40,6 @@ static void url_encode(char *dest, const char *src, size_t max_len) {
 static esp_err_t weather_http_handler(esp_http_client_event_t *evt) {
     switch(evt->event_id) {
         case HTTP_EVENT_ON_HEADER:
-            // ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
             // 存储Content-Encoding头
             if (strcasecmp(evt->header_key, "Content-Encoding") == 0) {
                 strlcpy(content_encoding_value, evt->header_value, sizeof(content_encoding_value));
@@ -62,7 +61,7 @@ static esp_err_t weather_http_handler(esp_http_client_event_t *evt) {
 }
 
 //解压Gzip数据
-#define CHUNK_SIZE 512  // 小块缓冲，降低内存占用
+#define CHUNK_SIZE 512
 static char* decompress_gzip_data(const char *compressed_data, int compressed_len) {
     z_stream strm = {0};
     int ret;
@@ -79,7 +78,6 @@ static char* decompress_gzip_data(const char *compressed_data, int compressed_le
     char *output = NULL;
     int total_size = 0;
 
-    // 使用小缓冲区循环解压
     char chunk[CHUNK_SIZE];
 
     do {
@@ -170,7 +168,6 @@ static char* weather_http_request(const char *url) {
 
 location_info_t* get_city_by_ip(const char *ip) {
     char url[128];
-    // 使用新 API（假设你已经更新为新 API 地址）
     snprintf(url, sizeof(url), "https://api.vore.top/api/IPdata?ip=%s", ip ? ip : "");
 
     char *response = weather_http_request(url);
