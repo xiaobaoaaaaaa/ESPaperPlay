@@ -83,9 +83,16 @@ void buzzer_init_task(void *param)
     vTaskDelete(NULL); // 任务完成后删除自身
 }
 
+void touch_init_task(void *param)
+{
+    sd_touch_init();
+    xEventGroupSetBits(init_event_group, TOUCH_INIT_BIT);
+    vTaskDelete(NULL); // 任务完成后删除自身
+}
+
 void epaper_init_task(void *param)
 {
-    xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT | TIME_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT | TIME_INIT_BIT | TOUCH_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     lvgl_init_epaper_display();
     xEventGroupSetBits(init_event_group, DISP_INIT_BIT);
     vTaskDelete(NULL); // 初始化完成后删除自身
@@ -154,7 +161,7 @@ void app_main(void)
 
     // 初始化触摸屏
     ESP_LOGI(TAG, "Initializing touch screen...");
-    sd_touch_init();
+    xTaskCreate(touch_init_task, "touch_init_task", 4096, NULL, 5, NULL);
 
     // 初始化 e-Paper显示
     ESP_LOGI(TAG, "Initializing e-Paper display...");
