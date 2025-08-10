@@ -21,6 +21,7 @@
 #include <sys/time.h>
 #include "date_update.h"
 #include "config_manager.h"
+#include "tcpserver.h"
 
 #define TAG "main"
 
@@ -166,6 +167,14 @@ void app_main(void)
     // 初始化时间更新
     ESP_LOGI(TAG, "Initializing date-update task...");
     xTaskCreate(time_tick_task, "time_tick_task", 2048, NULL, 5, NULL);
+
+    // 创建TCP服务端
+    xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    ESP_LOGI(TAG, "Creating TCP server...");
+    tcpserver_create();
+
+    vTaskDelay(pdMS_TO_TICKS(30000));
+    tcp_server_stop();
 
     return;
 }

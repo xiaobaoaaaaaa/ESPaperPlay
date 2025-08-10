@@ -186,5 +186,7 @@ bool wifi_init(void)
 
     ESP_LOGI("wifi_ctrl", "WiFi config found, connecting...");
     connect_wifi_from_config(); // 使用 config
-    return true;
+    EventBits_t uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(1000));
+    if(uxBits & CONNECTED_BIT) return true;
+    else return false;
 }

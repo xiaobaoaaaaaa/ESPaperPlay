@@ -110,7 +110,7 @@ void lvgl_timer_task(void *param)
         xEventGroupWaitBits(lvgl_flush_event_group, BIT0, pdFALSE, pdFALSE, portMAX_DELAY);
         lv_timer_handler();
         ui_tick(); 
-        vTaskDelay(pdMS_TO_TICKS(33));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
