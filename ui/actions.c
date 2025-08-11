@@ -445,3 +445,9 @@ void action_set_chart_temp(lv_event_t *e) {
         return;
     }
 }
+
+void action_get_weather_settings(lv_event_t *e) {
+    system_config_t *cfg = config_get();
+    ESP_LOGI("action_get_weather_settings", "Weather city: %s, API key: %s, API host: %s",
+             cfg->weather_city, cfg->weather_api_key, cfg->weather_api_host);
+}

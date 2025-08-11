@@ -18,6 +18,7 @@ extern void action_check_power_save_mode(lv_event_t * e);
 extern void action_set_power_save_min(lv_event_t * e);
 extern void action_get_weather(lv_event_t * e);
 extern void action_set_chart_temp(lv_event_t * e);
+extern void action_get_weather_settings(lv_event_t * e);
 
 
 #ifdef __cplusplus
