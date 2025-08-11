@@ -169,12 +169,15 @@ void app_main(void)
     xTaskCreate(time_tick_task, "time_tick_task", 2048, NULL, 5, NULL);
 
     // 创建TCP服务端
+    /*char rx_buffer[128];
     xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "Creating TCP server...");
     tcpserver_create();
-
-    vTaskDelay(pdMS_TO_TICKS(30000));
-    tcp_server_stop();
+    if(xQueueReceive(tcp_msg_queue, rx_buffer, portMAX_DELAY) == pdTRUE)
+    {
+        ESP_LOGI(TAG, "Received message from TCP client: %s", rx_buffer);
+    }
+    tcp_server_stop();*/
 
     return;
 }

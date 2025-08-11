@@ -21,7 +21,7 @@ static const char *TAG = "smartconfig";
 
 static int s_wifi_retry_count = 0;
 static bool s_wifi_init_phase = true; // 标记是否为初始化阶段
-bool wifi_manually_stopped = false;
+bool wifi_manually_stopped = false; // 标记WIFI是否被手动停止
 bool wifi_on_off;
 
 void start_smartconfig(void);
@@ -186,7 +186,9 @@ bool wifi_init(void)
 
     ESP_LOGI("wifi_ctrl", "WiFi config found, connecting...");
     connect_wifi_from_config(); // 使用 config
-    EventBits_t uxBits = xEventGroupWaitBits(s_wifi_event_group, CONNECTED_BIT, false, true, pdMS_TO_TICKS(1000));
-    if(uxBits & CONNECTED_BIT) return true;
+    vTaskDelay(pdMS_TO_TICKS(1000)); // 等待连接完成
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+    if(ret == ESP_OK) return true;
     else return false;
 }

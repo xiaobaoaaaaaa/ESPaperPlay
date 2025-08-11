@@ -1,7 +1,5 @@
 #include <string.h>
 #include <sys/param.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "lwip/err.h"
@@ -10,12 +8,16 @@
 #include "lwip/netdb.h"
 #include "tcpserver.h"
 
+#define QUEUE_LEN 10
+#define MSG_MAX_LEN 128
+
 #define PORT 8080
 #define TAG "tcp_server"
 
 static volatile bool tcp_server_running = false;
 TaskHandle_t tcp_server_task_handler = NULL;
 static int listen_sock = -1;
+QueueHandle_t tcp_msg_queue;
 
 static void tcp_server_task(void *param)
 {
@@ -88,6 +90,10 @@ static void tcp_server_task(void *param)
 
             rx_buffer[len] = 0; // Null-terminate whatever we received and treat as a string
             ESP_LOGI(TAG, "Received %d bytes: %s", len, rx_buffer);
+            if(xQueueSend(tcp_msg_queue, rx_buffer, 0) != pdPASS)
+            {
+                ESP_LOGW(TAG, "Tcp Message Queue full, messege dropped");
+            }
         }
 
         shutdown(sock, 0);
@@ -119,6 +125,8 @@ void tcp_server_stop(void) {
 
 void tcpserver_create(void)
 {
+    if(!tcp_msg_queue) tcp_msg_queue = xQueueCreate(QUEUE_LEN, MSG_MAX_LEN);
+
     if(!tcp_server_task_handler)
     {
         tcp_server_running = true;
