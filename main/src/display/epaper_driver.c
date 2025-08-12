@@ -15,7 +15,7 @@
 #include "lvgl_init.h"
 
 // SPI Bus
-#define EPD_PANEL_SPI_CLK           40000000
+#define EPD_PANEL_SPI_CLK           20000000
 #define EPD_PANEL_SPI_CMD_BITS      8
 #define EPD_PANEL_SPI_PARAM_BITS    8
 #define EPD_PANEL_SPI_MODE          0
