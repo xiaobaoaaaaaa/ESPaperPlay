@@ -107,9 +107,14 @@ void lvgl_timer_task(void *param)
 {
     while (1) 
     {
-        xEventGroupWaitBits(lvgl_flush_event_group, BIT0, pdFALSE, pdFALSE, portMAX_DELAY);
-        lv_timer_handler();
-        ui_tick(); 
+        EventBits_t bits = xEventGroupWaitBits(lvgl_flush_event_group, BIT0, pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
+
+        if (bits & BIT0) 
+        {
+            lv_timer_handler();
+            ui_tick();
+        }
+
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
