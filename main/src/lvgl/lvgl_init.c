@@ -85,7 +85,7 @@ void lv_port_disp_init(void)
 
     lv_display_set_flush_cb(disp, disp_flush);
     //lv_display_add_event_cb(disp, display_event_cb, LV_EVENT_INVALIDATE_AREA, disp);
-    size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES * sizeof(lv_color_t) / 8;
+    size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES / 7; // 刚好够一次刷新整个屏幕
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
     if (!buf1) {

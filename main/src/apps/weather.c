@@ -439,8 +439,11 @@ weather_info_t* weather_get(weather_config_t *config) {
         location_info = get_city_by_ip(NULL);
         
         if (!location_info) {
-            ESP_LOGE(TAG, "Failed to get city by IP");
-            return NULL;
+            ESP_LOGE(TAG, "Failed to get city by IP, Using default location");
+            location_info = calloc(1, sizeof(location_info_t));
+            location_info->province = strdup("陕西省");
+            location_info->city = strdup("西安市");
+            location_info->isp = strdup("电信");
         }
         ESP_LOGI(TAG, "Location: %s %s", location_info->province, location_info->city);
     }
@@ -529,8 +532,11 @@ forecast_weather_t* weather_forecast(weather_config_t *config, int days)
         location_info = get_city_by_ip(NULL);
         
         if (!location_info) {
-            ESP_LOGE(TAG, "Failed to get city by IP");
-            return NULL;
+            ESP_LOGE(TAG, "Failed to get city by IP, Using default location");
+            location_info = calloc(1, sizeof(location_info_t));
+            location_info->province = strdup("陕西省");
+            location_info->city = strdup("西安市");
+            location_info->isp = strdup("电信");
         }
         ESP_LOGI(TAG, "Location: %s %s", location_info->province, location_info->city);
     }
