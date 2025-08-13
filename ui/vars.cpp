@@ -350,3 +350,43 @@ extern "C" const char *get_var_weather_night() {
 extern "C" void set_var_weather_night(const char *value) {
     weather_night = value;
 }
+
+std::string tcp_msg;
+
+extern "C" const char *get_var_tcp_msg() {
+    return tcp_msg.c_str();
+}
+
+extern "C" void set_var_tcp_msg(const char *value) {
+    tcp_msg = value;
+}
+
+std::string weather_city_in_nvs;
+
+extern "C" const char *get_var_weather_city_in_nvs() {
+    return weather_city_in_nvs.c_str();
+}
+
+extern "C" void set_var_weather_city_in_nvs(const char *value) {
+    weather_city_in_nvs = value;
+}
+
+std::string weather_api_key;
+
+extern "C" const char *get_var_weather_api_key() {
+    return weather_api_key.c_str();
+}
+
+extern "C" void set_var_weather_api_key(const char *value) {
+    weather_api_key = value;
+}
+
+std::string weather_api_host;
+
+extern "C" const char *get_var_weather_api_host() {
+    return weather_api_host.c_str();
+}
+
+extern "C" void set_var_weather_api_host(const char *value) {
+    weather_api_host = value;
+}

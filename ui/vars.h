@@ -90,6 +90,14 @@ extern const char *get_var_weather_day();
 extern void set_var_weather_day(const char *value);
 extern const char *get_var_weather_night();
 extern void set_var_weather_night(const char *value);
+extern const char *get_var_tcp_msg();
+extern void set_var_tcp_msg(const char *value);
+extern const char *get_var_weather_city_in_nvs();
+extern void set_var_weather_city_in_nvs(const char *value);
+extern const char *get_var_weather_api_key();
+extern void set_var_weather_api_key(const char *value);
+extern const char *get_var_weather_api_host();
+extern void set_var_weather_api_host(const char *value);
 
 
 #ifdef __cplusplus

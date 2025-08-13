@@ -447,7 +447,19 @@ void action_set_chart_temp(lv_event_t *e) {
 }
 
 void action_get_weather_settings(lv_event_t *e) {
-    system_config_t *cfg = config_get();
+    const system_config_t *cfg = config_get();
     ESP_LOGI("action_get_weather_settings", "Weather city: %s, API key: %s, API host: %s",
              cfg->weather_city, cfg->weather_api_key, cfg->weather_api_host);
+
+    set_var_weather_city_in_nvs(cfg->weather_city);
+    set_var_weather_api_key(cfg->weather_api_key);
+    set_var_weather_api_host(cfg->weather_api_host);
+}
+
+void action_get_tcp_msg(lv_event_t *e) {
+    // TODO: Implement action get_tcp_msg here
+}
+
+void action_save_weather_config(lv_event_t *e) {
+    // TODO: Implement action save_weather_config here
 }
