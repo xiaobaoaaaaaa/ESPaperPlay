@@ -49,7 +49,6 @@ typedef struct _objects_t {
     lv_obj_t *sleep_settings_con_3;
     lv_obj_t *sleep_settings_con_4;
     lv_obj_t *obj6;
-    lv_obj_t *chart_weather_forecast_temp;
     lv_obj_t *current_time;
     lv_obj_t *current_weekday;
     lv_obj_t *current_date;
@@ -88,9 +87,10 @@ typedef struct _objects_t {
     lv_obj_t *obj16;
     lv_obj_t *obj17;
     lv_obj_t *obj18;
-    lv_obj_t *forecast_weather;
-    lv_obj_t *panel_wait;
     lv_obj_t *obj19;
+    lv_obj_t *forecast_weather;
+    lv_obj_t *chart_weather_forecast_temp;
+    lv_obj_t *panel_wait;
     lv_obj_t *obj20;
     lv_obj_t *obj21;
     lv_obj_t *obj22;
@@ -129,6 +129,7 @@ typedef struct _objects_t {
     lv_obj_t *obj55;
     lv_obj_t *obj56;
     lv_obj_t *obj57;
+    lv_obj_t *obj58;
 } objects_t;
 
 extern objects_t objects;

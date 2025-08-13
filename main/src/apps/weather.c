@@ -61,12 +61,14 @@ static esp_err_t weather_http_handler(esp_http_client_event_t *evt) {
 }
 
 //解压Gzip数据
-#define CHUNK_SIZE 512
+#define MAX_UNCOMPRESSED_SIZE 8192
+static char uncompressed_buffer[MAX_UNCOMPRESSED_SIZE];
+
 static char* decompress_gzip_data(const char *compressed_data, int compressed_len) {
     z_stream strm = {0};
     int ret;
 
-    ret = inflateInit2(&strm, 16 + MAX_WBITS);  // GZIP 模式
+    ret = inflateInit2(&strm, 16 + MAX_WBITS);
     if (ret != Z_OK) {
         ESP_LOGE(TAG, "inflateInit2 failed: %d", ret);
         return NULL;
@@ -74,49 +76,19 @@ static char* decompress_gzip_data(const char *compressed_data, int compressed_le
 
     strm.avail_in = compressed_len;
     strm.next_in = (Bytef *)compressed_data;
+    strm.avail_out = MAX_UNCOMPRESSED_SIZE;
+    strm.next_out = (Bytef *)uncompressed_buffer;
 
-    char *output = NULL;
-    int total_size = 0;
-
-    char chunk[CHUNK_SIZE];
-
-    do {
-        strm.avail_out = CHUNK_SIZE;
-        strm.next_out = (Bytef *)chunk;
-
-        ret = inflate(&strm, Z_NO_FLUSH);
-
-        int have = CHUNK_SIZE - strm.avail_out;
-
-        if (have > 0) {
-            // realloc 扩展整体输出缓冲区（逐步增长）
-            char *new_output = realloc(output, total_size + have + 1);
-            if (!new_output) {
-                ESP_LOGE(TAG, "Memory realloc failed");
-                free(output);
-                inflateEnd(&strm);
-                return NULL;
-            }
-
-            output = new_output;
-            memcpy(output + total_size, chunk, have);
-            total_size += have;
-        }
-
-        if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
-            ESP_LOGE(TAG, "inflate error: %d", ret);
-            free(output);
-            inflateEnd(&strm);
-            return NULL;
-        }
-    } while (ret != Z_STREAM_END);
-
+    ret = inflate(&strm, Z_FINISH);
     inflateEnd(&strm);
 
-    if (output)
-        output[total_size] = '\0';  // null结尾
+    if (ret == Z_STREAM_END) {
+        uncompressed_buffer[strm.total_out] = '\0';
+        return strdup(uncompressed_buffer);
+    }
 
-    return output;
+    ESP_LOGE(TAG, "Decompression failed");
+    return NULL;
 }
 
 // 执行HTTP请求
@@ -153,17 +125,12 @@ static char* weather_http_request(const char *url) {
     if (content_encoding_value[0] && strcmp(content_encoding_value, "gzip") == 0) {
         ESP_LOGI(TAG, "Data is gzip compressed, decompressing...");
         char *uncompressed_data = decompress_gzip_data(weather_buffer, weather_len);
-        if (uncompressed_data) {
-            esp_http_client_cleanup(client);
-            return uncompressed_data;
-        } else {
-            esp_http_client_cleanup(client);
-            return NULL;
-        }
+        esp_http_client_cleanup(client);
+        return uncompressed_data;
     }
 
     esp_http_client_cleanup(client);
-    return strdup(weather_buffer);
+    return strdup(weather_buffer); // 只在这里进行一次内存分配
 }
 
 location_info_t* get_city_by_ip(const char *ip) {
@@ -683,6 +650,15 @@ void forecast_weather_print_info(const forecast_weather_t *forecast) {
 
     printf("╰────────────────────────────────────────────╯\n\n");
 }
+
+
+// 在文件顶部添加静态缓冲区定义
+#define MAX_URL_LEN 256
+#define MAX_RESPONSE_LEN 4096
+#define MAX_LOCATION_STR 64
+
+static char url_buffer[MAX_URL_LEN];
+static char encoded_city_buffer[MAX_LOCATION_STR];
 
 
 void location_info_free(location_info_t *location_info) {
