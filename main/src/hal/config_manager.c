@@ -1,13 +1,15 @@
-#include "config_manager.h"
-#include "nvs_flash.h"
-#include "nvs.h"
-#include "string.h"
+#include <string.h>
+
 #include "esp_log.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+
+#include "config_manager.h"
 
 #define CONFIG_NAMESPACE "sys_config"
 #define CONFIG_KEY "config"
 
-static system_config_t s_cfg;  // 模块内静态变量
+static system_config_t s_cfg;
 
 esp_err_t config_load(system_config_t *config) 
 {
@@ -16,8 +18,8 @@ esp_err_t config_load(system_config_t *config)
     if (err != ESP_OK) return err;
 
     size_t required_size = sizeof(system_config_t);
-    err = nvs_get_blob(handle, "config", config, &required_size);
-    ESP_LOGI("CONFIG", "nvs_get_blob returned: %s", esp_err_to_name(err));
+    err = nvs_get_blob(handle, CONFIG_KEY, config, &required_size);
+    ESP_LOGI("CONFIG", "nvs_get_blob returned: %s", esp_err_to_name(err)); // Fixed spelling
     nvs_close(handle);
     return err;
 }
@@ -44,13 +46,8 @@ esp_err_t config_save(void)
 
 esp_err_t config_reset_defaults(void) {
     memset(&s_cfg, 0, sizeof(s_cfg));
-    strcpy(s_cfg.wifi_ssid, "");
-    strcpy(s_cfg.wifi_password, "");
     s_cfg.power_save_enabled = true;
     s_cfg.power_save_min = 3;
-    strcpy(s_cfg.weather_city, "");
-    strcpy(s_cfg.weather_api_key, "");
-    strcpy(s_cfg.weather_api_host, "");
     return config_save();
 }
 
@@ -64,7 +61,6 @@ esp_err_t config_manager_init(void) {
     }
 
     if (err != ESP_OK) {
-        // 设置默认值
         config_reset_defaults();
     }
 

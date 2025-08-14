@@ -1,31 +1,30 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <time.h>
+#include <sys/time.h>
+
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "wifi_ctrl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include"sntp.h"
-#include <time.h>
+#include "esp_task_wdt.h"
+
 #include "button.h"
 #include "driver/gpio.h"
 #include "buzzer.h"
 #include "lvgl_init.h"
+#include "sntp.h"
 #include "touch.h"
 #include "power_save.h"
 #include "yiyan.h"
-#include <esp_task_wdt.h>
 #include "actions.h"
-#include <time.h>
-#include <sys/time.h>
 #include "date_update.h"
 #include "config_manager.h"
 #include "tcpserver.h"
 
 #define TAG "main"
-
-EventGroupHandle_t init_event_group;
 
 #define WIFI_INIT_BIT      BIT0
 #define TIME_INIT_BIT      BIT1
@@ -35,6 +34,7 @@ EventGroupHandle_t init_event_group;
 #define DISP_INIT_BIT      BIT5
 #define SLEEP_INIT_BIT     BIT6
 
+EventGroupHandle_t init_event_group;
 
 void wifi_init_task(void *param)
 {
@@ -45,7 +45,7 @@ void wifi_init_task(void *param)
         ESP_LOGE(TAG, "WiFi initialization failed.");
     }
     xEventGroupSetBits(init_event_group, WIFI_INIT_BIT);
-    vTaskDelete(NULL); // 任务完成后删除自身
+    vTaskDelete(NULL); 
 }
 
 void time_init_task(void *param)
@@ -61,19 +61,19 @@ void time_init_task(void *param)
     strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
     ESP_LOGI(TAG, "Current time: %s", strftime_buf);
     xEventGroupSetBits(init_event_group, TIME_INIT_BIT);
-    vTaskDelete(NULL); // 任务完成后删除自身
+    vTaskDelete(NULL); 
 }
 
 void button_init_task(void *param)
 {
     button_init(GPIO_NUM_0);
     xEventGroupSetBits(init_event_group, BUTTON_INIT_BIT);
-    vTaskDelete(NULL); // 任务完成后删除自身
+    vTaskDelete(NULL); 
 }
 
 void buzzer_init_task(void *param)
 {
-    buzzer_init(15); // 假设蜂鸣器连接在 GPIO 15
+    buzzer_init(15); 
 
     //鸣响蜂鸣器三次
     buzzer(NOTE_F7, 6000, 0.3, 0, 1);
@@ -81,14 +81,14 @@ void buzzer_init_task(void *param)
     buzzer(NOTE_A7, 6000, 0.3, 0, 1);
     
     xEventGroupSetBits(init_event_group, BUZZER_INIT_BIT);
-    vTaskDelete(NULL); // 任务完成后删除自身
+    vTaskDelete(NULL); 
 }
 
 void touch_init_task(void *param)
 {
     sd_touch_init();
     xEventGroupSetBits(init_event_group, TOUCH_INIT_BIT);
-    vTaskDelete(NULL); // 任务完成后删除自身
+    vTaskDelete(NULL); 
 }
 
 void epaper_init_task(void *param)
@@ -165,19 +165,6 @@ void app_main(void)
     xTaskCreate(power_save_init_task, "power_save_init_task", 4096, NULL, 5, NULL);
 
     // 初始化时间更新
-    ESP_LOGI(TAG, "Initializing date-update task...");
+    ESP_LOGI(TAG, "Initializing date update task...");
     xTaskCreate(time_tick_task, "time_tick_task", 2048, NULL, 5, NULL);
-
-    // 创建TCP服务端
-    /*char rx_buffer[128];
-    xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
-    ESP_LOGI(TAG, "Creating TCP server...");
-    tcpserver_create();
-    if(xQueueReceive(tcp_msg_queue, rx_buffer, portMAX_DELAY) == pdTRUE)
-    {
-        ESP_LOGI(TAG, "Received message from TCP client: %s", rx_buffer);
-    }
-    tcp_server_stop();*/
-
-    return;
 }

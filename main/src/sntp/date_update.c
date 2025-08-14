@@ -1,8 +1,10 @@
-#include "date_update.h"
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
+
 #include "vars.h"
+
+#include "date_update.h"
 
 static int last_year = -1, last_month = -1, last_day = -1;
 static int last_hour = -1, last_minute = -1;
