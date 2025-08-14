@@ -119,41 +119,74 @@ void lvgl_timer_task(void *param)
     }
 }
 
+typedef struct {
+    int32_t x;
+    int32_t y;
+    bool is_pressed;
+    SemaphoreHandle_t mutex;
+} touch_data_t;
+
+static touch_data_t g_touch_data = {
+    .x = 0,
+    .y = 0,
+    .is_pressed = false,
+    .mutex = NULL
+};
+
+static void touch_read_task(void *param)
+{
+    while (1) {
+        ctp_tp_t ctp;
+        i2c_ctp_FTxxxx_read_all(I2C_NUM_0, &ctp);
+
+        xSemaphoreTake(g_touch_data.mutex, portMAX_DELAY);
+        
+        if (ctp.tp_num > 0) {
+            // 坐标转换
+            int32_t x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1;
+            int32_t y = ctp.tp[0].y;
+            
+            if (x < 200 && y < 200) {
+                g_touch_data.x = x;
+                g_touch_data.y = y;
+                g_touch_data.is_pressed = true;
+                reset_inactivity_timer();
+            } else {
+                g_touch_data.is_pressed = false;
+            }
+        } else {
+            g_touch_data.is_pressed = false;
+        }
+        
+        xSemaphoreGive(g_touch_data.mutex);
+        vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz 采样率
+    }
+}
+
 static void touchpad_read(lv_indev_t * indev_drv, lv_indev_data_t * data)
 {
-    static int32_t last_x = 0;
-    static int32_t last_y = 0;
-
-    ctp_tp_t ctp;
-    i2c_ctp_FTxxxx_read_all(I2C_NUM_0, &ctp);
-
-    /*Save the pressed coordinates and the state*/
-    if( ctp.tp_num > 0) {
-        ctp.tp[0].x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1; // 去除`FT6236U`触摸屏的x坐标固有偏移，再对屏幕倒立的x轴进行补偿
-        last_x = ctp.tp[0].x;
-        last_y = ctp.tp[0].y;
-        if(last_x < 200 && last_y < 200) 
-        {
-            data->state = LV_INDEV_STATE_PRESSED;
-            reset_inactivity_timer();
-        }
-        else 
-        {
-            data->state = LV_INDEV_STATE_RELEASED;
-        }
-    }
-    else {
-        data->state = LV_INDEV_STATE_RELEASED;
-    }
-
-    /*Set the last pressed coordinates*/
-    data->point.x = last_x;
-    data->point.y = last_y;
+    xSemaphoreTake(g_touch_data.mutex, portMAX_DELAY);
+    
+    data->state = g_touch_data.is_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    data->point.x = g_touch_data.x;
+    data->point.y = g_touch_data.y;
+    
+    xSemaphoreGive(g_touch_data.mutex);
 }
 
 void lv_port_indev_init(void)
 {
     sd_touch_init();
+
+    // 创建互斥锁
+    g_touch_data.mutex = xSemaphoreCreateMutex();
+    if (g_touch_data.mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create touch data mutex");
+        return;
+    }
+
+    // 创建触摸读取任务
+    xTaskCreatePinnedToCore(touch_read_task, "touch_task", 2048, NULL, 5, NULL, 0);
 
     /*Register a touchpad input device*/
     indev_touchpad = lv_indev_create();
