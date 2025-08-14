@@ -1,18 +1,21 @@
 #include <stdio.h>
 #include<time.h>
+
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_mac.h"
+#include "lvgl.h"
+
 #include "actions.h"
+#include "fonts.h"
 #include "vars.h"
 #include "ui.h"
 #include "screens.h"
-#include "esp_log.h"
-#include "esp_wifi.h"
+
 #include "yiyan.h"
 #include "wifi_ctrl.h"
-#include "esp_mac.h"
 #include "config_manager.h"
 #include "weather.h"
-#include "lvgl.h"
-#include "fonts.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
