@@ -165,14 +165,19 @@ void start_smartconfig(void)
 
 void set_wifi_on_off(bool op)
 {
-    if (op && !wifi_on_off) {
+    if (op && !wifi_on_off) 
+    {
         esp_wifi_start();
         esp_wifi_connect();
         wifi_on_off = true;
-    } else {
+        wifi_manually_stopped = false;
+    } 
+    else if(!op && wifi_on_off)
+    {
         esp_wifi_disconnect();
         esp_wifi_stop();
         wifi_on_off = false;
+        wifi_manually_stopped = true;
     }
 }
 

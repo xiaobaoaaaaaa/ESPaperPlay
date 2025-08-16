@@ -108,8 +108,6 @@ void action_set_wifi_on_off(lv_event_t *e)
         else
         {
             ESP_LOGI("action_set_wifi_on_off", "Set WiFi on");
-            esp_wifi_start();
-            esp_wifi_connect();
             set_wifi_on_off(true);
         }
     }
@@ -120,8 +118,6 @@ void action_set_wifi_on_off(lv_event_t *e)
         else
         {
             ESP_LOGI("action_set_wifi_on_off", "Set WiFi off");
-            esp_wifi_disconnect();
-            esp_wifi_stop();
             set_wifi_on_off(false);
         }
     }
