@@ -35,18 +35,22 @@ static void smartconfig_task(void * parm)
     ESP_ERROR_CHECK(esp_smartconfig_set_type(SC_TYPE_ESPTOUCH));
     smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_smartconfig_start(&cfg));
-    while (1) {
+    while (1) 
+    {
         uxBits = xEventGroupWaitBits(s_wifi_event_group, 
                    CONNECTED_BIT | ESPTOUCH_DONE_BIT, 
                    true, false, portMAX_DELAY);
-        if (uxBits & CONNECTED_BIT) {
+        if (uxBits & CONNECTED_BIT) 
+        {
             ESP_LOGI(TAG, "WiFi connected to AP");
         }
-        if (uxBits & ESPTOUCH_DONE_BIT) {
+        if (uxBits & ESPTOUCH_DONE_BIT) 
+        {
             ESP_LOGI(TAG, "Smartconfig completed");
             esp_smartconfig_stop();
             smartconfig_task_handle = NULL;
             wifi_on_off = true;
+            set_var_ui_wifi_on_off(wifi_on_off);
             vTaskDelete(NULL);
         }
     }
