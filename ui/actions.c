@@ -323,7 +323,6 @@ static void task_get_weather(void *param) {
     };
 
     weather_info_t *info = weather_get(&config);
-    set_var_weather_updated(true);
     if (info) {
         if (info->weather) set_var_weather(info->weather);
         set_var_weather_temp(info->temperature);
@@ -337,6 +336,15 @@ static void task_get_weather(void *param) {
         set_var_weather_visibility(info->visibility);
         set_var_weather_cloud(info->cloud);
         set_var_weather_dew_point(info->dew_point);
+        if(strcmp(info->icon, "0"))
+        {
+            ESP_LOGI("task_get_weather", "Weather icon: %s", info->icon);
+            set_var_weather_icon(info->icon);
+        }
+        else
+        {
+            ESP_LOGW("task_get_weather", "Weather icon is empty");
+        }
         if (info->update_time) set_var_weather_update_time(info->update_time);
 
         if (info->location_info && info->location_info->city)
@@ -344,6 +352,7 @@ static void task_get_weather(void *param) {
 
         weather_info_free(info);
     }
+    set_var_weather_updated(true);
 
     forecast_weather_t *forecast = weather_forecast(&config, 7);
 

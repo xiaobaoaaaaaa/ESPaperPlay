@@ -98,6 +98,8 @@ extern const char *get_var_weather_api_key();
 extern void set_var_weather_api_key(const char *value);
 extern const char *get_var_weather_api_host();
 extern void set_var_weather_api_host(const char *value);
+extern const char *get_var_weather_icon();
+extern void set_var_weather_icon(const char *value);
 
 
 #ifdef __cplusplus

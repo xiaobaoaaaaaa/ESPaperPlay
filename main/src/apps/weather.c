@@ -305,6 +305,9 @@ static weather_info_t* parse_hefeng(const char *json) {
         info->temperature = atof(cJSON_GetObjectItem(now, "temp")->valuestring);
         info->feels_like = atof(cJSON_GetObjectItem(now, "feelsLike")->valuestring);
         info->humidity = atof(cJSON_GetObjectItem(now, "humidity")->valuestring);
+
+        // 天气图标信息
+        info->icon = strdup(cJSON_GetObjectItem(now, "icon")->valuestring);
         
         // 风信息
         info->wind_dir = strdup(cJSON_GetObjectItem(now, "windDir")->valuestring);
@@ -676,6 +679,7 @@ void weather_info_free(weather_info_t *info) {
     
     // 释放天气信息
     SAFE_FREE(info->weather);
+    SAFE_FREE(info->icon);
     SAFE_FREE(info->wind_dir);
     SAFE_FREE(info->wind_scale);
     SAFE_FREE(info->update_time);

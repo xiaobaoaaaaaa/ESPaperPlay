@@ -24,6 +24,7 @@ typedef struct {
 // 天气信息结构体
 typedef struct {
     char* weather;          // 天气现象
+    char* icon;             // 天气图标代码
     float temperature;      // 温度
     float feels_like;       // 体感温度
     float humidity;         // 湿度

@@ -390,3 +390,13 @@ extern "C" const char *get_var_weather_api_host() {
 extern "C" void set_var_weather_api_host(const char *value) {
     weather_api_host = value;
 }
+
+std::string weather_icon;
+
+extern "C" const char *get_var_weather_icon() {
+    return weather_icon.c_str();
+}
+
+extern "C" void set_var_weather_icon(const char *value) {
+    weather_icon = value;
+}

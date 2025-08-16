@@ -91,6 +91,7 @@ typedef struct _objects_t {
     lv_obj_t *obj20;
     lv_obj_t *obj21;
     lv_obj_t *obj22;
+    lv_obj_t *weather_icon;
     lv_obj_t *obj23;
     lv_obj_t *forecast_weather;
     lv_obj_t *chart_weather_forecast_temp;

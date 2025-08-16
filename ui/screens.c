@@ -1551,7 +1551,9 @@ void create_screen_weather() {
                     lv_label_set_text(obj, "体感");
                 }
                 {
+                    // weather_icon
                     lv_obj_t *obj = lv_image_create(parent_obj);
+                    objects.weather_icon = obj;
                     lv_obj_set_pos(obj, 99, 4);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_image_set_src(obj, &img_icon_weather);
@@ -2149,7 +2151,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 32, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 33, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj41);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj41;
@@ -2158,7 +2160,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 33, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 32, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj42);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj42;
@@ -2395,7 +2397,7 @@ extern void add_style(lv_obj_t *obj, int32_t styleIndex);
 extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
 
 static const char *screen_names[] = { "Main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather" };
-static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "img_settings", "img_weather", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "obj5", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj6", "obj7", "current_time", "current_weekday", "current_date", "obj8", "obj9", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "img_clock", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj10", "rssi", "obj11", "ip", "obj12", "mac", "obj13", "primary", "obj14", "auth_mode", "obj15", "bandwidth", "obj16", "sleep_settings_con", "sleep_settings_con_1", "obj17", "obj18", "weather_api_key", "obj19", "weather_api_host", "panel_show_tcp_msg", "obj20", "obj21", "obj22", "obj23", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj24", "obj25", "obj26", "obj27", "obj28", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62" };
+static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "img_settings", "img_weather", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "obj5", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj6", "obj7", "current_time", "current_weekday", "current_date", "obj8", "obj9", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "img_clock", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj10", "rssi", "obj11", "ip", "obj12", "mac", "obj13", "primary", "obj14", "auth_mode", "obj15", "bandwidth", "obj16", "sleep_settings_con", "sleep_settings_con_1", "obj17", "obj18", "weather_api_key", "obj19", "weather_api_host", "panel_show_tcp_msg", "obj20", "obj21", "obj22", "weather_icon", "obj23", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj24", "obj25", "obj26", "obj27", "obj28", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62" };
 static const char *style_names[] = { "epaper_button" };
 
 
