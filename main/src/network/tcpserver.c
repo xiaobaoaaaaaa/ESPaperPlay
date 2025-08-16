@@ -1,5 +1,6 @@
 #include <string.h>
 #include <sys/param.h>
+#include <errno.h>
 
 #include "esp_system.h"
 #include "esp_log.h"
@@ -37,6 +38,7 @@ static void tcp_server_task(void *param)
     if(listen_sock < 0)
     {
         ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+        tcp_server_task_handler = NULL;
         vTaskDelete(NULL);
         return;
     }
@@ -45,15 +47,22 @@ static void tcp_server_task(void *param)
     int err = bind(listen_sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0) {
         ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+        tcp_server_task_handler = NULL;
         close(listen_sock);
         vTaskDelete(NULL);
         return;
     }
     ESP_LOGI(TAG, "Socket bound, port %d", PORT);
 
+    struct timeval listen_timeout;
+    listen_timeout.tv_sec = 1;  // 1秒超时
+    listen_timeout.tv_usec = 0;
+    setsockopt(listen_sock, SOL_SOCKET, SO_RCVTIMEO, &listen_timeout, sizeof(listen_timeout));
+
     err = listen(listen_sock, 1);
     if (err != 0) {
         ESP_LOGE(TAG, "Error occurred during listen: errno %d", errno);
+        tcp_server_task_handler = NULL;
         close(listen_sock);
         vTaskDelete(NULL);
         return;
@@ -72,6 +81,11 @@ static void tcp_server_task(void *param)
         }
 
         if (sock < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) 
+            {
+                // accept超时，继续循环
+                continue;
+            }
             ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
             break;
         }
@@ -79,10 +93,20 @@ static void tcp_server_task(void *param)
         inet_ntoa_r(source_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
         ESP_LOGI(TAG, "Socket accepted from %s", addr_str);
 
+        struct timeval timeout;
+        timeout.tv_sec = 1;  // 1秒超时
+        timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
         while (tcp_server_running) 
         {
             int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
             if (len < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) 
+                {
+                    // 超时，继续循环
+                    continue;
+                }
                 ESP_LOGE(TAG, "recv failed: errno %d", errno);
                 break;
             } else if (len == 0) {
@@ -110,11 +134,12 @@ static void tcp_server_task(void *param)
     }
 
     ESP_LOGI(TAG, "TCP server stopped");
-    vTaskDelete(NULL);
     tcp_server_task_handler = NULL;
+    vTaskDelete(NULL);
 }
 
-void tcp_server_stop(void) {
+void tcp_server_stop(void) 
+{
     tcp_server_running = false;
 
     if (listen_sock >= 0) {

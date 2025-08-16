@@ -16,6 +16,7 @@
 #include "wifi_ctrl.h"
 #include "config_manager.h"
 #include "weather.h"
+#include "tcpserver.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -319,8 +320,8 @@ static void update_weather_ui(void *param) {
 static void task_get_weather(void *param) {
     system_config_t *cfg = config_get_mutable();
     weather_config_t config = {
-        .api_key = "REMOVED",
-        .api_host = "REMOVED",
+        .api_key = cfg->weather_api_key,
+        .api_host = cfg->weather_api_host,
         .city = cfg->weather_city,
         .type = WEATHER_HEFENG
     };
@@ -392,7 +393,8 @@ void action_get_weather(lv_event_t *e)
     xTaskCreate(task_get_weather, "task_get_weather", 5100, NULL, 7, NULL);
 }
 
-void action_get_weather_settings(lv_event_t *e) {
+void action_get_weather_settings(lv_event_t *e) 
+{
     const system_config_t *cfg = config_get();
     ESP_LOGI("action_get_weather_settings", "Weather city: %s, API key: %s, API host: %s",
              cfg->weather_city, cfg->weather_api_key, cfg->weather_api_host);
@@ -402,10 +404,58 @@ void action_get_weather_settings(lv_event_t *e) {
     set_var_weather_api_host(cfg->weather_api_host);
 }
 
-void action_get_tcp_msg(lv_event_t *e) {
-    // TODO: Implement action get_tcp_msg here
+TaskHandle_t  save_tcp_msg_task_hander = NULL;
+bool save_tcp_msg_task_running = false;
+void task_save_tcp_msg(void *param)
+{
+    char msg[128];
+    while(save_tcp_msg_task_running)
+    {
+        if(xQueueReceive(tcp_msg_queue, msg, pdMS_TO_TICKS(1000)) == pdTRUE)
+        {
+            set_var_tcp_msg(msg);
+            break;
+        }
+        else
+        {
+            continue;
+        }
+    }
+
+    save_tcp_msg_task_hander = NULL;
+    save_tcp_msg_task_running = false;
+    vTaskDelete(NULL);
 }
 
-void action_save_weather_config(lv_event_t *e) {
-    // TODO: Implement action save_weather_config here
+void action_get_tcp_msg(lv_event_t *e) 
+{
+    tcpserver_create();
+    if(!save_tcp_msg_task_hander)
+    {
+        save_tcp_msg_task_running = true;
+        xTaskCreate(task_save_tcp_msg, "task_save_tcp_msg", 2048, NULL, 5, NULL);
+    }
+    else
+    {
+        ESP_LOGW("action_get_tcp_msg", "Tcp msg get task is running");
+    }
+
+    ESP_LOGI("action_get_tcp_msg", "TCP message task created");
+}
+
+void action_save_weather_config(lv_event_t *e) 
+{
+    system_config_t *cfg = config_get_mutable();
+    strcpy(cfg->weather_city, get_var_weather_city_in_nvs());
+    strcpy(cfg->weather_api_key, get_var_weather_api_key());
+    strcpy(cfg->weather_api_host, get_var_weather_api_host());
+    ESP_LOGI("action_save_weather_config", "Weather config saved: City: %s, API Key: %s, API Host: %s",
+             cfg->weather_city, cfg->weather_api_key, cfg->weather_api_host);
+    config_save();
+}
+
+void action_close_tcp_server(lv_event_t *e) 
+{
+    save_tcp_msg_task_running = false;
+    tcp_server_stop();
 }

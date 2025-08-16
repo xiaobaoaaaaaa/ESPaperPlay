@@ -24,11 +24,13 @@ esp_err_t config_load(system_config_t *config)
     return err;
 }
 
-const system_config_t* config_get(void) {
+const system_config_t* config_get(void) 
+{
     return &s_cfg;
 }
 
-system_config_t* config_get_mutable(void) {
+system_config_t* config_get_mutable(void) 
+{
     return &s_cfg;
 }
 
@@ -44,14 +46,16 @@ esp_err_t config_save(void)
     return err;
 }
 
-esp_err_t config_reset_defaults(void) {
+esp_err_t config_reset_defaults(void) 
+{
     memset(&s_cfg, 0, sizeof(s_cfg));
     s_cfg.power_save_enabled = true;
     s_cfg.power_save_min = 3;
     return config_save();
 }
 
-esp_err_t config_manager_init(void) {
+esp_err_t config_manager_init(void) 
+{
     nvs_handle_t handle;
     esp_err_t err = nvs_open(CONFIG_NAMESPACE, NVS_READONLY, &handle);
     if (err == ESP_OK) {

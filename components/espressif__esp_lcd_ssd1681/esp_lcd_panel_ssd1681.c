@@ -215,14 +215,14 @@ esp_err_t epaper_panel_refresh_screen(esp_lcd_panel_t *panel)
     ESP_RETURN_ON_FALSE(panel, ESP_ERR_INVALID_ARG, TAG, "panel handler is NULL");
     epaper_panel_t *epaper_panel = __containerof(panel, epaper_panel_t, base);
     
-    // 设置边界波形控制（关键区别）
+    // 设置边界波形控制
     uint8_t border_waveform = epaper_panel->partial_refresh ? 0x80 : 0x01;
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, 
         SSD1681_CMD_SET_BORDER_WAVEFORM, 
         &border_waveform, 1), 
         TAG, "Border waveform err");
     
-    // 设置显示更新控制（关键区别）
+    // 设置显示更新控制
     uint8_t refresh_mode = epaper_panel->partial_refresh ? 0xFF : 0xCF;
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_param(epaper_panel->io, 
         SSD1681_CMD_SET_DISP_UPDATE_CTRL, 

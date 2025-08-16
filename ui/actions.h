@@ -20,6 +20,7 @@ extern void action_get_weather(lv_event_t * e);
 extern void action_get_weather_settings(lv_event_t * e);
 extern void action_get_tcp_msg(lv_event_t * e);
 extern void action_save_weather_config(lv_event_t * e);
+extern void action_close_tcp_server(lv_event_t * e);
 
 
 #ifdef __cplusplus
