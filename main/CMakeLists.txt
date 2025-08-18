@@ -1,5 +1,6 @@
 file(GLOB EEZ_CPP_FILES "../ui/*.cpp")
 file(GLOB EEZ_C_FILES "../ui/*.c")
+file(GLOB EEZ_UI_IMGS "../ui/images/*.c")
 
 idf_component_register(SRCS "main.c"
                     "src/network/wifi_ctrl.c"
@@ -20,6 +21,7 @@ idf_component_register(SRCS "main.c"
 
                     ${EEZ_CPP_FILES}
                     ${EEZ_C_FILES}
+                    ${EEZ_UI_IMGS}
 
                 INCLUDE_DIRS "."
                     "./include/network"

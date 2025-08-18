@@ -1,8 +1,9 @@
 #include "buzzer.h"
 #include "esp_pm.h"
 
-// 设置固定频率的函数
-void set_fixed_frequency() {
+// 设置固定频率
+void set_fixed_frequency() 
+{
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 240,  // 设置最大频率为240MHz
         .min_freq_mhz = 240,  // 设置最小频率为240MHz
@@ -11,8 +12,9 @@ void set_fixed_frequency() {
     esp_pm_configure(&pm_config);
 }
 
-// 恢复动态频率的函数
-void restore_dynamic_frequency() {
+// 恢复动态频率
+void restore_dynamic_frequency() 
+{
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 240,  // 设置最大频率为240MHz
         .min_freq_mhz = 80,   // 设置最小频率为80MHz，允许动态调整

@@ -26,15 +26,18 @@ esp_timer_handle_t inactivity_timer;
 static bool power_save_enabled = true;
 static int power_save_min = 3;
 
-void inactivity_timer_callback(void* arg) {
+void inactivity_timer_callback(void* arg) 
+{
     no_activity_minutes++;
 }
 
-void reset_inactivity_timer() {
+void reset_inactivity_timer() 
+{
     no_activity_minutes = 0;
 }
 
-void start_inactivity_timer() {
+void start_inactivity_timer() 
+{
     const esp_timer_create_args_t timer_args = {
         .callback = &inactivity_timer_callback,
         .name = "inactivity_minute_timer"
@@ -44,7 +47,7 @@ void start_inactivity_timer() {
 }
 
 int time_correction_count = 0;
-bool wifi_off_autoly = false; // 标记自动睡眠程序是否关闭了WiFi
+bool wifi_auto_disabled = false; // 标记自动睡眠程序是否关闭了WiFi
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
@@ -53,9 +56,10 @@ void sleep_wakeup()
     
     // 关闭wifi
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
-    if (bits & BIT0) {
+    if (bits & BIT0) 
+    {
         ESP_LOGI(TAG, "Disconnecting WiFi...");
-        wifi_off_autoly = true;
+        wifi_auto_disabled = true;
         esp_wifi_disconnect();
         esp_wifi_stop();
         set_wifi_on_off(false);
@@ -64,13 +68,15 @@ void sleep_wakeup()
     xEventGroupClearBits(lvgl_flush_event_group, BIT0);
     vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
     
-    if (no_activity_minutes < power_save_min) {
+    if (no_activity_minutes < power_save_min) 
+    {
         ESP_LOGW(TAG, "Skipping sleep due to recent activity");
         set_var_is_power_save(false);
         
         // 重新连接WiFi
-        if (!wifi_manually_stopped && wifi_off_autoly) {
-            wifi_off_autoly = false;
+        if (wifi_auto_disabled) 
+        {
+            wifi_auto_disabled = false;
             esp_wifi_start();
             esp_wifi_connect();
             set_wifi_on_off(true);
@@ -87,26 +93,33 @@ void sleep_wakeup()
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+    if (cause == ESP_SLEEP_WAKEUP_GPIO) 
+    {
         ESP_LOGI(TAG, "Woken up by GPIO interrupt");
         set_var_is_power_save(false);
         
         // 重新连接WiFi
-        if (!wifi_manually_stopped && wifi_off_autoly) {
-            wifi_off_autoly = false;
+        if (wifi_auto_disabled) 
+        {
+            wifi_auto_disabled = false;
             esp_wifi_start();
             esp_wifi_connect();
             set_wifi_on_off(true);
         }
         reset_inactivity_timer();
-    } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    } 
+    else if (cause == ESP_SLEEP_WAKEUP_TIMER) 
+    {
         ESP_LOGI(TAG, "Woken up by timer");
         vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保系统稳定
-    } else {
+    } 
+    else 
+    {
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause); // Fixed spelling
     }
 
-    if (time_correction_count >= 60) {
+    if (time_correction_count >= 60) 
+    {
         time_correction_count = 0;
         ESP_LOGI(TAG, "Time correction triggered");
         
@@ -116,8 +129,10 @@ void sleep_wakeup()
         
         int retry_count = 0;
         bits = xEventGroupGetBits(s_wifi_event_group);
-        while (!(bits & BIT0)) {
-            if (retry_count++ > 10) {
+        while (!(bits & BIT0)) 
+        {
+            if (retry_count++ > 10) 
+            {
                 ESP_LOGE(TAG, "Time sync failed: network error");
                 time_correction_count = 30;  // 将同步间隔缩短为半小时
                 return;
@@ -140,8 +155,10 @@ void sleep_wakeup()
 void power_save(void *param)
 {
     ESP_LOGI(TAG, "Initializing power save mode");
-    while (1) {
-        if (!power_save_enabled) {
+    while (1) 
+    {
+        if (!power_save_enabled) 
+        {
             vTaskDelay(pdMS_TO_TICKS(30 * 1000));
             continue;
         }
@@ -163,10 +180,13 @@ void power_save(void *param)
                            pdFALSE, pdFALSE, portMAX_DELAY);
         
         // 无操作指定分钟后激活睡眠
-        if (no_activity_minutes >= power_save_min) {
+        if (no_activity_minutes >= power_save_min) 
+        {
             ESP_LOGI(TAG, "No activity for %d minutes, entering sleep", power_save_min);
             sleep_wakeup();
-        } else {
+        } 
+        else 
+        {
             ESP_LOGI(TAG, "Will enter sleep in %d minutes", 
                      power_save_min - no_activity_minutes);
             vTaskDelay(pdMS_TO_TICKS(1000 * 61));
@@ -179,12 +199,14 @@ void power_save_init(void)
     const system_config_t *cfg = config_get();
     power_save_enabled = cfg->power_save_enabled;
     
-    if (!power_save_enabled) {
+    if (!power_save_enabled) 
+    {
         ESP_LOGW(TAG, "Power save disabled");
     }
     
     power_save_min = cfg->power_save_min;
-    if (power_save_min < 1) {
+    if (power_save_min < 1) 
+    {
         power_save_min = 3;
         ESP_LOGW(TAG, "Invalid power save min, reset to %d", power_save_min); // Fixed spelling
     }

@@ -23,7 +23,6 @@ static const char *TAG = "smartconfig";
 
 static int s_wifi_retry_count = 0;
 static bool s_wifi_init_phase = true;
-bool wifi_manually_stopped = false;
 bool wifi_on_off;
 
 void start_smartconfig(void);

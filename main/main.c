@@ -158,7 +158,7 @@ void app_main(void)
 
     // 初始化 e-Paper显示
     ESP_LOGI(TAG, "Initializing e-Paper display...");
-    xTaskCreate(epaper_init_task, "epaper_init_task", 4096, NULL, 5, NULL); // 将 e-Paper 初始化任务绑定到核心 1
+    xTaskCreate(epaper_init_task, "epaper_init_task", 4096, NULL, 5, NULL); 
 
     // 初始化睡眠
     ESP_LOGI(TAG, "Initializing power save mode...");
