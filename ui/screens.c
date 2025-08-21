@@ -57,6 +57,17 @@ static void event_handler_cb_menu_img_weather(lv_event_t *e) {
     }
 }
 
+static void event_handler_cb_menu_img_clock(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_CLICKED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 7, 0, e);
+    }
+}
+
 static void event_handler_cb_settings_settings(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
@@ -127,7 +138,7 @@ static void event_handler_cb_wifi_setings_wifi_setings(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_wifi_setings_obj5(lv_event_t *e) {
+static void event_handler_cb_wifi_setings_obj6(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -234,7 +245,7 @@ static void event_handler_cb_weather_settings_sleep_settings_con_4(lv_event_t *e
     }
 }
 
-static void event_handler_cb_weather_settings_obj6(lv_event_t *e) {
+static void event_handler_cb_weather_settings_obj7(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -245,7 +256,7 @@ static void event_handler_cb_weather_settings_obj6(lv_event_t *e) {
     }
 }
 
-static void event_handler_cb_weather_settings_obj7(lv_event_t *e) {
+static void event_handler_cb_weather_settings_obj8(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     void *flowState = lv_event_get_user_data(e);
     (void)flowState;
@@ -268,6 +279,58 @@ static void event_handler_cb_weather_weather(lv_event_t *e) {
     if (event == LV_EVENT_SCREEN_LOAD_START) {
         e->user_data = (void *)0;
         flowPropagateValueLVGLEvent(flowState, 1, 1, e);
+    }
+}
+
+static void event_handler_cb_date_and_clock_date_and_clock(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_SCREEN_LOAD_START) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 1, 0, e);
+    }
+}
+
+static void event_handler_cb_date_and_clock_obj9(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_CLICKED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 5, 0, e);
+    }
+}
+
+static void event_handler_cb_date_and_clock_timer_min(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_FOCUSED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 10, 0, e);
+    }
+    if (event == LV_EVENT_DEFOCUSED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 10, 1, e);
+    }
+}
+
+static void event_handler_cb_date_and_clock_timer_hour(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_FOCUSED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 12, 0, e);
+    }
+    if (event == LV_EVENT_DEFOCUSED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 12, 1, e);
     }
 }
 
@@ -312,7 +375,7 @@ void create_screen_main() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj8 = obj;
+            objects.obj10 = obj;
             lv_obj_set_pos(obj, -2, 93);
             lv_obj_set_size(obj, 45, 26);
             lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
@@ -322,7 +385,7 @@ void create_screen_main() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj9 = obj;
+                    objects.obj11 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -399,7 +462,7 @@ void create_screen_menu() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 8);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 9);
         }
         {
             // label_menu
@@ -457,6 +520,7 @@ void create_screen_menu() {
             lv_obj_set_size(obj, LV_SIZE_CONTENT, 70);
             lv_imagebutton_set_src(obj, LV_IMAGEBUTTON_STATE_RELEASED, NULL, &img_icon_clock, NULL);
             lv_imagebutton_set_src(obj, LV_IMAGEBUTTON_STATE_PRESSED, NULL, &img_icon_clock, NULL);
+            lv_obj_add_event_cb(obj, event_handler_cb_menu_img_clock, LV_EVENT_ALL, flowState);
         }
         {
             // label_clock
@@ -493,7 +557,7 @@ void create_screen_menu() {
 void tick_screen_menu() {
     void *flowState = getFlowState(0, 1);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 8);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 9);
 }
 
 void create_screen_settings() {
@@ -518,7 +582,7 @@ void create_screen_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 12);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 13);
         }
         {
             // label_setings
@@ -657,7 +721,7 @@ void create_screen_settings() {
 void tick_screen_settings() {
     void *flowState = getFlowState(0, 2);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 12);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 13);
 }
 
 void create_screen_wifi_setings() {
@@ -682,7 +746,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj10 = obj;
+            objects.obj12 = obj;
             lv_obj_set_pos(obj, 0, 20);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -719,7 +783,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj11 = obj;
+            objects.obj13 = obj;
             lv_obj_set_pos(obj, 0, 39);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -756,7 +820,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj12 = obj;
+            objects.obj14 = obj;
             lv_obj_set_pos(obj, 0, 58);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -793,7 +857,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj13 = obj;
+            objects.obj15 = obj;
             lv_obj_set_pos(obj, 0, 77);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -830,7 +894,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj14 = obj;
+            objects.obj16 = obj;
             lv_obj_set_pos(obj, 0, 96);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -867,7 +931,7 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj15 = obj;
+            objects.obj17 = obj;
             lv_obj_set_pos(obj, 0, 115);
             lv_obj_set_size(obj, 200, 20);
             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -904,10 +968,10 @@ void create_screen_wifi_setings() {
         }
         {
             lv_obj_t *obj = lv_button_create(parent_obj);
-            objects.obj5 = obj;
+            objects.obj6 = obj;
             lv_obj_set_pos(obj, 59, 147);
             lv_obj_set_size(obj, 82, 39);
-            lv_obj_add_event_cb(obj, event_handler_cb_wifi_setings_obj5, LV_EVENT_ALL, flowState);
+            lv_obj_add_event_cb(obj, event_handler_cb_wifi_setings_obj6, LV_EVENT_ALL, flowState);
             add_style_epaper_button(obj);
             {
                 lv_obj_t *parent_obj = obj;
@@ -935,7 +999,7 @@ void create_screen_wifi_setings() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj16 = obj;
+                    objects.obj18 = obj;
                     lv_obj_set_pos(obj, 6, 35);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1024,10 +1088,10 @@ void tick_screen_wifi_setings() {
     }
     {
         const char *new_val = evalTextProperty(flowState, 23, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj16);
+        const char *cur_val = lv_label_get_text(objects.obj18);
         if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj16;
-            lv_label_set_text(objects.obj16, new_val);
+            tick_value_change_obj = objects.obj18;
+            lv_label_set_text(objects.obj18, new_val);
             tick_value_change_obj = NULL;
         }
     }
@@ -1055,7 +1119,7 @@ void create_screen_sleep_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 16);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 17);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -1168,7 +1232,7 @@ void create_screen_sleep_settings() {
 void tick_screen_sleep_settings() {
     void *flowState = getFlowState(0, 4);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 16);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 17);
 }
 
 void create_screen_weather_settings() {
@@ -1193,7 +1257,7 @@ void create_screen_weather_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 20);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 21);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -1232,7 +1296,7 @@ void create_screen_weather_settings() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_obj_create(parent_obj);
-                    objects.obj17 = obj;
+                    objects.obj19 = obj;
                     lv_obj_set_pos(obj, 118, 3);
                     lv_obj_set_size(obj, 81, 32);
                     lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
@@ -1242,7 +1306,7 @@ void create_screen_weather_settings() {
                         lv_obj_t *parent_obj = obj;
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj20 = obj;
+                            objects.obj22 = obj;
                             lv_obj_set_pos(obj, 0, 0);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
@@ -1285,7 +1349,7 @@ void create_screen_weather_settings() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_obj_create(parent_obj);
-                    objects.obj18 = obj;
+                    objects.obj20 = obj;
                     lv_obj_set_pos(obj, 118, 3);
                     lv_obj_set_size(obj, 81, 32);
                     lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
@@ -1337,7 +1401,7 @@ void create_screen_weather_settings() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_obj_create(parent_obj);
-                    objects.obj19 = obj;
+                    objects.obj21 = obj;
                     lv_obj_set_pos(obj, 118, 3);
                     lv_obj_set_size(obj, 81, 32);
                     lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
@@ -1382,10 +1446,10 @@ void create_screen_weather_settings() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_button_create(parent_obj);
-                    objects.obj6 = obj;
+                    objects.obj7 = obj;
                     lv_obj_set_pos(obj, -7, 96);
                     lv_obj_set_size(obj, 78, 38);
-                    lv_obj_add_event_cb(obj, event_handler_cb_weather_settings_obj6, LV_EVENT_ALL, flowState);
+                    lv_obj_add_event_cb(obj, event_handler_cb_weather_settings_obj7, LV_EVENT_ALL, flowState);
                     add_style_epaper_button(obj);
                     {
                         lv_obj_t *parent_obj = obj;
@@ -1408,7 +1472,7 @@ void create_screen_weather_settings() {
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj21 = obj;
+                    objects.obj23 = obj;
                     lv_obj_set_pos(obj, 0, 0);
                     lv_obj_set_size(obj, 160, LV_SIZE_CONTENT);
                     lv_label_set_long_mode(obj, LV_LABEL_LONG_DOT);
@@ -1419,7 +1483,7 @@ void create_screen_weather_settings() {
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj22 = obj;
+                    objects.obj24 = obj;
                     lv_obj_set_pos(obj, -5, -5);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_text_font(obj, &ui_font_siyuanheiti_14, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1427,10 +1491,10 @@ void create_screen_weather_settings() {
                 }
                 {
                     lv_obj_t *obj = lv_button_create(parent_obj);
-                    objects.obj7 = obj;
+                    objects.obj8 = obj;
                     lv_obj_set_pos(obj, 81, 97);
                     lv_obj_set_size(obj, 78, 38);
-                    lv_obj_add_event_cb(obj, event_handler_cb_weather_settings_obj7, LV_EVENT_ALL, flowState);
+                    lv_obj_add_event_cb(obj, event_handler_cb_weather_settings_obj8, LV_EVENT_ALL, flowState);
                     add_style_epaper_button(obj);
                     {
                         lv_obj_t *parent_obj = obj;
@@ -1453,13 +1517,13 @@ void create_screen_weather_settings() {
 void tick_screen_weather_settings() {
     void *flowState = getFlowState(0, 5);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 20);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 21);
     {
         const char *new_val = evalTextProperty(flowState, 6, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj20);
+        const char *cur_val = lv_label_get_text(objects.obj22);
         if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj20;
-            lv_label_set_text(objects.obj20, new_val);
+            tick_value_change_obj = objects.obj22;
+            lv_label_set_text(objects.obj22, new_val);
             tick_value_change_obj = NULL;
         }
     }
@@ -1483,19 +1547,19 @@ void tick_screen_weather_settings() {
     }
     {
         const char *new_val = evalTextProperty(flowState, 20, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj21);
+        const char *cur_val = lv_label_get_text(objects.obj23);
         if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj21;
-            lv_label_set_text(objects.obj21, new_val);
+            tick_value_change_obj = objects.obj23;
+            lv_label_set_text(objects.obj23, new_val);
             tick_value_change_obj = NULL;
         }
     }
     {
         const char *new_val = evalTextProperty(flowState, 21, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj22);
+        const char *cur_val = lv_label_get_text(objects.obj24);
         if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj22;
-            lv_label_set_text(objects.obj22, new_val);
+            tick_value_change_obj = objects.obj24;
+            lv_label_set_text(objects.obj24, new_val);
             tick_value_change_obj = NULL;
         }
     }
@@ -1523,14 +1587,14 @@ void create_screen_weather() {
                 lv_obj_t *parent_obj = obj;
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj24 = obj;
+                    objects.obj26 = obj;
                     lv_obj_set_pos(obj, 44, 72);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_label_set_text(obj, "");
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj25 = obj;
+                    objects.obj27 = obj;
                     lv_obj_set_pos(obj, -135, -5);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_RIGHT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1560,7 +1624,7 @@ void create_screen_weather() {
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj26 = obj;
+                    objects.obj28 = obj;
                     lv_obj_set_pos(obj, 65, -25);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1568,7 +1632,7 @@ void create_screen_weather() {
                 }
                 {
                     lv_obj_t *obj = lv_obj_create(parent_obj);
-                    objects.obj23 = obj;
+                    objects.obj25 = obj;
                     lv_obj_set_pos(obj, 0, 92);
                     lv_obj_set_size(obj, 180, 100);
                     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
@@ -1585,7 +1649,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj27 = obj;
+                            objects.obj29 = obj;
                             lv_obj_set_pos(obj, 12, -1);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1600,7 +1664,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj28 = obj;
+                            objects.obj30 = obj;
                             lv_obj_set_pos(obj, 99, -35);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1614,7 +1678,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj29 = obj;
+                            objects.obj31 = obj;
                             lv_obj_set_pos(obj, 12, -34);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1622,7 +1686,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj30 = obj;
+                            objects.obj32 = obj;
                             lv_obj_set_pos(obj, 99, -1);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1637,7 +1701,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj31 = obj;
+                            objects.obj33 = obj;
                             lv_obj_set_pos(obj, 12, 32);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1652,7 +1716,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj32 = obj;
+                            objects.obj34 = obj;
                             lv_obj_set_pos(obj, 99, 32);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1697,7 +1761,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj33 = obj;
+                            objects.obj35 = obj;
                             lv_obj_set_pos(obj, -52, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1705,7 +1769,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj34 = obj;
+                            objects.obj36 = obj;
                             lv_obj_set_pos(obj, -26, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1713,7 +1777,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj35 = obj;
+                            objects.obj37 = obj;
                             lv_obj_set_pos(obj, 0, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1721,7 +1785,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj36 = obj;
+                            objects.obj38 = obj;
                             lv_obj_set_pos(obj, -78, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1729,7 +1793,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj37 = obj;
+                            objects.obj39 = obj;
                             lv_obj_set_pos(obj, 25, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1737,7 +1801,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj38 = obj;
+                            objects.obj40 = obj;
                             lv_obj_set_pos(obj, 50, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1745,7 +1809,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj39 = obj;
+                            objects.obj41 = obj;
                             lv_obj_set_pos(obj, 75, -50);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1753,7 +1817,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj40 = obj;
+                            objects.obj42 = obj;
                             lv_obj_set_pos(obj, -26, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1761,7 +1825,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj41 = obj;
+                            objects.obj43 = obj;
                             lv_obj_set_pos(obj, 0, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1769,7 +1833,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj42 = obj;
+                            objects.obj44 = obj;
                             lv_obj_set_pos(obj, -52, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1777,7 +1841,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj43 = obj;
+                            objects.obj45 = obj;
                             lv_obj_set_pos(obj, -78, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1785,7 +1849,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj44 = obj;
+                            objects.obj46 = obj;
                             lv_obj_set_pos(obj, 25, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1793,7 +1857,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj45 = obj;
+                            objects.obj47 = obj;
                             lv_obj_set_pos(obj, 50, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1801,7 +1865,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj46 = obj;
+                            objects.obj48 = obj;
                             lv_obj_set_pos(obj, 75, 69);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1809,7 +1873,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj47 = obj;
+                            objects.obj49 = obj;
                             lv_obj_set_pos(obj, -26, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1818,7 +1882,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj48 = obj;
+                            objects.obj50 = obj;
                             lv_obj_set_pos(obj, -52, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1827,7 +1891,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj49 = obj;
+                            objects.obj51 = obj;
                             lv_obj_set_pos(obj, 0, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1836,7 +1900,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj50 = obj;
+                            objects.obj52 = obj;
                             lv_obj_set_pos(obj, -78, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1845,7 +1909,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj51 = obj;
+                            objects.obj53 = obj;
                             lv_obj_set_pos(obj, 25, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1854,7 +1918,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj52 = obj;
+                            objects.obj54 = obj;
                             lv_obj_set_pos(obj, 50, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1863,7 +1927,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj53 = obj;
+                            objects.obj55 = obj;
                             lv_obj_set_pos(obj, 75, -66);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1872,7 +1936,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj54 = obj;
+                            objects.obj56 = obj;
                             lv_obj_set_pos(obj, -51, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1881,7 +1945,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj55 = obj;
+                            objects.obj57 = obj;
                             lv_obj_set_pos(obj, -25, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1890,7 +1954,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj56 = obj;
+                            objects.obj58 = obj;
                             lv_obj_set_pos(obj, 1, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1899,7 +1963,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj57 = obj;
+                            objects.obj59 = obj;
                             lv_obj_set_pos(obj, -77, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1908,7 +1972,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj58 = obj;
+                            objects.obj60 = obj;
                             lv_obj_set_pos(obj, 26, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1917,7 +1981,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj59 = obj;
+                            objects.obj61 = obj;
                             lv_obj_set_pos(obj, 51, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1926,7 +1990,7 @@ void create_screen_weather() {
                         }
                         {
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.obj60 = obj;
+                            objects.obj62 = obj;
                             lv_obj_set_pos(obj, 76, 86);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1937,7 +2001,7 @@ void create_screen_weather() {
                 }
                 {
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.obj61 = obj;
+                    objects.obj63 = obj;
                     lv_obj_set_pos(obj, -111, -38);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_48, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1957,11 +2021,11 @@ void create_screen_weather() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 53), 24);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 53), 25);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
-            objects.obj62 = obj;
+            objects.obj64 = obj;
             lv_obj_set_pos(obj, 0, -4);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_align(obj, LV_ALIGN_TOP_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1999,24 +2063,6 @@ void tick_screen_weather() {
     (void)flowState;
     {
         const char *new_val = evalTextProperty(flowState, 2, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj24);
-        if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj24;
-            lv_label_set_text(objects.obj24, new_val);
-            tick_value_change_obj = NULL;
-        }
-    }
-    {
-        const char *new_val = evalTextProperty(flowState, 3, 3, "Failed to evaluate Text in Label widget");
-        const char *cur_val = lv_label_get_text(objects.obj25);
-        if (strcmp(new_val, cur_val) != 0) {
-            tick_value_change_obj = objects.obj25;
-            lv_label_set_text(objects.obj25, new_val);
-            tick_value_change_obj = NULL;
-        }
-    }
-    {
-        const char *new_val = evalTextProperty(flowState, 7, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj26);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj26;
@@ -2025,7 +2071,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 10, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 3, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj27);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj27;
@@ -2034,7 +2080,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 12, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 7, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj28);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj28;
@@ -2043,7 +2089,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 14, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 10, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj29);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj29;
@@ -2052,7 +2098,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 15, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 12, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj30);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj30;
@@ -2061,7 +2107,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 17, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 14, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj31);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj31;
@@ -2070,7 +2116,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 19, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 15, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj32);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj32;
@@ -2079,7 +2125,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 24, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 17, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj33);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj33;
@@ -2088,7 +2134,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 25, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 19, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj34);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj34;
@@ -2097,7 +2143,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 26, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 24, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj35);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj35;
@@ -2106,7 +2152,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 27, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 25, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj36);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj36;
@@ -2115,7 +2161,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 28, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 26, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj37);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj37;
@@ -2124,7 +2170,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 29, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 27, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj38);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj38;
@@ -2133,7 +2179,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 30, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 28, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj39);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj39;
@@ -2142,7 +2188,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 31, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 29, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj40);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj40;
@@ -2151,7 +2197,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 33, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 30, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj41);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj41;
@@ -2160,7 +2206,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 32, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 31, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj42);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj42;
@@ -2169,7 +2215,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 34, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 33, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj43);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj43;
@@ -2178,7 +2224,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 35, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 32, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj44);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj44;
@@ -2187,7 +2233,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 36, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 34, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj45);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj45;
@@ -2196,7 +2242,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 37, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 35, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj46);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj46;
@@ -2205,7 +2251,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 38, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 36, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj47);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj47;
@@ -2214,7 +2260,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 39, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 37, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj48);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj48;
@@ -2223,7 +2269,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 40, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 38, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj49);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj49;
@@ -2232,7 +2278,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 41, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 39, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj50);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj50;
@@ -2241,7 +2287,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 42, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 40, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj51);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj51;
@@ -2250,7 +2296,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 43, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 41, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj52);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj52;
@@ -2259,7 +2305,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 44, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 42, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj53);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj53;
@@ -2268,7 +2314,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 45, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 43, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj54);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj54;
@@ -2277,7 +2323,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 46, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 44, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj55);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj55;
@@ -2286,7 +2332,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 47, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 45, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj56);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj56;
@@ -2295,7 +2341,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 48, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 46, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj57);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj57;
@@ -2304,7 +2350,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 49, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 47, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj58);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj58;
@@ -2313,7 +2359,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 50, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 48, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj59);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj59;
@@ -2322,7 +2368,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 51, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 49, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj60);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj60;
@@ -2331,7 +2377,7 @@ void tick_screen_weather() {
         }
     }
     {
-        const char *new_val = evalTextProperty(flowState, 52, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 50, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj61);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj61;
@@ -2339,9 +2385,8 @@ void tick_screen_weather() {
             tick_value_change_obj = NULL;
         }
     }
-    tick_user_widget_state_bar(getFlowState(flowState, 53), 24);
     {
-        const char *new_val = evalTextProperty(flowState, 54, 3, "Failed to evaluate Text in Label widget");
+        const char *new_val = evalTextProperty(flowState, 51, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj62);
         if (strcmp(new_val, cur_val) != 0) {
             tick_value_change_obj = objects.obj62;
@@ -2349,6 +2394,176 @@ void tick_screen_weather() {
             tick_value_change_obj = NULL;
         }
     }
+    {
+        const char *new_val = evalTextProperty(flowState, 52, 3, "Failed to evaluate Text in Label widget");
+        const char *cur_val = lv_label_get_text(objects.obj63);
+        if (strcmp(new_val, cur_val) != 0) {
+            tick_value_change_obj = objects.obj63;
+            lv_label_set_text(objects.obj63, new_val);
+            tick_value_change_obj = NULL;
+        }
+    }
+    tick_user_widget_state_bar(getFlowState(flowState, 53), 25);
+    {
+        const char *new_val = evalTextProperty(flowState, 54, 3, "Failed to evaluate Text in Label widget");
+        const char *cur_val = lv_label_get_text(objects.obj64);
+        if (strcmp(new_val, cur_val) != 0) {
+            tick_value_change_obj = objects.obj64;
+            lv_label_set_text(objects.obj64, new_val);
+            tick_value_change_obj = NULL;
+        }
+    }
+}
+
+void create_screen_date_and_clock() {
+    void *flowState = getFlowState(0, 7);
+    (void)flowState;
+    lv_obj_t *obj = lv_obj_create(0);
+    objects.date_and_clock = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 200, 200);
+    lv_obj_add_event_cb(obj, event_handler_cb_date_and_clock_date_and_clock, LV_EVENT_ALL, flowState);
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            lv_obj_t *obj = lv_tabview_create(parent_obj);
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 200, 200);
+            lv_tabview_set_tab_bar_position(obj, LV_DIR_BOTTOM);
+            lv_tabview_set_tab_bar_size(obj, 32);
+            lv_obj_set_style_text_font(obj, &ui_font_siyuanheiti_14, LV_PART_MAIN | LV_STATE_DEFAULT);
+            {
+                lv_obj_t *parent_obj = obj;
+                {
+                    lv_obj_t *obj = lv_tabview_add_tab(parent_obj, "日历");
+                    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        {
+                            // calendar
+                            lv_obj_t *obj = lv_calendar_create(parent_obj);
+                            objects.calendar = obj;
+                            lv_obj_set_pos(obj, -13, -13);
+                            lv_obj_set_size(obj, 200, 168);
+                            lv_calendar_header_arrow_create(obj);
+                            lv_calendar_set_today_date(obj, 2025, 1, 1);
+                            lv_calendar_set_showed_date(obj, 2025, 1);
+                        }
+                    }
+                }
+                {
+                    lv_obj_t *obj = lv_tabview_add_tab(parent_obj, "计时器");
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            objects.obj9 = obj;
+                            lv_obj_set_pos(obj, 5, 100);
+                            lv_obj_set_size(obj, 72, 39);
+                            lv_obj_add_event_cb(obj, event_handler_cb_date_and_clock_obj9, LV_EVENT_ALL, flowState);
+                            add_style_epaper_button(obj);
+                            {
+                                lv_obj_t *parent_obj = obj;
+                                {
+                                    lv_obj_t *obj = lv_label_create(parent_obj);
+                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text(obj, "开始");
+                                }
+                            }
+                        }
+                        {
+                            lv_obj_t *obj = lv_button_create(parent_obj);
+                            lv_obj_set_pos(obj, 97, 100);
+                            lv_obj_set_size(obj, 69, 39);
+                            add_style_epaper_button(obj);
+                            {
+                                lv_obj_t *parent_obj = obj;
+                                {
+                                    lv_obj_t *obj = lv_label_create(parent_obj);
+                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text(obj, "停止");
+                                }
+                            }
+                        }
+                        {
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            lv_obj_set_pos(obj, 159, 32);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_label_set_text(obj, "分");
+                        }
+                        {
+                            // timer_min
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.timer_min = obj;
+                            lv_obj_set_pos(obj, 104, 22);
+                            lv_obj_set_size(obj, 55, 47);
+                            lv_textarea_set_accepted_chars(obj, "0123456789");
+                            lv_textarea_set_max_length(obj, 2);
+                            lv_textarea_set_text(obj, "0");
+                            lv_textarea_set_one_line(obj, false);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_add_event_cb(obj, event_handler_cb_date_and_clock_timer_min, LV_EVENT_ALL, flowState);
+                        }
+                        {
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            lv_obj_set_pos(obj, 69, 32);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_label_set_text(obj, "时");
+                        }
+                        {
+                            // timer_hour
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.timer_hour = obj;
+                            lv_obj_set_pos(obj, 14, 22);
+                            lv_obj_set_size(obj, 55, 47);
+                            lv_textarea_set_accepted_chars(obj, "0123456789");
+                            lv_textarea_set_max_length(obj, 2);
+                            lv_textarea_set_text(obj, "0");
+                            lv_textarea_set_one_line(obj, false);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_add_event_cb(obj, event_handler_cb_date_and_clock_timer_hour, LV_EVENT_ALL, flowState);
+                            lv_obj_set_style_anim_duration(obj, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
+                        }
+                    }
+                }
+            }
+        }
+        {
+            lv_obj_t *obj = lv_obj_create(parent_obj);
+            objects.obj5 = obj;
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 200, 20);
+            lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 13), 29);
+        }
+        {
+            // clock_keyboard
+            lv_obj_t *obj = lv_keyboard_create(parent_obj);
+            objects.clock_keyboard = obj;
+            lv_obj_set_pos(obj, 0, 80);
+            lv_obj_set_size(obj, 200, 120);
+            lv_keyboard_set_mode(obj, LV_KEYBOARD_MODE_NUMBER);
+            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_align(obj, LV_ALIGN_DEFAULT, LV_PART_MAIN | LV_STATE_DEFAULT);
+        }
+    }
+    
+    tick_screen_date_and_clock();
+}
+
+void tick_screen_date_and_clock() {
+    void *flowState = getFlowState(0, 7);
+    (void)flowState;
+    tick_user_widget_state_bar(getFlowState(flowState, 13), 29);
 }
 
 void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex) {
@@ -2396,8 +2611,8 @@ void tick_user_widget_state_bar(void *flowState, int startWidgetIndex) {
 extern void add_style(lv_obj_t *obj, int32_t styleIndex);
 extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
 
-static const char *screen_names[] = { "Main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather" };
-static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "img_settings", "img_weather", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "obj5", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj6", "obj7", "current_time", "current_weekday", "current_date", "obj8", "obj9", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "img_clock", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj10", "rssi", "obj11", "ip", "obj12", "mac", "obj13", "primary", "obj14", "auth_mode", "obj15", "bandwidth", "obj16", "sleep_settings_con", "sleep_settings_con_1", "obj17", "obj18", "weather_api_key", "obj19", "weather_api_host", "panel_show_tcp_msg", "obj20", "obj21", "obj22", "weather_icon", "obj23", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj24", "obj25", "obj26", "obj27", "obj28", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62" };
+static const char *screen_names[] = { "Main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather", "date_and_clock" };
+static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "weather_settings", "weather", "date_and_clock", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "obj5", "obj5__state_time", "obj5__state_wifi", "obj5__power_save", "img_settings", "img_weather", "img_clock", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "obj6", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj7", "obj8", "obj9", "timer_min", "timer_hour", "current_time", "current_weekday", "current_date", "obj10", "obj11", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj12", "rssi", "obj13", "ip", "obj14", "mac", "obj15", "primary", "obj16", "auth_mode", "obj17", "bandwidth", "obj18", "sleep_settings_con", "sleep_settings_con_1", "obj19", "obj20", "weather_api_key", "obj21", "weather_api_host", "panel_show_tcp_msg", "obj22", "obj23", "obj24", "weather_icon", "obj25", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj26", "obj27", "obj28", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62", "obj63", "obj64", "calendar", "clock_keyboard" };
 static const char *style_names[] = { "epaper_button" };
 
 
@@ -2410,6 +2625,7 @@ tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_sleep_settings,
     tick_screen_weather_settings,
     tick_screen_weather,
+    tick_screen_date_and_clock,
 };
 void tick_screen(int screen_index) {
     tick_screen_funcs[screen_index]();
@@ -2436,4 +2652,5 @@ void create_screens() {
     create_screen_sleep_settings();
     create_screen_weather_settings();
     create_screen_weather();
+    create_screen_date_and_clock();
 }

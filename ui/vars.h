@@ -100,6 +100,12 @@ extern const char *get_var_weather_api_host();
 extern void set_var_weather_api_host(const char *value);
 extern const char *get_var_weather_icon();
 extern void set_var_weather_icon(const char *value);
+extern int32_t get_var_timer_hour();
+extern void set_var_timer_hour(int32_t value);
+extern int32_t get_var_timer_min();
+extern void set_var_timer_min(int32_t value);
+extern bool get_var_is_timer_started();
+extern void set_var_is_timer_started(bool value);
 
 
 #ifdef __cplusplus

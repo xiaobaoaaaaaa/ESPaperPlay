@@ -15,6 +15,7 @@ typedef struct _objects_t {
     lv_obj_t *sleep_settings;
     lv_obj_t *weather_settings;
     lv_obj_t *weather;
+    lv_obj_t *date_and_clock;
     lv_obj_t *obj0;
     lv_obj_t *obj0__state_time;
     lv_obj_t *obj0__state_wifi;
@@ -35,69 +36,74 @@ typedef struct _objects_t {
     lv_obj_t *obj4__state_time;
     lv_obj_t *obj4__state_wifi;
     lv_obj_t *obj4__power_save;
+    lv_obj_t *obj5;
+    lv_obj_t *obj5__state_time;
+    lv_obj_t *obj5__state_wifi;
+    lv_obj_t *obj5__power_save;
     lv_obj_t *img_settings;
     lv_obj_t *img_weather;
+    lv_obj_t *img_clock;
     lv_obj_t *wlan_settings;
     lv_obj_t *switch_wlan;
     lv_obj_t *sleep_settings_page;
     lv_obj_t *weather_settings_page;
-    lv_obj_t *obj5;
+    lv_obj_t *obj6;
     lv_obj_t *message_reconnect;
     lv_obj_t *sleep_settings_sw;
     lv_obj_t *sleep_settings_min;
     lv_obj_t *sleep_settings_con_2;
     lv_obj_t *sleep_settings_con_3;
     lv_obj_t *sleep_settings_con_4;
-    lv_obj_t *obj6;
     lv_obj_t *obj7;
+    lv_obj_t *obj8;
+    lv_obj_t *obj9;
+    lv_obj_t *timer_min;
+    lv_obj_t *timer_hour;
     lv_obj_t *current_time;
     lv_obj_t *current_weekday;
     lv_obj_t *current_date;
-    lv_obj_t *obj8;
-    lv_obj_t *obj9;
+    lv_obj_t *obj10;
+    lv_obj_t *obj11;
     lv_obj_t *state_wifi_main;
     lv_obj_t *power_save;
     lv_obj_t *yiyan;
     lv_obj_t *label_menu;
     lv_obj_t *label_settings;
     lv_obj_t *label_weather;
-    lv_obj_t *img_clock;
     lv_obj_t *label_clock;
     lv_obj_t *img_smart_home;
     lv_obj_t *label_smart_home;
     lv_obj_t *label_setings;
     lv_obj_t *ssid;
-    lv_obj_t *obj10;
-    lv_obj_t *rssi;
-    lv_obj_t *obj11;
-    lv_obj_t *ip;
     lv_obj_t *obj12;
-    lv_obj_t *mac;
+    lv_obj_t *rssi;
     lv_obj_t *obj13;
-    lv_obj_t *primary;
+    lv_obj_t *ip;
     lv_obj_t *obj14;
-    lv_obj_t *auth_mode;
+    lv_obj_t *mac;
     lv_obj_t *obj15;
-    lv_obj_t *bandwidth;
+    lv_obj_t *primary;
     lv_obj_t *obj16;
+    lv_obj_t *auth_mode;
+    lv_obj_t *obj17;
+    lv_obj_t *bandwidth;
+    lv_obj_t *obj18;
     lv_obj_t *sleep_settings_con;
     lv_obj_t *sleep_settings_con_1;
-    lv_obj_t *obj17;
-    lv_obj_t *obj18;
-    lv_obj_t *weather_api_key;
     lv_obj_t *obj19;
+    lv_obj_t *obj20;
+    lv_obj_t *weather_api_key;
+    lv_obj_t *obj21;
     lv_obj_t *weather_api_host;
     lv_obj_t *panel_show_tcp_msg;
-    lv_obj_t *obj20;
-    lv_obj_t *obj21;
     lv_obj_t *obj22;
-    lv_obj_t *weather_icon;
     lv_obj_t *obj23;
+    lv_obj_t *obj24;
+    lv_obj_t *weather_icon;
+    lv_obj_t *obj25;
     lv_obj_t *forecast_weather;
     lv_obj_t *chart_weather_forecast_temp;
     lv_obj_t *panel_wait;
-    lv_obj_t *obj24;
-    lv_obj_t *obj25;
     lv_obj_t *obj26;
     lv_obj_t *obj27;
     lv_obj_t *obj28;
@@ -135,6 +141,10 @@ typedef struct _objects_t {
     lv_obj_t *obj60;
     lv_obj_t *obj61;
     lv_obj_t *obj62;
+    lv_obj_t *obj63;
+    lv_obj_t *obj64;
+    lv_obj_t *calendar;
+    lv_obj_t *clock_keyboard;
 } objects_t;
 
 extern objects_t objects;
@@ -147,6 +157,7 @@ enum ScreensEnum {
     SCREEN_ID_SLEEP_SETTINGS = 5,
     SCREEN_ID_WEATHER_SETTINGS = 6,
     SCREEN_ID_WEATHER = 7,
+    SCREEN_ID_DATE_AND_CLOCK = 8,
 };
 
 void create_screen_main();
@@ -169,6 +180,9 @@ void tick_screen_weather_settings();
 
 void create_screen_weather();
 void tick_screen_weather();
+
+void create_screen_date_and_clock();
+void tick_screen_date_and_clock();
 
 void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex);
 void tick_user_widget_state_bar(void *flowState, int startWidgetIndex);

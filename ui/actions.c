@@ -336,7 +336,7 @@ static void task_get_weather(void *param) {
         set_var_weather_visibility(info->visibility);
         set_var_weather_cloud(info->cloud);
         set_var_weather_dew_point(info->dew_point);
-        if(strcmp(info->icon, "0"))
+        if(atoi(info->icon) > 100)
         {
             ESP_LOGI("task_get_weather", "Weather icon: %s", info->icon);
             set_var_weather_icon(info->icon);
@@ -463,4 +463,26 @@ void action_close_tcp_server(lv_event_t *e)
 {
     save_tcp_msg_task_running = false;
     tcp_server_stop();
+}
+
+void action_update_calendar(lv_event_t *e) 
+{
+    int index = 0;
+    lv_obj_t *child = lv_obj_get_child(objects.calendar, index);
+    while(child)
+    {
+        if(lv_obj_check_type(child, &lv_calendar_header_arrow_class))
+        {
+            lv_obj_del(child);
+            break;
+        }
+        index++;
+        child = lv_obj_get_child(objects.calendar, index);
+    }
+    lv_calendar_header_dropdown_create(objects.calendar);
+}
+
+void action_timer_get_setted(lv_event_t *e) 
+{
+    
 }
