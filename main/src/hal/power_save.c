@@ -20,7 +20,7 @@
 #define POWER_SAVE_BIT  BIT0
 #define TAG "power_save"
 
-static EventGroupHandle_t pwr_save_event_group;
+EventGroupHandle_t pwr_save_event_group;
 static int no_activity_minutes = 0;
 esp_timer_handle_t inactivity_timer;
 static bool power_save_enabled = true;

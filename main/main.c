@@ -110,9 +110,10 @@ void time_tick_task(void *arg)
 {
     xEventGroupWaitBits(init_event_group, DISP_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     date_update();
-    while (1) {
+    while (1) 
+    {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        date_update();  // 每分钟整点触发
+        date_update();  // 每秒钟触发，检测是否需要更新时间
     }
 }
 

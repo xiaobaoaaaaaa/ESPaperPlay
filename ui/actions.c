@@ -1,7 +1,10 @@
 #include <stdio.h>
-#include<time.h>
+#include <time.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "lvgl.h"
@@ -12,11 +15,13 @@
 #include "ui.h"
 #include "screens.h"
 
+#include "buzzer.h"
 #include "yiyan.h"
 #include "wifi_ctrl.h"
 #include "config_manager.h"
 #include "weather.h"
 #include "tcpserver.h"
+#include "power_save.h"
 
 void action_user_change_screen(lv_event_t *e) 
 {
@@ -465,24 +470,196 @@ void action_close_tcp_server(lv_event_t *e)
     tcp_server_stop();
 }
 
+// 初始化日历相关功能
+bool is_calendar_initialized = false;
 void action_update_calendar(lv_event_t *e) 
 {
-    int index = 0;
-    lv_obj_t *child = lv_obj_get_child(objects.calendar, index);
-    while(child)
+    // 将日历自带arrow头部更换为下拉菜单
+    if(!is_calendar_initialized)
     {
-        if(lv_obj_check_type(child, &lv_calendar_header_arrow_class))
+        // 遍历日历对象的子对象，查找arrow头部对象并删除
+        int index = 0;
+        lv_obj_t *child = lv_obj_get_child(objects.calendar, index);
+        while(child)
         {
-            lv_obj_del(child);
-            break;
+            if(lv_obj_check_type(child, &lv_calendar_header_arrow_class))
+            {
+                lv_obj_del(child);
+                is_calendar_initialized = true;
+                break;
+            }
+            index++;
+            child = lv_obj_get_child(objects.calendar, index);
         }
-        index++;
-        child = lv_obj_get_child(objects.calendar, index);
+        lv_calendar_header_dropdown_create(objects.calendar);
     }
-    lv_calendar_header_dropdown_create(objects.calendar);
+    
+    // 根据当前时间更新日历
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    lv_calendar_set_today_date(objects.calendar, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+    lv_calendar_set_showed_date(objects.calendar, timeinfo.tm_year + 1900, timeinfo.tm_mon + 1);
+    
+    // 禁止tabview的滚动
+    lv_obj_remove_flag(lv_tabview_get_content(objects.tabview_date_and_clock), LV_OBJ_FLAG_SCROLLABLE);
 }
+
+int timer_hour = 0;
+int timer_min = 0;
+int timer_sec = 0; // 新增秒变量
 
 void action_timer_get_setted(lv_event_t *e) 
 {
-    
+    int hour = atoi(lv_textarea_get_text(objects.timer_hour));
+    int min = atoi(lv_textarea_get_text(objects.timer_min));
+    if(min > 59)
+    {
+        min = 59;
+        lv_textarea_set_text(objects.timer_min, "59");
+    }
+    if(hour < 0 || hour > 23 || min < 0 || min > 59)
+    {        
+        ESP_LOGE("action_timer_get_setted", "Invalid time set: %02d:%02d", hour, min);
+        return;
+    }
+    timer_hour = hour;
+    timer_min = min;
+    timer_sec = 0; // 每次设置时秒归零
+    ESP_LOGI("action_timer_get_setted", "Timer set to %02d:%02d:%02d", timer_hour, timer_min, timer_sec);
+}
+
+int last_hour = -1;
+int last_min = -1;
+void action_update_textarea(lv_event_t *e) 
+{
+    if(timer_hour == last_hour && timer_min == last_min)
+        return;
+    last_hour = timer_hour;
+    last_min = timer_min;
+    char hour_str[3];
+    char min_str[3];
+    snprintf(hour_str, sizeof(hour_str), "%02d", timer_hour);
+    snprintf(min_str, sizeof(min_str), "%02d", timer_min);
+    lv_textarea_set_text(objects.timer_hour, hour_str);
+    lv_textarea_set_text(objects.timer_min, min_str);
+}
+
+esp_timer_handle_t timer_update_handler = NULL;
+void timer_update()
+{
+    if(timer_hour == 0 && timer_min == 0 && timer_sec == 0)
+    {
+        ESP_LOGI("timer_update", "Timer reached zero, stopping timer");
+        set_var_is_timer_started(false);
+        esp_timer_stop(timer_update_handler);
+        esp_timer_delete(timer_update_handler);
+        timer_update_handler = NULL;
+        return;
+    }
+
+    if(timer_sec > 0)
+    {
+        timer_sec--;
+    }
+    else
+    {
+        if(timer_min > 0)
+        {
+            timer_min--;
+            timer_sec = 59;
+        }
+        else if(timer_hour > 0)
+        {
+            timer_hour--;
+            timer_min = 59;
+            timer_sec = 59;
+        }
+    }
+
+    ESP_LOGI("timer_update", "Timer updated to %02d:%02d:%02d", timer_hour, timer_min, timer_sec);
+}
+
+void action_timer_start_pause(lv_event_t *e) 
+{
+    if(timer_update_handler == NULL && get_var_is_timer_started())
+    {
+        ESP_LOGI("action_timer_start_pause", "Starting timer with %02d:%02d:%02d", timer_hour, timer_min, timer_sec);
+        esp_timer_create_args_t timer_args = {
+            .callback = &timer_update,
+            .name = "timer_update",
+        };
+        esp_timer_create(&timer_args, &timer_update_handler);
+        esp_timer_start_periodic(timer_update_handler, 1000000); // 每秒触发一次
+        timer_update(); // 计时器启动时手动调用一次
+
+        // 禁止休眠
+        xEventGroupClearBits(pwr_save_event_group, BIT0);
+    }
+    else if(timer_update_handler != NULL && !get_var_is_timer_started())
+    {
+        ESP_LOGI("action_timer_start_pause", "Pausing timer");
+        esp_timer_stop(timer_update_handler);
+
+        //恢复休眠
+        xEventGroupSetBits(pwr_save_event_group, BIT0);
+    }
+    else if(timer_update_handler != NULL && get_var_is_timer_started())
+    {
+        ESP_LOGI("action_timer_start_pause", "Resuming timer with %02d:%02d:%02d", timer_hour, timer_min, timer_sec);
+        esp_timer_start_periodic(timer_update_handler, 1000000); // 每秒触发一次
+
+        //禁止休眠
+        xEventGroupClearBits(pwr_save_event_group, BIT0);
+    }
+    else
+    {
+        ESP_LOGI("action_timer_start_pause", "Timer is not started");
+    }
+}
+
+// 计时结束后鸣响蜂鸣器
+void timer_buzzer_task(void *param)
+{
+    int count = 0;
+    while(count < 10) // 鸣响10次
+    {
+        buzzer(NOTE_A7, 4096, 0.07, 0.15, 2);
+        vTaskDelay(pdMS_TO_TICKS(500)); // 每次鸣响间隔500毫秒
+        count++;
+    }
+    // 恢复休眠
+    xEventGroupSetBits(pwr_save_event_group, BIT0);
+    vTaskDelete(NULL);
+}
+
+void action_timer_stop(lv_event_t *e) 
+{
+    // 如果计时结束则鸣响蜂鸣器
+    if(!timer_update_handler)
+        xTaskCreate(timer_buzzer_task, "timer_buzzer_task", 2048, NULL, 5, NULL);
+    else
+        // 恢复休眠
+        xEventGroupSetBits(pwr_save_event_group, BIT0);
+
+    if(timer_update_handler != NULL)
+    {
+        ESP_LOGI("action_timer_stop", "Stopping timer");
+        esp_timer_stop(timer_update_handler);
+        esp_timer_delete(timer_update_handler);
+        timer_update_handler = NULL;
+    }
+    set_var_is_timer_started(false);
+    timer_hour = 0;
+    timer_min = 0;
+    timer_sec = 0;
+    last_hour = -1;
+    last_min = -1;
+    set_var_timer_paused(false);
+    lv_textarea_set_text(objects.timer_hour, "0");
+    lv_textarea_set_text(objects.timer_min, "0");
+    lv_label_set_text(objects.label_button_start, "开始");
+    ESP_LOGI("action_timer_stop", "Timer stopped and reset to 00:00:00");
 }

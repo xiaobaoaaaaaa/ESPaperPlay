@@ -400,26 +400,6 @@ extern "C" const char *get_var_weather_icon() {
 extern "C" void set_var_weather_icon(const char *value) {
     weather_icon = value;
 }
-
-int32_t timer_hour;
-
-extern "C" int32_t get_var_timer_hour() {
-    return timer_hour;
-}
-
-extern "C" void set_var_timer_hour(int32_t value) {
-    timer_hour = value;
-}
-
-int32_t timer_min;
-
-extern "C" int32_t get_var_timer_min() {
-    return timer_min;
-}
-
-extern "C" void set_var_timer_min(int32_t value) {
-    timer_min = value;
-}
  
 bool is_timer_started;
 
@@ -429,4 +409,14 @@ extern "C" bool get_var_is_timer_started() {
 
 extern "C" void set_var_is_timer_started(bool value) {
     is_timer_started = value;
+}
+
+bool timer_paused;
+
+extern "C" bool get_var_timer_paused() {
+    return timer_paused;
+}
+
+extern "C" void set_var_timer_paused(bool value) {
+    timer_paused = value;
 }

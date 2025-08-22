@@ -92,8 +92,6 @@ void lv_port_disp_init(void)
         return;
     }
 
-    void *aligned_buf = lv_draw_buf_align(buf1, LV_COLOR_FORMAT_I1);
-
     lv_display_set_buffers(disp, buf1, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 }
 
