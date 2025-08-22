@@ -34,9 +34,9 @@
 lv_display_t *disp = NULL;
 lv_indev_t *indev_touchpad = NULL;
 void *buf1 = NULL, *buf2 = NULL;
-EventGroupHandle_t lvgl_flush_event_group = NULL;
+EventGroupHandle_t lvgl_flush_event_group = NULL; // 用于阻塞LVGL的刷新
 
-int fast_refresh_count = 0;
+int fast_refresh_count = 0; // 快速刷新计数器， 超过 MAX_PARTIAL_REFRESH_COUNT 则触发全刷
 static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * px_map)
 {
     int height = area->y2 - area->y1 + 1;
@@ -103,6 +103,7 @@ static void increase_lvgl_tick(void *arg)
 void lvgl_timer_task(void *param)
 {
     while (1) {
+        // 等待 LVGL 刷新事件
         EventBits_t bits = xEventGroupWaitBits(lvgl_flush_event_group, BIT0, 
                          pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
 
@@ -129,6 +130,7 @@ static touch_data_t g_touch_data = {
     .mutex = NULL
 };
 
+// 触摸屏读取任务，用于异步读取触摸屏数据
 static void touch_read_task(void *param)
 {
     while (1) {
@@ -138,14 +140,14 @@ static void touch_read_task(void *param)
         xSemaphoreTake(g_touch_data.mutex, portMAX_DELAY);
         
         if (ctp.tp_num > 0) {
-            int32_t x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1;
+            int32_t x = ((int16_t)(ctp.tp[0].x - 160) - 319) * -1; // 触摸屏X轴坐标转换
             int32_t y = ctp.tp[0].y;
             
             if (x < 200 && y < 200) {
                 g_touch_data.x = x;
                 g_touch_data.y = y;
                 g_touch_data.is_pressed = true;
-                reset_inactivity_timer();
+                reset_inactivity_timer(); // 检测到触摸后重置睡眠计数器
             } else {
                 g_touch_data.is_pressed = false;
             }
@@ -171,8 +173,6 @@ static void touchpad_read(lv_indev_t * indev_drv, lv_indev_data_t * data)
 
 void lv_port_indev_init(void)
 {
-    sd_touch_init();
-
     g_touch_data.mutex = xSemaphoreCreateMutex();
     if (g_touch_data.mutex == NULL) {
         ESP_LOGE(TAG, "Touch mutex creation failed");
@@ -186,6 +186,7 @@ void lv_port_indev_init(void)
     lv_indev_set_read_cb(indev_touchpad, touchpad_read);
 }
 
+// 初始化墨水屏驱动与LVGL显示
 void lvgl_init_epaper_display(void)
 {
     lvgl_flush_event_group = xEventGroupCreate();

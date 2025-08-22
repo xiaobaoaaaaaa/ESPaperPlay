@@ -21,9 +21,9 @@ static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
 static const char *TAG = "smartconfig";
 
-static int s_wifi_retry_count = 0;
-static bool s_wifi_init_phase = true;
-bool wifi_on_off;
+static int s_wifi_retry_count = 0; // 连接重试计数
+static bool s_wifi_init_phase = true; // 是否处于初始化阶段
+bool wifi_on_off; // WIFI开关状态
 
 void start_smartconfig(void);
 static TaskHandle_t smartconfig_task_handle = NULL;
@@ -110,6 +110,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+// 从配置中读取WIFI信息
 int get_wifi_from_config()
 {
     const system_config_t *cfg = config_get();
@@ -162,6 +163,7 @@ void start_smartconfig(void)
     }
 }
 
+// 设置WIFI开关状态
 void set_wifi_on_off(bool op)
 {
     if (op && !wifi_on_off) 
@@ -194,8 +196,8 @@ bool wifi_init(void)
 
     ESP_LOGI(TAG, "WiFi config found, connecting...");
     connect_wifi_from_config();
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒钟检查是否成功连接到了AP
     wifi_ap_record_t ap_info;
     esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
-    return (ret == ESP_OK);
+    return (ret == ESP_OK); // 连接成功返回true，失败返回false
 }

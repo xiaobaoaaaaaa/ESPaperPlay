@@ -10,6 +10,7 @@ static int last_year = -1, last_month = -1, last_day = -1;
 static int last_hour = -1, last_minute = -1;
 static int last_weekday = -1;
 
+// 更新UI显示的日期和时间
 void date_update()
 {
     time_t now = time(NULL);

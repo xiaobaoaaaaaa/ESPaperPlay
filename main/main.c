@@ -52,6 +52,7 @@ void time_init_task(void *param)
 {
     xEventGroupWaitBits(init_event_group, WIFI_INIT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     time_init();
+    
     //打印系统时间
     time_t now;
     struct tm timeinfo;

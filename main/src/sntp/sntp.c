@@ -27,6 +27,7 @@ void time_sync_notification_cb(struct timeval *tv)
     ESP_LOGI(TAG, "Time synchronization event notification received"); // Improved phrasing
 }
 
+// 初始化SNTP及同步系统时间
 void time_init(void)
 {
     ESP_LOGI(TAG, "Waiting for WiFi connection...");

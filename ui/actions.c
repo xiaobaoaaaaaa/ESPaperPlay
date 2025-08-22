@@ -23,6 +23,10 @@
 #include "tcpserver.h"
 #include "power_save.h"
 
+/**
+ * @brief 用户手势切换屏幕事件处理
+ * @param e LVGL事件指针
+ */
 void action_user_change_screen(lv_event_t *e) 
 {
     lv_event_code_t event = lv_event_get_code(e);
@@ -42,19 +46,19 @@ void action_user_change_screen(lv_event_t *e)
                 break;
 
             case LV_DIR_RIGHT:
-                anim_type = LV_SCR_LOAD_ANIM_MOVE_RIGHT;
+                anim_type = LV_SCR_LOAD_ANIM_OVER_RIGHT;
                 break;
 
             case LV_DIR_TOP:
-                anim_type = LV_SCR_LOAD_ANIM_MOVE_TOP;
+                anim_type = LV_SCR_LOAD_ANIM_OVER_TOP;
                 break;
 
             case LV_DIR_BOTTOM:
-                anim_type = LV_SCR_LOAD_ANIM_MOVE_BOTTOM;
+                anim_type = LV_SCR_LOAD_ANIM_OVER_BOTTOM;
                 break;
             
             default:
-                anim_type = LV_SCR_LOAD_ANIM_MOVE_LEFT;
+                anim_type = LV_SCR_LOAD_ANIM_OVER_LEFT;
                 break;
             }
             eez_flow_set_screen(screen_id, anim_type, 200, 0);
@@ -67,6 +71,10 @@ void action_user_change_screen(lv_event_t *e)
 }
 
 bool wifi_signal_strength_check = false;
+/**
+ * @brief 检查WiFi连接状态及信号强度
+ * @param e LVGL事件指针
+ */
 void action_check_wifi_status(lv_event_t *e) 
 {
     set_var_ui_wifi_on_off(wifi_on_off);
@@ -97,11 +105,19 @@ void action_check_wifi_status(lv_event_t *e)
     }
 }
 
+/**
+ * @brief 获取一言内容
+ * @param e LVGL事件指针
+ */
 void action_get_yiyan(lv_event_t *e) 
 {
     get_yiyan();
 }
 
+/**
+ * @brief 设置WiFi开关
+ * @param e LVGL事件指针
+ */
 void action_set_wifi_on_off(lv_event_t *e) 
 {
     lv_obj_t *sw = lv_event_get_target(e);
@@ -128,6 +144,10 @@ void action_set_wifi_on_off(lv_event_t *e)
     }
 }
 
+/**
+ * @brief 获取WiFi AP信息并更新变量
+ * @param e LVGL事件指针
+ */
 void action_get_wifi_ap_info(lv_event_t *e) 
 {
     if(!wifi_on_off) return;
@@ -200,12 +220,20 @@ void action_get_wifi_ap_info(lv_event_t *e)
     } 
 }
 
+/**
+ * @brief 重新连接WiFi（SmartConfig方式）
+ * @param e LVGL事件指针
+ */
 void action_wifi_reconnect(lv_event_t *e) 
 {
     set_wifi_on_off(false);
     start_smartconfig();
 }
 
+/**
+ * @brief 设置省电模式开关
+ * @param e LVGL事件指针
+ */
 void action_power_save_on_off(lv_event_t *e) 
 {
     system_config_t *cfg = config_get_mutable();
@@ -215,6 +243,10 @@ void action_power_save_on_off(lv_event_t *e)
     ESP_LOGI("action_power_save_on_off", "Power save mode turned %s", cfg->power_save_enabled ? "on" : "off");
 }
 
+/**
+ * @brief 检查省电模式状态并更新变量
+ * @param e LVGL事件指针
+ */
 void action_check_power_save_mode(lv_event_t *e) 
 {
     const system_config_t *cfg = config_get();
@@ -222,6 +254,10 @@ void action_check_power_save_mode(lv_event_t *e)
     set_var_power_save_min(cfg->power_save_min);
 }
 
+/**
+ * @brief 设置省电模式的最小时间
+ * @param e LVGL事件指针
+ */
 void action_set_power_save_min(lv_event_t *e) 
 {
     lv_obj_t *dropdown = lv_event_get_target(e);
@@ -252,6 +288,7 @@ void action_set_power_save_min(lv_event_t *e)
     config_save();
 }
 
+// 天气相关全局变量
 lv_obj_t *chart = NULL;
 static lv_chart_series_t *ser_max = NULL;
 static lv_chart_series_t *ser_min = NULL;
@@ -259,6 +296,10 @@ static lv_chart_series_t *ser_min = NULL;
 static forecast_weather_t* g_forecast = NULL;
 static SemaphoreHandle_t weather_mutex = NULL;
 
+/**
+ * @brief 更新天气UI（异步回调）
+ * @param param 天气预报数据指针
+ */
 static void update_weather_ui(void *param) {
     forecast_weather_t *forecast = (forecast_weather_t *)param;
     if (!forecast || !chart || !lv_obj_is_valid(chart)) return;
@@ -318,6 +359,10 @@ static void update_weather_ui(void *param) {
     ESP_LOGI("task_get_weather", "Weather UI updated");
 }
 
+/**
+ * @brief 天气信息获取任务
+ * @param param 未使用
+ */
 static void task_get_weather(void *param) {
     system_config_t *cfg = config_get_mutable();
     weather_config_t config = {
@@ -381,6 +426,10 @@ static void task_get_weather(void *param) {
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief 获取天气信息并更新图表
+ * @param e LVGL事件指针
+ */
 void action_get_weather(lv_event_t *e) 
 {
     if(chart == NULL)
@@ -403,6 +452,10 @@ void action_get_weather(lv_event_t *e)
     xTaskCreate(task_get_weather, "task_get_weather", 5100, NULL, 7, NULL);
 }
 
+/**
+ * @brief 获取天气设置并更新变量
+ * @param e LVGL事件指针
+ */
 void action_get_weather_settings(lv_event_t *e) 
 {
     const system_config_t *cfg = config_get();
@@ -414,8 +467,14 @@ void action_get_weather_settings(lv_event_t *e)
     set_var_weather_api_host(cfg->weather_api_host);
 }
 
+// TCP消息保存任务相关变量
 TaskHandle_t  save_tcp_msg_task_hander = NULL;
 bool save_tcp_msg_task_running = false;
+
+/**
+ * @brief TCP消息保存任务
+ * @param param 未使用
+ */
 void task_save_tcp_msg(void *param)
 {
     char msg[128];
@@ -437,6 +496,10 @@ void task_save_tcp_msg(void *param)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief 获取TCP消息并启动保存任务
+ * @param e LVGL事件指针
+ */
 void action_get_tcp_msg(lv_event_t *e) 
 {
     tcpserver_create();
@@ -453,6 +516,10 @@ void action_get_tcp_msg(lv_event_t *e)
     ESP_LOGI("action_get_tcp_msg", "TCP message task created");
 }
 
+/**
+ * @brief 保存天气配置到系统配置
+ * @param e LVGL事件指针
+ */
 void action_save_weather_config(lv_event_t *e) 
 {
     system_config_t *cfg = config_get_mutable();
@@ -464,6 +531,10 @@ void action_save_weather_config(lv_event_t *e)
     config_save();
 }
 
+/**
+ * @brief 关闭TCP服务器
+ * @param e LVGL事件指针
+ */
 void action_close_tcp_server(lv_event_t *e) 
 {
     save_tcp_msg_task_running = false;
@@ -472,6 +543,10 @@ void action_close_tcp_server(lv_event_t *e)
 
 // 初始化日历相关功能
 bool is_calendar_initialized = false;
+/**
+ * @brief 更新日历显示及初始化
+ * @param e LVGL事件指针
+ */
 void action_update_calendar(lv_event_t *e) 
 {
     // 将日历自带arrow头部更换为下拉菜单
@@ -507,10 +582,15 @@ void action_update_calendar(lv_event_t *e)
     lv_obj_remove_flag(lv_tabview_get_content(objects.tabview_date_and_clock), LV_OBJ_FLAG_SCROLLABLE);
 }
 
+// 计时器相关变量
 int timer_hour = 0;
 int timer_min = 0;
-int timer_sec = 0; // 新增秒变量
+int timer_sec = 0;
 
+/**
+ * @brief 获取并设置计时器时间
+ * @param e LVGL事件指针
+ */
 void action_timer_get_setted(lv_event_t *e) 
 {
     int hour = atoi(lv_textarea_get_text(objects.timer_hour));
@@ -533,6 +613,10 @@ void action_timer_get_setted(lv_event_t *e)
 
 int last_hour = -1;
 int last_min = -1;
+/**
+ * @brief 更新计时器文本框内容
+ * @param e LVGL事件指针
+ */
 void action_update_textarea(lv_event_t *e) 
 {
     if(timer_hour == last_hour && timer_min == last_min)
@@ -548,6 +632,9 @@ void action_update_textarea(lv_event_t *e)
 }
 
 esp_timer_handle_t timer_update_handler = NULL;
+/**
+ * @brief 计时器更新函数，每秒调用一次
+ */
 void timer_update()
 {
     if(timer_hour == 0 && timer_min == 0 && timer_sec == 0)
@@ -582,6 +669,10 @@ void timer_update()
     ESP_LOGI("timer_update", "Timer updated to %02d:%02d:%02d", timer_hour, timer_min, timer_sec);
 }
 
+/**
+ * @brief 启动/暂停/恢复计时器
+ * @param e LVGL事件指针
+ */
 void action_timer_start_pause(lv_event_t *e) 
 {
     if(timer_update_handler == NULL && get_var_is_timer_started())
@@ -620,7 +711,10 @@ void action_timer_start_pause(lv_event_t *e)
     }
 }
 
-// 计时结束后鸣响蜂鸣器
+/**
+ * @brief 计时结束后鸣响蜂鸣器任务
+ * @param param 未使用
+ */
 void timer_buzzer_task(void *param)
 {
     int count = 0;
@@ -635,6 +729,10 @@ void timer_buzzer_task(void *param)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief 停止计时器并重置
+ * @param e LVGL事件指针
+ */
 void action_timer_stop(lv_event_t *e) 
 {
     // 如果计时结束则鸣响蜂鸣器

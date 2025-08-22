@@ -6,10 +6,11 @@
 
 #define TAG "touch"
 
+// 初始化触摸屏
 void sd_touch_init()
 {
     // 触摸IC的信息结构体，方便管理触摸发生的5个点信息
-    //gpiox_set_ppOutput(5, 1); // 如电容触摸屏不能正常初始化，建议加上此句，将RESET拉高。如仍不可以，则触摸屏硬件可能损坏
+    //gpiox_set_ppOutput(5, 1); // 如电容触摸屏不能正常初始化，加上此句，将RESET拉高。
     //vTaskDelay(200 / portTICK_PERIOD_MS);
     // 配置I2C0-主机模式，100K，指定 SCL-32，SDA-33
     esp_err_t err = i2c_master_init(I2C_NUM_0, 100000, GPIO_NUM_32, GPIO_NUM_33);

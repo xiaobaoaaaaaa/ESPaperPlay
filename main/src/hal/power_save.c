@@ -26,6 +26,7 @@ esp_timer_handle_t inactivity_timer;
 static bool power_save_enabled = true;
 static int power_save_min = 3;
 
+// 无操作计时器回调函数，每分钟触发一次
 void inactivity_timer_callback(void* arg) 
 {
     no_activity_minutes++;
@@ -36,6 +37,7 @@ void reset_inactivity_timer()
     no_activity_minutes = 0;
 }
 
+// 启动无操作计时器
 void start_inactivity_timer() 
 {
     const esp_timer_create_args_t timer_args = {
@@ -48,11 +50,12 @@ void start_inactivity_timer()
 
 int time_correction_count = 0;
 bool wifi_auto_disabled = false; // 标记自动睡眠程序是否关闭了WiFi
+// 睡眠--唤醒逻辑
 void sleep_wakeup()
 {
     ESP_LOGI(TAG, "Entering sleep mode");
     time_correction_count++;
-    set_var_is_power_save(true);
+    set_var_is_power_save(true); // 通知UI进入了睡眠状态
     
     // 关闭wifi
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
@@ -65,9 +68,11 @@ void sleep_wakeup()
         set_wifi_on_off(false);
     }
     
+    // 停止LVGL刷新事件
     xEventGroupClearBits(lvgl_flush_event_group, BIT0);
     vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保WiFi断开
     
+    // 处理用户在即将进入睡眠时触摸的情况
     if (no_activity_minutes < power_save_min) 
     {
         ESP_LOGW(TAG, "Skipping sleep due to recent activity");
@@ -87,13 +92,14 @@ void sleep_wakeup()
     
     esp_light_sleep_start();
 
+    // 此处从睡眠中唤醒
     ESP_LOGI(TAG, "Woke up from sleep mode");
     xEventGroupSetBits(lvgl_flush_event_group, BIT0);
     gpio_wakeup_disable(GPIO_NUM_4);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    if (cause == ESP_SLEEP_WAKEUP_GPIO) 
+    if (cause == ESP_SLEEP_WAKEUP_GPIO) // 由触摸或者按键唤醒
     {
         ESP_LOGI(TAG, "Woken up by GPIO interrupt");
         set_var_is_power_save(false);
@@ -108,7 +114,7 @@ void sleep_wakeup()
         }
         reset_inactivity_timer();
     } 
-    else if (cause == ESP_SLEEP_WAKEUP_TIMER) 
+    else if (cause == ESP_SLEEP_WAKEUP_TIMER) // 由定时器唤醒，刷新时间然后继续睡眠
     {
         ESP_LOGI(TAG, "Woken up by timer");
         vTaskDelay(pdMS_TO_TICKS(1000)); // 等待1秒，确保系统稳定
@@ -118,6 +124,7 @@ void sleep_wakeup()
         ESP_LOGI(TAG, "Woken up by unknown cause: %d", cause); // Fixed spelling
     }
 
+    // 睡眠超过一定时间后进行时间校正
     if (time_correction_count >= 60) 
     {
         time_correction_count = 0;
@@ -127,6 +134,7 @@ void sleep_wakeup()
         esp_wifi_connect();
         set_wifi_on_off(true);
         
+        // 等待WIFI连接成功
         int retry_count = 0;
         bits = xEventGroupGetBits(s_wifi_event_group);
         while (!(bits & BIT0)) 
@@ -134,7 +142,7 @@ void sleep_wakeup()
             if (retry_count++ > 10) 
             {
                 ESP_LOGE(TAG, "Time sync failed: network error");
-                time_correction_count = 30;  // 将同步间隔缩短为半小时
+                time_correction_count = 30;  // 如果同步失败，将下一次同步间隔缩短为半小时
                 return;
             }
             ESP_LOGI(TAG, "Waiting for WiFi connection...");
@@ -172,14 +180,14 @@ void power_save(void *param)
         time(&now);
         localtime_r(&now, &timeinfo);
         
-        // 计算距下一分钟的秒数
+        // 计算距下一分钟的秒数，并设置定时唤醒
         int seconds_to_next_minute = 60 - timeinfo.tm_sec;
         esp_sleep_enable_timer_wakeup(1000000 * seconds_to_next_minute);
 
         xEventGroupWaitBits(pwr_save_event_group, POWER_SAVE_BIT, 
                            pdFALSE, pdFALSE, portMAX_DELAY);
         
-        // 无操作指定分钟后激活睡眠
+        // 无操作power_save_min分钟后激活睡眠
         if (no_activity_minutes >= power_save_min) 
         {
             ESP_LOGI(TAG, "No activity for %d minutes, entering sleep", power_save_min);
@@ -194,8 +202,10 @@ void power_save(void *param)
     }
 }
 
+// 初始化浅睡眠功能
 void power_save_init(void)
 {
+    // 从配置中获取睡眠设置
     const system_config_t *cfg = config_get();
     power_save_enabled = cfg->power_save_enabled;
     
