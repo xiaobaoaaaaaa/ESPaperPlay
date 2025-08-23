@@ -164,32 +164,42 @@ enum ScreensEnum {
 };
 
 void create_screen_main();
+void delete_screen_main();
 void tick_screen_main();
 
 void create_screen_menu();
+void delete_screen_menu();
 void tick_screen_menu();
 
 void create_screen_settings();
+void delete_screen_settings();
 void tick_screen_settings();
 
 void create_screen_wifi_setings();
+void delete_screen_wifi_setings();
 void tick_screen_wifi_setings();
 
 void create_screen_sleep_settings();
+void delete_screen_sleep_settings();
 void tick_screen_sleep_settings();
 
 void create_screen_weather_settings();
+void delete_screen_weather_settings();
 void tick_screen_weather_settings();
 
 void create_screen_weather();
+void delete_screen_weather();
 void tick_screen_weather();
 
 void create_screen_date_and_clock();
+void delete_screen_date_and_clock();
 void tick_screen_date_and_clock();
 
 void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex);
 void tick_user_widget_state_bar(void *flowState, int startWidgetIndex);
 
+void create_screen_by_id(enum ScreensEnum screenId);
+void delete_screen_by_id(enum ScreensEnum screenId);
 void tick_screen_by_id(enum ScreensEnum screenId);
 void tick_screen(int screen_index);
 

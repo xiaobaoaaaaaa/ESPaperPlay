@@ -446,6 +446,20 @@ void create_screen_main() {
     tick_screen_main();
 }
 
+void delete_screen_main() {
+    lv_obj_delete(objects.main);
+    objects.main = 0;
+    objects.current_time = 0;
+    objects.current_weekday = 0;
+    objects.current_date = 0;
+    objects.obj11 = 0;
+    objects.obj12 = 0;
+    objects.state_wifi_main = 0;
+    objects.power_save = 0;
+    objects.yiyan = 0;
+    deletePageFlowState(0);
+}
+
 void tick_screen_main() {
     void *flowState = getFlowState(0, 0);
     (void)flowState;
@@ -570,7 +584,25 @@ void create_screen_menu() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_MENU - 1);
+    
     tick_screen_menu();
+}
+
+void delete_screen_menu() {
+    lv_obj_delete(objects.menu);
+    objects.menu = 0;
+    objects.obj0 = 0;
+    objects.label_menu = 0;
+    objects.img_settings = 0;
+    objects.label_settings = 0;
+    objects.img_weather = 0;
+    objects.label_weather = 0;
+    objects.img_clock = 0;
+    objects.label_clock = 0;
+    objects.img_smart_home = 0;
+    objects.label_smart_home = 0;
+    deletePageFlowState(1);
 }
 
 void tick_screen_menu() {
@@ -734,7 +766,21 @@ void create_screen_settings() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_SETTINGS - 1);
+    
     tick_screen_settings();
+}
+
+void delete_screen_settings() {
+    lv_obj_delete(objects.settings);
+    objects.settings = 0;
+    objects.obj1 = 0;
+    objects.label_setings = 0;
+    objects.wlan_settings = 0;
+    objects.switch_wlan = 0;
+    objects.sleep_settings_page = 0;
+    objects.weather_settings_page = 0;
+    deletePageFlowState(2);
 }
 
 void tick_screen_settings() {
@@ -1036,7 +1082,31 @@ void create_screen_wifi_setings() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_WIFI_SETINGS - 1);
+    
     tick_screen_wifi_setings();
+}
+
+void delete_screen_wifi_setings() {
+    lv_obj_delete(objects.wifi_setings);
+    objects.wifi_setings = 0;
+    objects.ssid = 0;
+    objects.obj13 = 0;
+    objects.rssi = 0;
+    objects.obj14 = 0;
+    objects.ip = 0;
+    objects.obj15 = 0;
+    objects.mac = 0;
+    objects.obj16 = 0;
+    objects.primary = 0;
+    objects.obj17 = 0;
+    objects.auth_mode = 0;
+    objects.obj18 = 0;
+    objects.bandwidth = 0;
+    objects.obj6 = 0;
+    objects.message_reconnect = 0;
+    objects.obj19 = 0;
+    deletePageFlowState(3);
 }
 
 void tick_screen_wifi_setings() {
@@ -1245,7 +1315,20 @@ void create_screen_sleep_settings() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_SLEEP_SETTINGS - 1);
+    
     tick_screen_sleep_settings();
+}
+
+void delete_screen_sleep_settings() {
+    lv_obj_delete(objects.sleep_settings);
+    objects.sleep_settings = 0;
+    objects.obj2 = 0;
+    objects.sleep_settings_con = 0;
+    objects.sleep_settings_sw = 0;
+    objects.sleep_settings_con_1 = 0;
+    objects.sleep_settings_min = 0;
+    deletePageFlowState(4);
 }
 
 void tick_screen_sleep_settings() {
@@ -1530,7 +1613,30 @@ void create_screen_weather_settings() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_WEATHER_SETTINGS - 1);
+    
     tick_screen_weather_settings();
+}
+
+void delete_screen_weather_settings() {
+    lv_obj_delete(objects.weather_settings);
+    objects.weather_settings = 0;
+    objects.obj3 = 0;
+    objects.sleep_settings_con_2 = 0;
+    objects.obj20 = 0;
+    objects.obj23 = 0;
+    objects.sleep_settings_con_3 = 0;
+    objects.obj21 = 0;
+    objects.weather_api_key = 0;
+    objects.sleep_settings_con_4 = 0;
+    objects.obj22 = 0;
+    objects.weather_api_host = 0;
+    objects.panel_show_tcp_msg = 0;
+    objects.obj7 = 0;
+    objects.obj24 = 0;
+    objects.obj25 = 0;
+    objects.obj8 = 0;
+    deletePageFlowState(5);
 }
 
 void tick_screen_weather_settings() {
@@ -2074,7 +2180,60 @@ void create_screen_weather() {
         }
     }
     
+    eez_flow_delete_screen_on_unload(SCREEN_ID_WEATHER - 1);
+    
     tick_screen_weather();
+}
+
+void delete_screen_weather() {
+    lv_obj_delete(objects.weather);
+    objects.weather = 0;
+    objects.obj27 = 0;
+    objects.obj28 = 0;
+    objects.weather_icon = 0;
+    objects.obj29 = 0;
+    objects.obj26 = 0;
+    objects.obj30 = 0;
+    objects.obj31 = 0;
+    objects.obj32 = 0;
+    objects.obj33 = 0;
+    objects.obj34 = 0;
+    objects.obj35 = 0;
+    objects.forecast_weather = 0;
+    objects.chart_weather_forecast_temp = 0;
+    objects.obj36 = 0;
+    objects.obj37 = 0;
+    objects.obj38 = 0;
+    objects.obj39 = 0;
+    objects.obj40 = 0;
+    objects.obj41 = 0;
+    objects.obj42 = 0;
+    objects.obj43 = 0;
+    objects.obj44 = 0;
+    objects.obj45 = 0;
+    objects.obj46 = 0;
+    objects.obj47 = 0;
+    objects.obj48 = 0;
+    objects.obj49 = 0;
+    objects.obj50 = 0;
+    objects.obj51 = 0;
+    objects.obj52 = 0;
+    objects.obj53 = 0;
+    objects.obj54 = 0;
+    objects.obj55 = 0;
+    objects.obj56 = 0;
+    objects.obj57 = 0;
+    objects.obj58 = 0;
+    objects.obj59 = 0;
+    objects.obj60 = 0;
+    objects.obj61 = 0;
+    objects.obj62 = 0;
+    objects.obj63 = 0;
+    objects.obj64 = 0;
+    objects.obj4 = 0;
+    objects.obj65 = 0;
+    objects.panel_wait = 0;
+    deletePageFlowState(6);
 }
 
 void tick_screen_weather() {
@@ -2588,6 +2747,21 @@ void create_screen_date_and_clock() {
     tick_screen_date_and_clock();
 }
 
+void delete_screen_date_and_clock() {
+    lv_obj_delete(objects.date_and_clock);
+    objects.date_and_clock = 0;
+    objects.tabview_date_and_clock = 0;
+    objects.calendar = 0;
+    objects.obj9 = 0;
+    objects.label_button_start = 0;
+    objects.obj10 = 0;
+    objects.timer_min = 0;
+    objects.timer_hour = 0;
+    objects.obj5 = 0;
+    objects.clock_keyboard = 0;
+    deletePageFlowState(7);
+}
+
 void tick_screen_date_and_clock() {
     void *flowState = getFlowState(0, 7);
     (void)flowState;
@@ -2644,6 +2818,42 @@ static const char *object_names[] = { "main", "menu", "settings", "wifi_setings"
 static const char *style_names[] = { "epaper_button" };
 
 
+typedef void (*create_screen_func_t)();
+create_screen_func_t create_screen_funcs[] = {
+    create_screen_main,
+    create_screen_menu,
+    create_screen_settings,
+    create_screen_wifi_setings,
+    create_screen_sleep_settings,
+    create_screen_weather_settings,
+    create_screen_weather,
+    create_screen_date_and_clock,
+};
+void create_screen(int screen_index) {
+    create_screen_funcs[screen_index]();
+}
+void create_screen_by_id(enum ScreensEnum screenId) {
+    create_screen_funcs[screenId - 1]();
+}
+
+typedef void (*delete_screen_func_t)();
+delete_screen_func_t delete_screen_funcs[] = {
+    delete_screen_main,
+    delete_screen_menu,
+    delete_screen_settings,
+    delete_screen_wifi_setings,
+    delete_screen_sleep_settings,
+    delete_screen_weather_settings,
+    delete_screen_weather,
+    delete_screen_date_and_clock,
+};
+void delete_screen(int screen_index) {
+    delete_screen_funcs[screen_index]();
+}
+void delete_screen_by_id(enum ScreensEnum screenId) {
+    delete_screen_funcs[screenId - 1]();
+}
+
 typedef void (*tick_screen_func_t)();
 tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_main,
@@ -2669,16 +2879,12 @@ void create_screens() {
     eez_flow_init_object_names(object_names, sizeof(object_names) / sizeof(const char *));
     eez_flow_init_style_names(style_names, sizeof(style_names) / sizeof(const char *));
     
+    eez_flow_set_create_screen_func(create_screen);
+    eez_flow_set_delete_screen_func(delete_screen);
+    
     lv_disp_t *dispp = lv_disp_get_default();
     lv_theme_t *theme = lv_theme_default_init(dispp, lv_palette_main(LV_PALETTE_BLUE), lv_palette_main(LV_PALETTE_RED), false, LV_FONT_DEFAULT);
     lv_disp_set_theme(dispp, theme);
     
     create_screen_main();
-    create_screen_menu();
-    create_screen_settings();
-    create_screen_wifi_setings();
-    create_screen_sleep_settings();
-    create_screen_weather_settings();
-    create_screen_weather();
-    create_screen_date_and_clock();
 }

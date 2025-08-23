@@ -289,7 +289,6 @@ void action_set_power_save_min(lv_event_t *e)
 }
 
 // 天气相关全局变量
-lv_obj_t *chart = NULL;
 static lv_chart_series_t *ser_max = NULL;
 static lv_chart_series_t *ser_min = NULL;
 
@@ -302,7 +301,7 @@ static SemaphoreHandle_t weather_mutex = NULL;
  */
 static void update_weather_ui(void *param) {
     forecast_weather_t *forecast = (forecast_weather_t *)param;
-    if (!forecast || !chart || !lv_obj_is_valid(chart)) return;
+    if (!forecast || !objects.chart_weather_forecast_temp || !lv_obj_is_valid(objects.chart_weather_forecast_temp)) return;
 
     int temp_max = -999;
     int temp_min = 999;
@@ -354,8 +353,8 @@ static void update_weather_ui(void *param) {
 
     ESP_LOGI("task_get_weather", "Max temperature: %d, Min temperature: %d", temp_max, temp_min);
     
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, temp_min, temp_max);
-    lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, temp_min, temp_max);
+    lv_chart_set_range(objects.chart_weather_forecast_temp, LV_CHART_AXIS_PRIMARY_Y, temp_min, temp_max);
+    lv_chart_set_range(objects.chart_weather_forecast_temp, LV_CHART_AXIS_SECONDARY_Y, temp_min, temp_max);
     ESP_LOGI("task_get_weather", "Weather UI updated");
 }
 
@@ -426,15 +425,16 @@ static void task_get_weather(void *param) {
     vTaskDelete(NULL);
 }
 
+bool is_chart_initialized = false;
 /**
  * @brief 获取天气信息并更新图表
  * @param e LVGL事件指针
  */
 void action_get_weather(lv_event_t *e) 
 {
-    if(chart == NULL)
+    if(!is_chart_initialized)
     {
-        chart = objects.chart_weather_forecast_temp;
+        lv_obj_t *chart = objects.chart_weather_forecast_temp;
         if(chart && lv_obj_is_valid(chart))
         {
             ESP_LOGI("action_get_weather", "Chart object initialized");
