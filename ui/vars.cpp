@@ -420,3 +420,13 @@ extern "C" bool get_var_timer_paused() {
 extern "C" void set_var_timer_paused(bool value) {
     timer_paused = value;
 }
+
+int32_t max_partial_refresh_count;
+
+extern "C" int32_t get_var_max_partial_refresh_count() {
+    return max_partial_refresh_count;
+}
+
+extern "C" void set_var_max_partial_refresh_count(int32_t value) {
+    max_partial_refresh_count = value;
+}

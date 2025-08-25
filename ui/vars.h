@@ -104,6 +104,8 @@ extern bool get_var_is_timer_started();
 extern void set_var_is_timer_started(bool value);
 extern bool get_var_timer_paused();
 extern void set_var_timer_paused(bool value);
+extern int32_t get_var_max_partial_refresh_count();
+extern void set_var_max_partial_refresh_count(int32_t value);
 
 
 #ifdef __cplusplus

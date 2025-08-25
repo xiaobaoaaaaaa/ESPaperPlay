@@ -761,3 +761,47 @@ void action_timer_stop(lv_event_t *e)
     lv_label_set_text(objects.label_button_start, "开始");
     ESP_LOGI("action_timer_stop", "Timer stopped and reset to 00:00:00");
 }
+
+/**
+ * @brief 设置最大连续局刷计数
+ * @param e LVGL事件指针
+ */
+void action_set_partial_refresh_count(lv_event_t *e) 
+{
+    system_config_t *config = config_get_mutable();
+    lv_obj_t *dropdown = lv_event_get_target(e);
+    switch (lv_dropdown_get_selected(dropdown))
+    {
+        case 0:
+            config->max_partial_refresh_count = 10;
+            break;
+
+        case 1:
+            config->max_partial_refresh_count = 30;
+            break;
+
+        case 2:
+            config->max_partial_refresh_count = 50;
+            break;
+
+        case 3:
+            config->max_partial_refresh_count = 100;
+            break;
+        
+        default:
+            config->max_partial_refresh_count = 30;
+            break;
+    }
+    ESP_LOGI("action_set_partial_refresh_count", "Set max partial refresh count: %d", config->max_partial_refresh_count);
+    config_save();
+}
+
+/**
+ * @brief 获取当前最大连续局刷计数并更新变量
+ * @param e LVGL事件指针
+ */
+void action_get_partial_refresh_count(lv_event_t *e) 
+{
+    const system_config_t *cfg = config_get();
+    set_var_max_partial_refresh_count(cfg->max_partial_refresh_count);
+}

@@ -26,6 +26,8 @@ extern void action_timer_get_setted(lv_event_t * e);
 extern void action_timer_stop(lv_event_t * e);
 extern void action_update_textarea(lv_event_t * e);
 extern void action_timer_start_pause(lv_event_t * e);
+extern void action_set_partial_refresh_count(lv_event_t * e);
+extern void action_get_partial_refresh_count(lv_event_t * e);
 
 
 #ifdef __cplusplus
