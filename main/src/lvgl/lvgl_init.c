@@ -12,6 +12,7 @@
 #include "lv_demos.h"
 #include "lvgl_init.h"
 
+#include "config_manager.h"
 #include "power_save.h"
 #include "touch.h"
 #include "ui.h"
@@ -19,7 +20,6 @@
 #define TAG "lvgl_init"
 
 #define EXAMPLE_LVGL_TICK_PERIOD_MS    50
-#define MAX_PARTIAL_REFRESH_COUNT 30
 
 #ifndef MY_DISP_HOR_RES
     #define MY_DISP_HOR_RES    200
@@ -31,9 +31,10 @@
 
 #define BYTE_PER_PIXEL (LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_I1))
 
+static lv_indev_t *indev_touchpad = NULL;
+static void *buf1 = NULL, *buf2 = NULL;
+static int max_partial_refresh_count = 30; // 最大局部刷新次数，超过则触发全刷, 默认为30次
 lv_display_t *disp = NULL;
-lv_indev_t *indev_touchpad = NULL;
-void *buf1 = NULL, *buf2 = NULL;
 EventGroupHandle_t lvgl_flush_event_group = NULL; // 用于阻塞LVGL的刷新
 
 int fast_refresh_count = 0; // 快速刷新计数器， 超过 MAX_PARTIAL_REFRESH_COUNT 则触发全刷
@@ -46,23 +47,30 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
     uint8_t *buf = px_map + 8; // px_map的前8字节是LVGL固定头部，不应被渲染
 
     uint8_t inverted[size]; // 屏幕驱动芯片的红色寄存器与黑白寄存器写入相反数据（黑白双色屏幕）
-    for (unsigned i = 0; i < size; i++) {
+    for (unsigned i = 0; i < size; i++) 
+    {
         inverted[i] = ~buf[i];
     }
 
+    // 打开屏幕显示
     esp_lcd_panel_disp_on_off(panel_handle, true);
 
-    if (fast_refresh_count < MAX_PARTIAL_REFRESH_COUNT) {
+    // 根据快速刷新计数器决定是否进行全屏刷新
+    if (fast_refresh_count < max_partial_refresh_count) 
+    {
         epaper_panel_set_refresh_mode(panel_handle, true);
         fast_refresh_count++;
-    } else {
+    } 
+    else 
+    {
         epaper_panel_set_refresh_mode(panel_handle, false);
         fast_refresh_count = 0;
     }
 
     ESP_LOGI(TAG, "Flushing area: x1=%d, y1=%d, x2=%d, y2=%d", 
-             area->x1, area->y1, area->x2, area->y2);  // Fixed format specifiers
+             area->x1, area->y1, area->x2, area->y2);
 
+    // 分别写入黑白与红色数据
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
     esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, buf);
 
@@ -70,6 +78,8 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
     esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, inverted);
 
     epaper_panel_refresh_screen(panel_handle);
+
+    // 关闭屏幕显示以节省功耗
     esp_lcd_panel_disp_on_off(panel_handle, false);
 }
 
@@ -78,7 +88,8 @@ void lv_port_disp_init(void)
     ESP_LOGI(TAG, "Initializing LVGL display");
 
     disp = lv_display_create(MY_DISP_HOR_RES, MY_DISP_VER_RES);
-    if (disp == NULL) {
+    if (disp == NULL) 
+    {
         ESP_LOGE(TAG, "Display creation failed");
         return;
     }
@@ -87,7 +98,8 @@ void lv_port_disp_init(void)
     size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES / 8 + 8; // 屏幕大小除以8以保存全部像素，额外申请8字节用于lvgl添加的固定头部
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
-    if (!buf1) {
+    if (!buf1) 
+    {
         ESP_LOGE(TAG, "Display buffer allocation failed");
         return;
     }
@@ -107,7 +119,8 @@ void lvgl_timer_task(void *param)
         EventBits_t bits = xEventGroupWaitBits(lvgl_flush_event_group, BIT0, 
                          pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
 
-        if (bits & BIT0) {
+        if (bits & BIT0) 
+        {
             lv_timer_handler();
             ui_tick();
         }
@@ -174,7 +187,8 @@ static void touchpad_read(lv_indev_t * indev_drv, lv_indev_data_t * data)
 void lv_port_indev_init(void)
 {
     g_touch_data.mutex = xSemaphoreCreateMutex();
-    if (g_touch_data.mutex == NULL) {
+    if (g_touch_data.mutex == NULL) 
+    {
         ESP_LOGE(TAG, "Touch mutex creation failed");
         return;
     }
@@ -191,6 +205,17 @@ void lvgl_init_epaper_display(void)
 {
     lvgl_flush_event_group = xEventGroupCreate();
     xEventGroupSetBits(lvgl_flush_event_group, BIT0);
+
+    // 获取配置参数
+    const system_config_t *config = config_get();
+    if (config != NULL) 
+    {
+        max_partial_refresh_count = config->max_partial_refresh_count;
+    } 
+    else 
+    {
+        ESP_LOGW(TAG, "Failed to get system configuration, using default values");
+    }
 
     epaper_init();
     lv_init();
