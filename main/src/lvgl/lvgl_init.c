@@ -281,8 +281,8 @@ void lv_port_indev_init(void)
         return;
     }
 
-    // 创建触摸读取任务，绑定到核心 0
-    xTaskCreatePinnedToCore(touch_read_task, "touch_task", 2048, NULL, 5, NULL, 0);
+    // 创建触摸读取任务
+    xTaskCreate(touch_read_task, "touch_task", 2048, NULL, 5, NULL);
 
     // 创建输入设备对象
     indev_touchpad = lv_indev_create();
@@ -335,6 +335,6 @@ void lvgl_init_epaper_display(void)
 
     // 初始化 UI
     ui_init();
-    // 创建 LVGL 定时器任务，绑定到核心 1
-    xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_task", 8192, NULL, 10, NULL, 1);
+    // 创建 LVGL 定时器任务
+    xTaskCreate(lvgl_timer_task, "lvgl_task", 8192, NULL, 10, NULL);
 }
