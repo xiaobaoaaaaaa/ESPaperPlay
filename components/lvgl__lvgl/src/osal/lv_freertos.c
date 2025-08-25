@@ -67,15 +67,15 @@ static void prvTestAndDecrement(lv_thread_sync_t * pxCond,
  **********************/
 
 #ifdef ESP_PLATFORM
-    #define _enter_critical()   taskENTER_CRITICAL(&critSectionMux);
-    #define _exit_critical()    taskEXIT_CRITICAL(&critSectionMux);
-    #define _enter_critical_isr() taskENTER_CRITICAL_FROM_ISR();
-    #define _exit_critical_isr(x) taskEXIT_CRITICAL_FROM_ISR(x);
+    #define _enter_critical()   portENTER_CRITICAL(&critSectionMux)
+    #define _exit_critical()    portEXIT_CRITICAL(&critSectionMux)
+    #define _enter_critical_isr() portENTER_CRITICAL_ISR(&critSectionMux)
+    #define _exit_critical_isr() portEXIT_CRITICAL_ISR(&critSectionMux)
 #else
-    #define _enter_critical()   taskENTER_CRITICAL();
-    #define _exit_critical()    taskEXIT_CRITICAL();
-    #define _enter_critical_isr() taskENTER_CRITICAL_FROM_ISR();
-    #define _exit_critical_isr(x) taskEXIT_CRITICAL_FROM_ISR(x);
+#define _enter_critical()   taskENTER_CRITICAL()
+#define _exit_critical()    taskEXIT_CRITICAL()
+#define _enter_critical_isr() taskENTER_CRITICAL_FROM_ISR()
+#define _exit_critical_isr(x) taskEXIT_CRITICAL_FROM_ISR(x)
 #endif
 
 /**********************
@@ -351,7 +351,7 @@ lv_result_t lv_thread_sync_signal_isr(lv_thread_sync_t * pxCond)
     prvCheckCondInitIsr(pxCond);
 
 #if LV_USE_FREERTOS_TASK_NOTIFY
-    uint32_t mask = _enter_critical_isr();
+    _enter_critical_isr();
     TaskHandle_t xTaskToNotify = pxCond->xTaskToNotify;
     pxCond->xTaskToNotify = NULL;
     if(xTaskToNotify == NULL) {
@@ -359,7 +359,7 @@ lv_result_t lv_thread_sync_signal_isr(lv_thread_sync_t * pxCond)
         pxCond->xSyncSignal = pdTRUE;
     }
     /* If a task is already waiting, there is no need to set the sync signal */
-    _exit_critical_isr(mask);
+    _exit_critical_isr();
 
     if(xTaskToNotify != NULL) {
         /* There is a task waiting. Send a notification to it */
@@ -524,7 +524,7 @@ static void prvCheckCondInitIsr(lv_thread_sync_t * pxCond)
     if(pxCond->xIsInitialized == pdFALSE) {
         /* Cond initialization must be in a critical section to prevent two
          * threads from initializing it at the same time. */
-        uint32_t mask = _enter_critical_isr();
+        _enter_critical_isr();
 
         /* Check again that the condition is still uninitialized, i.e. it wasn't
          * initialized while this function was waiting to enter the critical
@@ -534,7 +534,7 @@ static void prvCheckCondInitIsr(lv_thread_sync_t * pxCond)
         }
 
         /* Exit the critical section. */
-        _exit_critical_isr(mask);
+        _exit_critical_isr();
     }
 }
 
