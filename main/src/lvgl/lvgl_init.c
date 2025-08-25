@@ -281,8 +281,8 @@ void lv_port_indev_init(void)
         return;
     }
 
-    // 创建触摸读取任务
-    xTaskCreate(touch_read_task, "touch_task", 2048, NULL, 5, NULL);
+    // 创建触摸读取任务，绑定到核心0
+    xTaskCreatePinnedToCore(touch_read_task, "touch_task", 2048, NULL, 5, NULL, 0);
 
     // 创建输入设备对象
     indev_touchpad = lv_indev_create();
