@@ -394,6 +394,28 @@ static void event_handler_cb_date_and_clock_timer_hour(lv_event_t *e) {
     }
 }
 
+static void event_handler_cb_message_page_message_page(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_CLICKED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 1, 0, e);
+    }
+}
+
+static void event_handler_cb_state_bar_obj0(lv_event_t *e) {
+    lv_event_code_t event = lv_event_get_code(e);
+    void *flowState = lv_event_get_user_data(e);
+    (void)flowState;
+    
+    if (event == LV_EVENT_CLICKED) {
+        e->user_data = (void *)0;
+        flowPropagateValueLVGLEvent(flowState, 16, 0, e);
+    }
+}
+
 void create_screen_main() {
     void *flowState = getFlowState(0, 0);
     (void)flowState;
@@ -536,7 +558,7 @@ void create_screen_menu() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 10);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 11);
         }
         {
             // label_menu
@@ -649,7 +671,7 @@ void delete_screen_menu() {
 void tick_screen_menu() {
     void *flowState = getFlowState(0, 1);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 10);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 11);
 }
 
 void create_screen_settings() {
@@ -661,6 +683,7 @@ void create_screen_settings() {
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_settings_settings, LV_EVENT_ALL, flowState);
     lv_obj_set_scroll_dir(obj, LV_DIR_VER);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -674,7 +697,7 @@ void create_screen_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 14);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 16);
         }
         {
             // label_setings
@@ -867,7 +890,7 @@ void delete_screen_settings() {
 void tick_screen_settings() {
     void *flowState = getFlowState(0, 2);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 14);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 16);
 }
 
 void create_screen_wifi_setings() {
@@ -878,6 +901,7 @@ void create_screen_wifi_setings() {
     lv_obj_set_pos(obj, 0, 0);
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_wifi_setings_wifi_setings, LV_EVENT_ALL, flowState);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -1276,6 +1300,7 @@ void create_screen_sleep_settings() {
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_sleep_settings_sleep_settings, LV_EVENT_ALL, flowState);
     lv_obj_set_scroll_dir(obj, LV_DIR_VER);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -1289,7 +1314,7 @@ void create_screen_sleep_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 18);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 21);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -1415,7 +1440,7 @@ void delete_screen_sleep_settings() {
 void tick_screen_sleep_settings() {
     void *flowState = getFlowState(0, 4);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 18);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 21);
 }
 
 void create_screen_display_settings() {
@@ -1441,7 +1466,7 @@ void create_screen_display_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 22);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 26);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -1512,7 +1537,7 @@ void delete_screen_display_settings() {
 void tick_screen_display_settings() {
     void *flowState = getFlowState(0, 5);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 22);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 26);
 }
 
 void create_screen_weather_settings() {
@@ -1524,6 +1549,7 @@ void create_screen_weather_settings() {
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_weather_settings_weather_settings, LV_EVENT_ALL, flowState);
     lv_obj_set_scroll_dir(obj, LV_DIR_VER);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -1537,7 +1563,7 @@ void create_screen_weather_settings() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 26);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 0), 31);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -1820,7 +1846,7 @@ void delete_screen_weather_settings() {
 void tick_screen_weather_settings() {
     void *flowState = getFlowState(0, 6);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 0), 26);
+    tick_user_widget_state_bar(getFlowState(flowState, 0), 31);
     {
         const char *new_val = evalTextProperty(flowState, 6, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj25);
@@ -1877,6 +1903,7 @@ void create_screen_weather() {
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_weather_weather, LV_EVENT_ALL, flowState);
     lv_obj_set_scroll_dir(obj, LV_DIR_NONE);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -2324,7 +2351,7 @@ void create_screen_weather() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 53), 30);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 53), 36);
         }
         {
             lv_obj_t *obj = lv_label_create(parent_obj);
@@ -2759,7 +2786,7 @@ void tick_screen_weather() {
             tick_value_change_obj = NULL;
         }
     }
-    tick_user_widget_state_bar(getFlowState(flowState, 53), 30);
+    tick_user_widget_state_bar(getFlowState(flowState, 53), 36);
     {
         const char *new_val = evalTextProperty(flowState, 54, 3, "Failed to evaluate Text in Label widget");
         const char *cur_val = lv_label_get_text(objects.obj67);
@@ -2779,6 +2806,8 @@ void create_screen_date_and_clock() {
     lv_obj_set_pos(obj, 0, 0);
     lv_obj_set_size(obj, 200, 200);
     lv_obj_add_event_cb(obj, event_handler_cb_date_and_clock_date_and_clock, LV_EVENT_ALL, flowState);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
     {
         lv_obj_t *parent_obj = obj;
         {
@@ -2912,7 +2941,7 @@ void create_screen_date_and_clock() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            create_user_widget_state_bar(obj, getFlowState(flowState, 13), 34);
+            create_user_widget_state_bar(obj, getFlowState(flowState, 13), 41);
         }
         {
             // clock_keyboard
@@ -2947,7 +2976,39 @@ void delete_screen_date_and_clock() {
 void tick_screen_date_and_clock() {
     void *flowState = getFlowState(0, 8);
     (void)flowState;
-    tick_user_widget_state_bar(getFlowState(flowState, 13), 34);
+    tick_user_widget_state_bar(getFlowState(flowState, 13), 41);
+}
+
+void create_screen_message_page() {
+    void *flowState = getFlowState(0, 9);
+    (void)flowState;
+    lv_obj_t *obj = lv_obj_create(0);
+    objects.message_page = obj;
+    lv_obj_set_pos(obj, 0, 0);
+    lv_obj_set_size(obj, 200, 200);
+    lv_obj_add_event_cb(obj, event_handler_cb_message_page_message_page, LV_EVENT_ALL, flowState);
+    {
+        lv_obj_t *parent_obj = obj;
+        {
+            lv_obj_t *obj = lv_label_create(parent_obj);
+            lv_obj_set_pos(obj, 17, 92);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_label_set_text(obj, "This is a message page");
+        }
+    }
+    
+    tick_screen_message_page();
+}
+
+void delete_screen_message_page() {
+    lv_obj_delete(objects.message_page);
+    objects.message_page = 0;
+    deletePageFlowState(9);
+}
+
+void tick_screen_message_page() {
+    void *flowState = getFlowState(0, 9);
+    (void)flowState;
 }
 
 void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex) {
@@ -2959,7 +3020,7 @@ void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int sta
         {
             // state_time
             lv_obj_t *obj = lv_label_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
+            ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
             lv_obj_set_pos(obj, 0, 0);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_obj_set_style_align(obj, LV_ALIGN_LEFT_MID, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -2968,7 +3029,7 @@ void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int sta
         {
             // state_wifi
             lv_obj_t *obj = lv_image_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 1] = obj;
+            ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
             lv_obj_set_pos(obj, 0, 0);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_image_set_src(obj, &img_wifi_off);
@@ -2977,11 +3038,26 @@ void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int sta
         {
             // power_save
             lv_obj_t *obj = lv_image_create(parent_obj);
-            ((lv_obj_t **)&objects)[startWidgetIndex + 2] = obj;
+            ((lv_obj_t **)&objects)[startWidgetIndex + 3] = obj;
             lv_obj_set_pos(obj, 172, 3);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_image_set_src(obj, &img_power_save);
             lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        }
+        {
+            lv_obj_t *obj = lv_obj_create(parent_obj);
+            ((lv_obj_t **)&objects)[startWidgetIndex + 0] = obj;
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, 200, 20);
+            lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_add_event_cb(obj, event_handler_cb_state_bar_obj0, LV_EVENT_ALL, flowState);
+            lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
         }
     }
 }
@@ -2995,8 +3071,8 @@ void tick_user_widget_state_bar(void *flowState, int startWidgetIndex) {
 extern void add_style(lv_obj_t *obj, int32_t styleIndex);
 extern void remove_style(lv_obj_t *obj, int32_t styleIndex);
 
-static const char *screen_names[] = { "Main", "menu", "settings", "wifi_setings", "sleep_settings", "display_settings", "weather_settings", "weather", "date_and_clock" };
-static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "display_settings", "weather_settings", "weather", "date_and_clock", "obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "obj5", "obj5__state_time", "obj5__state_wifi", "obj5__power_save", "obj6", "obj6__state_time", "obj6__state_wifi", "obj6__power_save", "img_settings", "img_weather", "img_clock", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "weather_settings_page_1", "obj7", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "dropdown_partial_refresh_count", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj8", "obj9", "obj10", "obj11", "timer_min", "timer_hour", "current_time", "current_weekday", "current_date", "obj12", "obj13", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj14", "rssi", "obj15", "ip", "obj16", "mac", "obj17", "primary", "obj18", "auth_mode", "obj19", "bandwidth", "obj20", "sleep_settings_con", "sleep_settings_con_1", "obj21", "obj22", "obj23", "weather_api_key", "obj24", "weather_api_host", "panel_show_tcp_msg", "obj25", "obj26", "obj27", "weather_icon", "obj28", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62", "obj63", "obj64", "obj65", "obj66", "obj67", "tabview_date_and_clock", "calendar", "label_button_start", "clock_keyboard" };
+static const char *screen_names[] = { "Main", "menu", "settings", "wifi_setings", "sleep_settings", "display_settings", "weather_settings", "weather", "date_and_clock", "message_page" };
+static const char *object_names[] = { "main", "menu", "settings", "wifi_setings", "sleep_settings", "display_settings", "weather_settings", "weather", "date_and_clock", "message_page", "obj0", "obj0__obj0", "obj0__state_time", "obj0__state_wifi", "obj0__power_save", "obj1", "obj1__obj0", "obj1__state_time", "obj1__state_wifi", "obj1__power_save", "obj2", "obj2__obj0", "obj2__state_time", "obj2__state_wifi", "obj2__power_save", "obj3", "obj3__obj0", "obj3__state_time", "obj3__state_wifi", "obj3__power_save", "obj4", "obj4__obj0", "obj4__state_time", "obj4__state_wifi", "obj4__power_save", "obj5", "obj5__obj0", "obj5__state_time", "obj5__state_wifi", "obj5__power_save", "obj6", "obj6__obj0", "obj6__state_time", "obj6__state_wifi", "obj6__power_save", "img_settings", "img_weather", "img_clock", "wlan_settings", "switch_wlan", "sleep_settings_page", "weather_settings_page", "weather_settings_page_1", "obj7", "message_reconnect", "sleep_settings_sw", "sleep_settings_min", "dropdown_partial_refresh_count", "sleep_settings_con_2", "sleep_settings_con_3", "sleep_settings_con_4", "obj8", "obj9", "obj10", "obj11", "timer_min", "timer_hour", "current_time", "current_weekday", "current_date", "obj12", "obj13", "state_wifi_main", "power_save", "yiyan", "label_menu", "label_settings", "label_weather", "label_clock", "img_smart_home", "label_smart_home", "label_setings", "ssid", "obj14", "rssi", "obj15", "ip", "obj16", "mac", "obj17", "primary", "obj18", "auth_mode", "obj19", "bandwidth", "obj20", "sleep_settings_con", "sleep_settings_con_1", "obj21", "obj22", "obj23", "weather_api_key", "obj24", "weather_api_host", "panel_show_tcp_msg", "obj25", "obj26", "obj27", "weather_icon", "obj28", "forecast_weather", "chart_weather_forecast_temp", "panel_wait", "obj29", "obj30", "obj31", "obj32", "obj33", "obj34", "obj35", "obj36", "obj37", "obj38", "obj39", "obj40", "obj41", "obj42", "obj43", "obj44", "obj45", "obj46", "obj47", "obj48", "obj49", "obj50", "obj51", "obj52", "obj53", "obj54", "obj55", "obj56", "obj57", "obj58", "obj59", "obj60", "obj61", "obj62", "obj63", "obj64", "obj65", "obj66", "obj67", "tabview_date_and_clock", "calendar", "label_button_start", "clock_keyboard" };
 static const char *style_names[] = { "epaper_button" };
 
 
@@ -3011,6 +3087,7 @@ create_screen_func_t create_screen_funcs[] = {
     create_screen_weather_settings,
     create_screen_weather,
     create_screen_date_and_clock,
+    create_screen_message_page,
 };
 void create_screen(int screen_index) {
     create_screen_funcs[screen_index]();
@@ -3030,6 +3107,7 @@ delete_screen_func_t delete_screen_funcs[] = {
     delete_screen_weather_settings,
     delete_screen_weather,
     delete_screen_date_and_clock,
+    delete_screen_message_page,
 };
 void delete_screen(int screen_index) {
     delete_screen_funcs[screen_index]();
@@ -3049,6 +3127,7 @@ tick_screen_func_t tick_screen_funcs[] = {
     tick_screen_weather_settings,
     tick_screen_weather,
     tick_screen_date_and_clock,
+    tick_screen_message_page,
 };
 void tick_screen(int screen_index) {
     tick_screen_funcs[screen_index]();
@@ -3072,4 +3151,5 @@ void create_screens() {
     lv_disp_set_theme(dispp, theme);
     
     create_screen_main();
+    create_screen_message_page();
 }

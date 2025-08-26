@@ -17,31 +17,39 @@ typedef struct _objects_t {
     lv_obj_t *weather_settings;
     lv_obj_t *weather;
     lv_obj_t *date_and_clock;
+    lv_obj_t *message_page;
     lv_obj_t *obj0;
+    lv_obj_t *obj0__obj0;
     lv_obj_t *obj0__state_time;
     lv_obj_t *obj0__state_wifi;
     lv_obj_t *obj0__power_save;
     lv_obj_t *obj1;
+    lv_obj_t *obj1__obj0;
     lv_obj_t *obj1__state_time;
     lv_obj_t *obj1__state_wifi;
     lv_obj_t *obj1__power_save;
     lv_obj_t *obj2;
+    lv_obj_t *obj2__obj0;
     lv_obj_t *obj2__state_time;
     lv_obj_t *obj2__state_wifi;
     lv_obj_t *obj2__power_save;
     lv_obj_t *obj3;
+    lv_obj_t *obj3__obj0;
     lv_obj_t *obj3__state_time;
     lv_obj_t *obj3__state_wifi;
     lv_obj_t *obj3__power_save;
     lv_obj_t *obj4;
+    lv_obj_t *obj4__obj0;
     lv_obj_t *obj4__state_time;
     lv_obj_t *obj4__state_wifi;
     lv_obj_t *obj4__power_save;
     lv_obj_t *obj5;
+    lv_obj_t *obj5__obj0;
     lv_obj_t *obj5__state_time;
     lv_obj_t *obj5__state_wifi;
     lv_obj_t *obj5__power_save;
     lv_obj_t *obj6;
+    lv_obj_t *obj6__obj0;
     lv_obj_t *obj6__state_time;
     lv_obj_t *obj6__state_wifi;
     lv_obj_t *obj6__power_save;
@@ -170,6 +178,7 @@ enum ScreensEnum {
     SCREEN_ID_WEATHER_SETTINGS = 7,
     SCREEN_ID_WEATHER = 8,
     SCREEN_ID_DATE_AND_CLOCK = 9,
+    SCREEN_ID_MESSAGE_PAGE = 10,
 };
 
 void create_screen_main();
@@ -207,6 +216,10 @@ void tick_screen_weather();
 void create_screen_date_and_clock();
 void delete_screen_date_and_clock();
 void tick_screen_date_and_clock();
+
+void create_screen_message_page();
+void delete_screen_message_page();
+void tick_screen_message_page();
 
 void create_user_widget_state_bar(lv_obj_t *parent_obj, void *flowState, int startWidgetIndex);
 void tick_user_widget_state_bar(void *flowState, int startWidgetIndex);
