@@ -76,6 +76,9 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
         inverted[i] = ~buf[i]; // 对每个字节进行按位取反操作
     }
 
+    ESP_LOGI(TAG, "Flushing area: x1=%d, y1=%d, x2=%d, y2=%d", 
+        area->x1, area->y1, area->x2, area->y2);
+
     // 打开屏幕显示
     esp_lcd_panel_disp_on_off(panel_handle, true);
 
@@ -92,9 +95,6 @@ static void disp_flush(lv_display_t * disp_drv, const lv_area_t * area, uint8_t 
         epaper_panel_set_refresh_mode(panel_handle, false);
         fast_refresh_count = 0; // 重置计数器
     }
-
-    ESP_LOGI(TAG, "Flushing area: x1=%d, y1=%d, x2=%d, y2=%d", 
-             area->x1, area->y1, area->x2, area->y2);
 
     // 分别写入黑白和红色数据到屏幕
     epaper_panel_set_bitmap_color(panel_handle, SSD1681_EPAPER_BITMAP_BLACK);
@@ -134,15 +134,16 @@ void lv_port_disp_init(void)
     size_t buf_size = MY_DISP_HOR_RES * MY_DISP_VER_RES / 8 + 8; 
     // 分配 DMA 内存作为显示缓冲区
     buf1 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
+    buf2 = heap_caps_malloc(buf_size, MALLOC_CAP_DMA);
 
-    if (!buf1) 
+    if (!buf1 || !buf2) 
     {
         ESP_LOGE(TAG, "Display buffer allocation failed");
         return;
     }
 
     // 设置显示缓冲区
-    lv_display_set_buffers(disp, buf1, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
 }
 
 /**
