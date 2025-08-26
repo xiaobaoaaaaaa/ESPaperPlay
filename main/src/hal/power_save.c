@@ -224,5 +224,5 @@ void power_save_init(void)
     pwr_save_event_group = xEventGroupCreate();
     xEventGroupSetBits(pwr_save_event_group, POWER_SAVE_BIT);
     start_inactivity_timer();
-    xTaskCreate(power_save, "power_save_task", 4096, NULL, 15, NULL);
+    xTaskCreatePinnedToCore(power_save, "power_save_task", 4096, NULL, 15, NULL, 0);
 }
