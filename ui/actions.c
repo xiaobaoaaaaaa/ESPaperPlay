@@ -23,6 +23,8 @@
 #include "tcpserver.h"
 #include "power_save.h"
 
+void add_notification(const char *title, const char *content);
+
 /**
  * @brief 用户手势切换屏幕事件处理
  * @param e LVGL事件指针
@@ -737,7 +739,11 @@ void action_timer_stop(lv_event_t *e)
 {
     // 如果计时结束则鸣响蜂鸣器
     if(!timer_update_handler)
+    {
+        // 创建一个通知
+        add_notification("计时器", "计时结束");
         xTaskCreate(timer_buzzer_task, "timer_buzzer_task", 2048, NULL, 5, NULL);
+    }
     else
         // 恢复休眠
         xEventGroupSetBits(pwr_save_event_group, BIT0);
@@ -797,11 +803,56 @@ void action_set_partial_refresh_count(lv_event_t *e)
 }
 
 /**
- * @brief 获取当前最大连续局刷计数并更新变量
+ * @brief 获取存储的最大连续局刷计数并更新变量
  * @param e LVGL事件指针
  */
 void action_get_partial_refresh_count(lv_event_t *e) 
 {
     const system_config_t *cfg = config_get();
     set_var_max_partial_refresh_count(cfg->max_partial_refresh_count);
+}
+void action_msg_box_test(lv_event_t *e) 
+{
+    ESP_LOGI("action_msg_box_test", "Show message box");
+}
+
+/**
+ * @brief 通知删除回调
+ * @param e LVGL事件指针
+ */
+static void notif_event_cb(lv_event_t * e)
+{
+    lv_obj_t * btn = lv_event_get_target(e);
+
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) 
+    {
+        // 删除当前通知
+        lv_obj_del_async(btn);
+    }
+}
+
+/**
+ * @brief 删除所有通知
+ * @param e LVGL事件指针
+ */
+void action_clear_all_event_cb(lv_event_t * e)
+{
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) 
+    {
+        // 删除所有子对象（即所有通知按钮）
+        lv_obj_clean(objects.msg_list);
+    }
+}
+
+/**
+ * @brief 添加通知
+ * @param title 通知标题
+ * @param content 通知内容
+ */
+void add_notification(const char *title, const char *content)
+{
+    char buf[32]; 
+    lv_snprintf(buf, sizeof(buf), "%s: %s", title, content); 
+    lv_obj_t * btn = lv_list_add_btn(objects.msg_list, NULL, buf);
+    lv_obj_add_event_cb(btn, notif_event_cb, LV_EVENT_ALL, NULL);
 }
