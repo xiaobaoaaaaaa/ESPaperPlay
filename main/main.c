@@ -22,6 +22,7 @@
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
 #include "espaperplay_storage.h"
+#include "espaperplay_system.h"
 #include "espaperplay_touch.h"
 
 static const char *TAG = "ESPaperPlay_MAIN";
@@ -63,7 +64,8 @@ void app_main(void) {
     ESP_LOGI(TAG, "%s v%s starting on %s", ESPAPERPLAY_PROJECT_NAME, ESPAPERPLAY_VERSION,
              CONFIG_IDF_TARGET);
 
-    /* 系统级初始化（先初始化 board / 总线）。 */
+    /* 系统级初始化：先从 NVS 加载系统配置（不依赖硬件），再初始化 board / 总线。 */
+    ESP_ERROR_CHECK(espaperplay_system_init());
     ESP_ERROR_CHECK(espaperplay_board_init());
 
     /* 外设模块。 */
