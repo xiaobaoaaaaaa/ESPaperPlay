@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
-    REQUIRES board epd touch power storage gui reader input esp_timer
+    REQUIRES board epd touch power storage ui reader input esp_timer
 )

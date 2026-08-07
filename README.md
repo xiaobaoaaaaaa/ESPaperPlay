@@ -36,13 +36,17 @@ ESPaperPlay
 ├── main/                  # 系统入口：初始化各模块 + 创建任务（无业务逻辑）
 └── components/
     ├── board/             # Board 级硬件抽象：GPIO/SPI/I2C 配置与外设初始化
-    ├── epd/               # 电子纸抽象层（未来接入 UC8179 驱动）
-    ├── touch/             # GT911 触摸抽象层
-    ├── power/             # 电源管理：sleep / wakeup / 电源域控制
-    ├── storage/           # 存储抽象：SD 卡 + 文件系统
-    ├── gui/               # GUI 抽象层（未来接入 LVGL）
-    ├── reader/            # 阅读器核心框架（未来支持 TXT/EPUB/PDF）
-    └── input/             # 输入事件管理：触摸 + 物理按键
+    ├── drivers/           # 外设驱动层
+    │   ├── epd/           # 电子纸抽象层（未来接入 UC8179 驱动）
+    │   └── touch/         # GT911 触摸抽象层
+    ├── services/          # 系统服务层
+    │   ├── input/         # 输入事件管理：触摸 + 物理按键
+    │   ├── power/         # 电源管理：sleep / wakeup / 电源域控制
+    │   └── storage/       # 存储抽象：SD 卡 + 文件系统
+    ├── graphics/          # 图形 / 界面层
+    │   └── ui/            # GUI 抽象层（未来接入 LVGL）
+    └── applications/      # 应用层
+        └── reader/        # 阅读器核心框架（未来支持 TXT/EPUB/PDF）
 ```
 
 ### 分层依赖
@@ -50,19 +54,19 @@ ESPaperPlay
 ```mermaid
 graph TD
     main[main] --> reader[reader]
-    main --> gui[gui]
+    main --> ui[ui]
     main --> input[input]
     main --> power[power]
     main --> storage[storage]
     main --> touch[touch]
     main --> epd[epd]
 
-    reader --> gui
+    reader --> ui
     reader --> input
     reader --> storage
 
-    gui --> epd
-    gui --> touch
+    ui --> epd
+    ui --> touch
 
     input --> touch
 
@@ -74,8 +78,9 @@ graph TD
 ```
 
 * `board` 为最底层硬件抽象，向上提供引脚与总线配置；
-* 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量；
-* `gui` / `reader` / `input` 为应用层框架，为后续业务预留接口。
+* `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage）；
+* `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
+* 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
 
 ### 命名与日志规范
 
