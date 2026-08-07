@@ -1,0 +1,17 @@
+# ESPaperPlay sdkconfig defaults
+# Applied when no sdkconfig exists yet (e.g. fresh clone / CI).
+# Use `idf.py menuconfig` for project-specific overrides.
+
+# Target: ESP32-S3
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash: 16 MB (ESP32-S3-WROOM-1-N16R8)
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# PSRAM: 8 MB octal (ESP32-S3-WROOM-1-N16R8)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_ESPPSRAM64=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y

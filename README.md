@@ -1,53 +1,139 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | Linux |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | ----- |
+# ESPaperPlay
 
-# Hello World Example
+> 基于 ESP32-S3 的开源电子纸设备开发平台
 
-Starts a FreeRTOS task to print "Hello World".
+ESPaperPlay 是一个面向低功耗电子纸应用的嵌入式软件平台。第一阶段目标是
+开发一款基于 **ESP32-S3 + 7.5 英寸电子墨水屏** 的低功耗阅读器，同时为
+电子书阅读器、桌面信息屏、智能日历、Home Assistant 状态屏、电子标签等
+应用预留清晰的扩展点。
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+当前仓库处于 **软件工程初始化阶段**：已建立模块化、可维护、可扩展的软件
+架构骨架，尚未实现具体业务（EPUB/PDF 解析、LVGL 界面、EPD 驱动、网络等）。
 
-## How to use example
+---
 
-Follow detailed instructions provided specifically for this example.
+## 硬件平台
 
-Select the instructions depending on Espressif chip installed on your development board:
+| 模块        | 型号                 | 说明                                    |
+| ----------- | -------------------- | --------------------------------------- |
+| MCU         | ESP32-S3-WROOM-1-N16R8 | Flash 16MB，PSRAM 8MB                  |
+| 显示屏      | 佳显 GDEY075T7-T01   | 7.5"，800x480，UC8179 控制器，SPI 接口  |
+| 触摸屏      | GT911                | 电容触摸，I2C + INT + RESET             |
+| 存储        | MicroSD              | EPUB / TXT / 图片 / 配置文件             |
+| 电源        | 低功耗设计            | ESP32 sleep、外部唤醒、外设断电控制     |
 
-- [ESP32 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/stable/get-started/index.html)
-- [ESP32-S2 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
+GPIO 与总线默认参数统一在 `components/board/include/espaperplay_config.h`
+中定义。
 
+---
 
-## Example folder contents
+## 软件架构
 
-The project **hello_world** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt` files that provide set of directives and instructions describing the project's source files and targets (executable, library, or both).
-
-Below is short explanation of remaining files in the project folder.
+### 目录结构
 
 ```
-├── CMakeLists.txt
-├── pytest_hello_world.py      Python script used for automated testing
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
+ESPaperPlay
+├── main/                  # 系统入口：初始化各模块 + 创建任务（无业务逻辑）
+└── components/
+    ├── board/             # Board 级硬件抽象：GPIO/SPI/I2C 配置与外设初始化
+    ├── epd/               # 电子纸抽象层（未来接入 UC8179 驱动）
+    ├── touch/             # GT911 触摸抽象层
+    ├── power/             # 电源管理：sleep / wakeup / 电源域控制
+    ├── storage/           # 存储抽象：SD 卡 + 文件系统
+    ├── gui/               # GUI 抽象层（未来接入 LVGL）
+    ├── reader/            # 阅读器核心框架（未来支持 TXT/EPUB/PDF）
+    └── input/             # 输入事件管理：触摸 + 物理按键
 ```
 
-For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
+### 分层依赖
 
-## Troubleshooting
+```mermaid
+graph TD
+    main[main] --> reader[reader]
+    main --> gui[gui]
+    main --> input[input]
+    main --> power[power]
+    main --> storage[storage]
+    main --> touch[touch]
+    main --> epd[epd]
 
-* Program upload failure
+    reader --> gui
+    reader --> input
+    reader --> storage
 
-    * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
-    * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
+    gui --> epd
+    gui --> touch
 
-## Technical support and feedback
+    input --> touch
 
-Please use the following feedback channels:
+    epd --> board[board]
+    touch --> board
+    power --> board
+    storage --> board
+    gui --> board
+```
 
-* For technical queries, go to the [esp32.com](https://esp32.com/) forum
-* For a feature request or bug report, create a [GitHub issue](https://github.com/espressif/esp-idf/issues)
+* `board` 为最底层硬件抽象，向上提供引脚与总线配置；
+* 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量；
+* `gui` / `reader` / `input` 为应用层框架，为后续业务预留接口。
 
-We will get back to you as soon as possible.
+### 命名与日志规范
+
+- 所有公开 API 统一使用 `espaperplay_<模块>_<动作>()` 前缀；
+- 日志 TAG 统一为 `ESPaperPlay_<MODULE>`，例如 `ESPaperPlay_EPD`、
+  `ESPaperPlay_POWER`；
+- 使用 `ESP_LOGI / ESP_LOGW / ESP_LOGE`；
+- 所有公共函数带有 Doxygen 注释。
+
+---
+
+## 编译方法
+
+### 环境要求
+
+- ESP-IDF **v6.0.2**（目标芯片 ESP32-S3）
+- CMake ≥ 3.22
+- 说明：本仓库不安装第三方库，不修改 ESP-IDF 版本。
+
+### 编译
+
+```bash
+# 1. 加载 ESP-IDF 环境
+. $HOME/esp/esp-idf/export.sh        # 路径以实际安装为准
+
+# 2. 设置目标芯片（首次或切换芯片时）
+idf.py set-target esp32s3
+
+# 3. 编译
+idf.py build
+
+# 4. 烧录并查看日志
+idf.py -p /dev/ttyUSB0 flash monitor
+```
+
+首次克隆时，`sdkconfig.defaults`（Flash 16MB / PSRAM 8MB）会自动生效；
+如需调整请使用 `idf.py menuconfig`。
+
+### CI
+
+GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
+（使用 `espressif/idf:v6.0.2` 容器），确保每次提交可编译。
+
+---
+
+## 开发路线
+
+- [ ] **Phase 0（当前）**：软件架构初始化、模块骨架、构建系统与 CI
+- [ ] **Phase 1**：Board 驱动（GPIO / SPI / I2C 总线初始化）
+- [ ] **Phase 2**：EPD（UC8179）驱动与刷新、GT911 触摸驱动
+- [ ] **Phase 3**：低功耗电源管理（sleep / 唤醒 / 电源域）
+- [ ] **Phase 4**：SD 卡 + FATFS 文件系统
+- [ ] **Phase 5**：LVGL 界面框架
+- [ ] **Phase 6**：阅读器（TXT → EPUB → PDF）
+- [ ] **Phase 7**：网络与物联网功能（可选）
+
+---
+
+## License
+
+本项目基于 [MIT License](LICENSE) 开源。

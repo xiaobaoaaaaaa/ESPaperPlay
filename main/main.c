@@ -1,52 +1,85 @@
 /*
- * SPDX-FileCopyrightText: 2010-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2026 ESPaperPlay Contributors
  *
- * SPDX-License-Identifier: CC0-1.0
+ * SPDX-License-Identifier: MIT
  */
 
-#include <stdio.h>
 #include <inttypes.h>
-#include "sdkconfig.h"
+#include <stdio.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
+
+#include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 
-void app_main(void)
-{
-    printf("Hello world!\n");
+#include "espaperplay_board.h"
+#include "espaperplay_config.h"
+#include "espaperplay_epd.h"
+#include "espaperplay_gui.h"
+#include "espaperplay_input.h"
+#include "espaperplay_power.h"
+#include "espaperplay_reader.h"
+#include "espaperplay_storage.h"
+#include "espaperplay_touch.h"
 
-    /* Print chip information */
-    esp_chip_info_t chip_info;
-    uint32_t flash_size;
-    esp_chip_info(&chip_info);
-    printf("This is %s chip with %d CPU core(s), %s%s%s%s, ",
-           CONFIG_IDF_TARGET,
-           chip_info.cores,
-           (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi/" : "",
-           (chip_info.features & CHIP_FEATURE_BT) ? "BT" : "",
-           (chip_info.features & CHIP_FEATURE_BLE) ? "BLE" : "",
-           (chip_info.features & CHIP_FEATURE_IEEE802154) ? ", 802.15.4 (Zigbee/Thread)" : "");
+static const char *TAG = "ESPaperPlay_MAIN";
 
-    unsigned major_rev = chip_info.revision / 100;
-    unsigned minor_rev = chip_info.revision % 100;
-    printf("silicon revision v%d.%d, ", major_rev, minor_rev);
-    if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
-        printf("Get flash size failed");
-        return;
+#define ESPAPERPLAY_SYSTEM_TASK_STACK_SIZE 4096
+#define ESPAPERPLAY_SYSTEM_TASK_PRIORITY 5
+#define ESPAPERPLAY_HEARTBEAT_PERIOD_MS 10000
+
+/**
+ * @brief 系统监控任务。
+ *
+ * 应用任务层的占位实现。当前仅上报运行健康状态（运行时间 / 剩余堆）。
+ * 应用级任务（GUI 循环、reader 循环等）将在后续阶段接入此处 ——
+ * main.c 本身不包含任何业务逻辑。
+ */
+static void system_task(void *arg) {
+    (void)arg;
+
+    ESP_LOGI(TAG, "System task started");
+
+    while (1) {
+        ESP_LOGI(TAG, "uptime: %llu s, free heap: %" PRIu32 " bytes",
+                 esp_timer_get_time() / 1000000ULL, (uint32_t)esp_get_free_heap_size());
+        vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_HEARTBEAT_PERIOD_MS));
     }
+}
 
-    printf("%" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-           (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+/**
+ * @brief 应用程序入口。
+ *
+ * 仅负责：
+ *   1. 初始化系统，
+ *   2. 初始化各模块，
+ *   3. 创建 FreeRTOS 任务。
+ *
+ * 所有业务逻辑都位于各组件中。
+ */
+void app_main(void) {
+    ESP_LOGI(TAG, "%s v%s starting on %s", ESPAPERPLAY_PROJECT_NAME, ESPAPERPLAY_VERSION,
+             CONFIG_IDF_TARGET);
 
-    printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
+    /* 系统级初始化（先初始化 board / 总线）。 */
+    ESP_ERROR_CHECK(espaperplay_board_init());
 
-    for (int i = 10; i >= 0; i--) {
-        printf("Restarting in %d seconds...\n", i);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
-    printf("Restarting now.\n");
-    fflush(stdout);
-    esp_restart();
+    /* 外设模块。 */
+    ESP_ERROR_CHECK(espaperplay_storage_mount());
+    ESP_ERROR_CHECK(espaperplay_epd_init());
+    ESP_ERROR_CHECK(espaperplay_touch_init());
+
+    /* 应用级模块。 */
+    ESP_ERROR_CHECK(espaperplay_input_init());
+    ESP_ERROR_CHECK(espaperplay_power_init());
+    ESP_ERROR_CHECK(espaperplay_gui_init());
+    ESP_ERROR_CHECK(espaperplay_reader_init());
+
+    /* 创建任务。 */
+    xTaskCreate(system_task, "system_task", ESPAPERPLAY_SYSTEM_TASK_STACK_SIZE, NULL,
+                ESPAPERPLAY_SYSTEM_TASK_PRIORITY, NULL);
+
+    ESP_LOGI(TAG, "Startup sequence complete");
 }

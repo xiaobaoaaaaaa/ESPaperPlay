@@ -1,0 +1,27 @@
+name: ESP-IDF Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build firmware (ESP32-S3)
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py set-target esp32s3
+          idf.py build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: espapaperplay
+          path: build/*.bin
+          if-no-files-found: error

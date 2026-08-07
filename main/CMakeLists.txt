@@ -1,3 +1,5 @@
-idf_component_register(SRCS "main.c"
-                       PRIV_REQUIRES spi_flash
-                       INCLUDE_DIRS "")
+idf_component_register(
+    SRCS "main.c"
+    INCLUDE_DIRS "."
+    REQUIRES board epd touch power storage gui reader input esp_timer
+)
