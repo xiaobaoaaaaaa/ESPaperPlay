@@ -16,10 +16,10 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 
 /* NVS 键名。 */
 #define NVS_KEY_WIFI_MODE "wifi_mode"
-#define NVS_KEY_STA_SSID  "sta_ssid"
-#define NVS_KEY_STA_PASS  "sta_pass"
-#define NVS_KEY_AP_SSID   "ap_ssid"
-#define NVS_KEY_AP_PASS   "ap_pass"
+#define NVS_KEY_STA_SSID "sta_ssid"
+#define NVS_KEY_STA_PASS "sta_pass"
+#define NVS_KEY_AP_SSID "ap_ssid"
+#define NVS_KEY_AP_PASS "ap_pass"
 
 /* 内存中的配置缓存，初始化为出厂默认值。 */
 static espaperplay_system_config_t s_config = {
@@ -238,7 +238,6 @@ esp_err_t espaperplay_system_reset_defaults(void) {
     strlcpy(s_config.sta_password, ESPAPERPLAY_SYSTEM_DEFAULT_STA_PASS,
             sizeof(s_config.sta_password));
     strlcpy(s_config.ap_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID, sizeof(s_config.ap_ssid));
-    strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS,
-            sizeof(s_config.ap_password));
+    strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
     return system_save_all();
 }

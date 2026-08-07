@@ -33,7 +33,7 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_PASS_MAX_LEN 64
 
 /** 出厂默认 WiFi 工作模式。 */
-#define ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE ESPAPERPLAY_WIFI_MODE_STA
+#define ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE ESPAPERPLAY_WIFI_MODE_AP
 /** 出厂默认 STA 模式 SSID。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_STA_SSID "ESPaperPlay"
 /** 出厂默认 STA 模式密码（留空表示开放网络）。 */
@@ -58,7 +58,7 @@ typedef enum {
  * 字符串字段均以 '\0' 结尾，容量由 ESPAPERPLAY_SYSTEM_*_MAX_LEN 定义。
  */
 typedef struct {
-    espaperplay_wifi_mode_t wifi_mode; /*!< WiFi 工作模式 */
+    espaperplay_wifi_mode_t wifi_mode;                  /*!< WiFi 工作模式 */
     char sta_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];     /*!< STA 模式 SSID */
     char sta_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN]; /*!< STA 模式密码 */
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
