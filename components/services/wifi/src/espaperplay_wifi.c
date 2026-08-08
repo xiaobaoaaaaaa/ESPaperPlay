@@ -76,8 +76,13 @@ static esp_err_t wifi_apply_ap_config(const espaperplay_system_config_t *cfg) {
 /**
  * @brief 根据配置更新 STA 站点参数。
  *
- * 密码为空时按开放网络连接（阈值保持 WIFI_AUTH_OPEN），否则要求目标
- * 至少为 WPA2 加密，避免误连弱安全网络。
+ * 密码为空时按开放网络连接（阈值 WIFI_AUTH_OPEN）；密码非空时携带密码连接，
+ * 阈值设为 WIFI_AUTH_WPA_PSK（至少 WPA），以兼容 WPA / WPA2 / WPA3 以及
+ * WPA/WPA2 混合热点。
+ *
+ * @note 密码非空时阈值不能保持 OPEN：WiFi 驱动检测到密码长度 ≥8 会把它自动
+ * 抬升为 WPA2_PSK，导致按 WPA_PSK 上报的 WPA/WPA2 混合热点被过滤（找不到
+ * AP）。显式设为 WPA_PSK 可绕过驱动的自动抬升。
  */
 static esp_err_t wifi_apply_sta_config(const espaperplay_system_config_t *cfg) {
     wifi_config_t wifi_cfg = {0};
@@ -86,13 +91,13 @@ static esp_err_t wifi_apply_sta_config(const espaperplay_system_config_t *cfg) {
     wifi_cfg.sta.channel = 0;
     wifi_cfg.sta.threshold.rssi = -127;
     wifi_cfg.sta.threshold.authmode =
-        (cfg->sta_password[0] == '\0') ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+        (cfg->sta_password[0] == '\0') ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA_PSK;
 
     strlcpy((char *)wifi_cfg.sta.ssid, cfg->sta_ssid, sizeof(wifi_cfg.sta.ssid));
     strlcpy((char *)wifi_cfg.sta.password, cfg->sta_password, sizeof(wifi_cfg.sta.password));
 
-    ESP_LOGI(TAG, "STA config: ssid=\"%s\", auth=%s", (char *)wifi_cfg.sta.ssid,
-             wifi_cfg.sta.threshold.authmode == WIFI_AUTH_OPEN ? "OPEN" : "WPA2_PSK");
+    ESP_LOGI(TAG, "STA config: ssid=\"%s\", password=%s", (char *)wifi_cfg.sta.ssid,
+             (cfg->sta_password[0] == '\0') ? "(none/open)" : "(set)");
 
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
     if (err != ESP_OK) {
