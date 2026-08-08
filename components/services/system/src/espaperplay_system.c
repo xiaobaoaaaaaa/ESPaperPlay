@@ -114,7 +114,9 @@ static esp_err_t system_save_all(void) {
 /** 从 NVS 加载配置；缺失 / 非法的字段回填默认值。 */
 static esp_err_t system_load(void) {
     nvs_handle_t handle;
-    esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READONLY, &handle);
+    /* 用读写模式打开：首次上电时命名空间尚不存在，只读打开会返回
+     * ESP_ERR_NVS_NOT_FOUND；读写模式会自动创建命名空间。 */
+    esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
         return err;

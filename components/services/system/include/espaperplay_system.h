@@ -40,8 +40,8 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_DEFAULT_STA_PASS ""
 /** 出厂默认 AP 模式 SSID。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID "ESPaperPlay-AP"
-/** 出厂默认 AP 模式密码。 */
-#define ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS "espapaper"
+/** 出厂默认 AP 模式密码（留空表示开放网络）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS ""
 
 /**
  * @brief WiFi 工作模式。
