@@ -15,7 +15,7 @@
 
 ESPaperPlay is an embedded software platform for low-power e-paper applications. The first milestone is a low-power e-reader built around an **ESP32-S3 + 7.5-inch e-ink display**, while keeping clear extension points for e-book readers, desktop info panels, smart calendars, Home Assistant status screens, e-labels, and more.
 
-The repository is currently in the **software engineering bootstrap phase**: a modular, maintainable, and extensible architecture skeleton is in place, but no concrete features (EPUB/PDF parsing, LVGL UI, EPD driver, networking, etc.) have been implemented yet.
+The repository is under active development: a modular, maintainable, and extensible architecture is in place. Board drivers (UC8179 EPD, GT911 touch), system config (NVS), WiFi (AP/STA), and a Web management console are already implemented; EPUB/PDF parsing and the LVGL UI are planned for later phases.
 
 ### Hardware Platform
 
@@ -47,7 +47,8 @@ ESPaperPlay
     │   ├── power/         # Power management: sleep / wakeup / power domains
     │   ├── storage/       # Storage abstraction: SD card + file system
     │   ├── system/        # System config: WiFi mode & credentials persisted to NVS
-    │   └── wifi/          # WiFi service: AP / STA networking per system config
+    │   ├── wifi/          # WiFi service: AP / STA networking per system config
+    │   └── webserver/     # Web console: view status & change settings (esp_http_server)
     ├── graphics/          # Graphics / UI layer
     │   └── ui/            # GUI abstraction (LVGL to be added)
     └── applications/      # Application layer
@@ -65,10 +66,14 @@ graph TD
     main --> storage[storage]
     main --> system[system]
     main --> wifi[wifi]
+    main --> webserver[webserver]
     main --> touch[touch]
     main --> epd[epd]
 
     wifi --> system
+    webserver --> system
+    webserver --> wifi
+    webserver --> board
 
     reader --> ui
     reader --> input
@@ -87,7 +92,7 @@ graph TD
 ```
 
 - `board` is the lowest-level hardware abstraction, providing pin and bus configuration upward;
-- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (input / power / storage / system / wifi);
+- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (input / power / storage / system / wifi / webserver);
 - `graphics/ui` and `applications/reader` belong to the application-layer framework and reserve interfaces for future features;
 - Modules communicate only through public APIs (`espaperplay_xxx()`); direct access to internal variables is prohibited.
 
@@ -97,6 +102,25 @@ graph TD
 - Log tags follow `ESPaperPlay_<MODULE>`, e.g. `ESPaperPlay_EPD`, `ESPaperPlay_POWER`;
 - Use `ESP_LOGI / ESP_LOGW / ESP_LOGE`;
 - All public functions are documented with Doxygen comments.
+
+#### Web Console
+
+After boot, a management page is served on **port 80** of every network interface
+(reachable in both AP and STA modes):
+
+| Route                | Method | Description                                       |
+| -------------------- | ------ | ------------------------------------------------- |
+| `/`                  | GET    | Management page (embedded HTML)                   |
+| `/api/status`        | GET    | Runtime status: uptime / heap / firmware / WiFi   |
+| `/api/config`        | GET    | Current system config (WiFi mode & credentials)   |
+| `/api/config`        | POST   | Update config (form-encoded), save & re-apply WiFi |
+| `/api/config/reset`  | POST   | Restore factory defaults & re-apply WiFi          |
+| `/api/wifi/restart`  | POST   | Re-apply WiFi config                              |
+| `/api/system/reboot` | POST   | Reboot the device                                 |
+
+> AP mode: connect to the device AP from a phone / laptop and browse to
+> `http://192.168.4.1/`. No authentication is implemented yet — use only on
+> trusted LANs.
 
 ### Building
 
@@ -138,6 +162,7 @@ GitHub Actions runs `idf.py build` automatically in `.github/workflows/build.yml
 - [ ] **Phase 5**: LVGL UI framework
 - [ ] **Phase 6**: Reader (TXT → EPUB → PDF)
 - [ ] **Phase 7**: Networking & IoT features (optional)
+  - [x] Web management console: esp_http_server status & settings
 
 ### License
 
@@ -153,8 +178,9 @@ ESPaperPlay 是一个面向低功耗电子纸应用的嵌入式软件平台。�
 电子书阅读器、桌面信息屏、智能日历、Home Assistant 状态屏、电子标签等
 应用预留清晰的扩展点。
 
-当前仓库处于 **软件工程初始化阶段**：已建立模块化、可维护、可扩展的软件
-架构骨架，尚未实现具体业务（EPUB/PDF 解析、LVGL 界面、EPD 驱动、网络等）。
+当前仓库处于 **积极开发阶段**：已建立模块化、可维护、可扩展的软件架构。
+Board 驱动（UC8179 电子纸、GT911 触摸）、系统配置（NVS）、WiFi（AP/STA）
+与 Web 管理控制台均已实现；EPUB/PDF 解析与 LVGL 界面将在后续阶段接入。
 
 ### 硬件平台
 
@@ -186,7 +212,8 @@ ESPaperPlay
     │   ├── power/         # 电源管理：sleep / wakeup / 电源域控制
     │   ├── storage/       # 存储抽象：SD 卡 + 文件系统
     │   ├── system/        # 系统配置：WiFi 模式与凭据持久化到 NVS
-    │   └── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
+    │   ├── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
+    │   └── webserver/     # Web 管理：状态查看与设置修改（esp_http_server）
     ├── graphics/          # 图形 / 界面层
     │   └── ui/            # GUI 抽象层（未来接入 LVGL）
     └── applications/      # 应用层
@@ -204,10 +231,14 @@ graph TD
     main --> storage[storage]
     main --> system[system]
     main --> wifi[wifi]
+    main --> webserver[webserver]
     main --> touch[touch]
     main --> epd[epd]
 
     wifi --> system
+    webserver --> system
+    webserver --> wifi
+    webserver --> board
 
     reader --> ui
     reader --> input
@@ -226,7 +257,7 @@ graph TD
 ```
 
 - `board` 为最底层硬件抽象，向上提供引脚与总线配置；
-- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage / system / wifi）；
+- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage / system / wifi / webserver）；
 - `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
 - 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
 
@@ -237,6 +268,24 @@ graph TD
   `ESPaperPlay_POWER`；
 - 使用 `ESP_LOGI / ESP_LOGW / ESP_LOGE`；
 - 所有公共函数带有 Doxygen 注释。
+
+#### Web 管理控制台
+
+设备启动后会在**所有网络接口的 80 端口**提供管理页面（AP 与 STA 模式下均可
+访问）：
+
+| 路由                  | 方法  | 说明                                        |
+| --------------------- | ----- | ------------------------------------------- |
+| `/`                   | GET   | 管理页面（嵌入式 HTML）                     |
+| `/api/status`         | GET   | 运行状态：运行时间 / 堆 / 固件 / WiFi 等    |
+| `/api/config`         | GET   | 当前系统配置（WiFi 模式与凭据）             |
+| `/api/config`         | POST  | 更新配置（表单编码），保存并重新应用 WiFi   |
+| `/api/config/reset`   | POST  | 恢复出厂默认配置并重新应用 WiFi             |
+| `/api/wifi/restart`   | POST  | 重新应用 WiFi 配置                          |
+| `/api/system/reboot`  | POST  | 重启设备                                    |
+
+> AP 模式下用手机 / 电脑连接设备热点，浏览器访问 `http://192.168.4.1/`
+> 即可。当前版本未实现访问认证，仅适用于可信局域网。
 
 ### 编译方法
 
@@ -280,6 +329,7 @@ GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
 - [ ] **Phase 5**：LVGL 界面框架
 - [ ] **Phase 6**：阅读器（TXT → EPUB → PDF）
 - [ ] **Phase 7**：网络与物联网功能（可选）
+  - [x] Web 管理控制台：esp_http_server 状态查看与设置
 
 ### License
 

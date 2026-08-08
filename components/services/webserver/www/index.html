@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESPaperPlay 控制台</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --ok: #4ade80;
+            --err: #f87171;
+            --border: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.6;
+        }
+
+        header {
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        header .sub {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        main {
+            max-width: 780px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+
+        section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-bottom: 20px;
+        }
+
+        section h2 {
+            font-size: 15px;
+            margin: 0 0 14px;
+            color: var(--accent);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .stat {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+
+        .stat .label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .stat .value {
+            font-size: 17px;
+            font-weight: 600;
+            margin-top: 2px;
+            word-break: break-all;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+        }
+
+        .pill.ok {
+            background: #052e16;
+            color: var(--ok);
+            border: 1px solid var(--ok);
+        }
+
+        .pill.err {
+            background: #450a0a;
+            color: var(--err);
+            border: 1px solid var(--err);
+        }
+
+        .field {
+            margin-bottom: 14px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .field input[type=text],
+        .field input[type=password] {
+            width: 100%;
+            padding: 9px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .field input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .radio {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-right: 18px;
+            cursor: pointer;
+        }
+
+        .checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 6px;
+            cursor: pointer;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        button {
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            filter: brightness(1.15);
+        }
+
+        button.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #082f49;
+            font-weight: 600;
+        }
+
+        button.danger {
+            color: var(--err);
+            border-color: var(--err);
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #334155;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity .25s;
+            pointer-events: none;
+            max-width: 90vw;
+        }
+
+        #toast.show {
+            opacity: 1;
+        }
+
+        #toast.error {
+            background: #7f1d1d;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>ESPaperPlay 控制台</h1>
+        <span class="sub">系统状态与网络设置</span>
+    </header>
+    <main>
+        <section>
+            <h2>系统状态</h2>
+            <div class="grid" id="status">
+                <div class="stat">
+                    <div class="label">加载中…</div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>网络设置</h2>
+            <form id="configForm">
+                <div class="field">
+                    <label>WiFi 工作模式</label>
+                    <label class="radio"><input type="radio" name="wifi_mode" value="ap"> 热点 (AP)</label>
+                    <label class="radio"><input type="radio" name="wifi_mode" value="sta"> 站点 (STA)</label>
+                </div>
+                <div class="field">
+                    <label>STA SSID（要连接的路由器）</label>
+                    <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label>STA 密码（留空 = 保持不变）</label>
+                    <input type="password" name="sta_password" maxlength="63" placeholder="••••••"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_sta_password" value="1"> 清除已保存的 STA
+                        密码（开放网络）</label>
+                </div>
+                <div class="field">
+                    <label>AP SSID（设备热点名）</label>
+                    <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label>AP 密码（留空 = 保持不变）</label>
+                    <input type="password" name="ap_password" maxlength="63" placeholder="••••••"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_ap_password" value="1"> 清除已保存的 AP
+                        密码（开放网络）</label>
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存并应用</button>
+                    <button type="button" id="wifiRestart">重新应用网络</button>
+                    <button type="button" id="reset" class="danger">恢复默认</button>
+                    <button type="button" id="reboot" class="danger">重启设备</button>
+                </div>
+            </form>
+        </section>
+    </main>
+    <div id="toast"></div>
+
+    <script>
+        const $ = (sel) => document.querySelector(sel);
+        let toastTimer = null;
+
+        /* 轻量转义，防止注入。 */
+        function esc(s) {
+            return String(s).replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function toast(msg, isErr) {
+            const el = $('#toast');
+            el.textContent = msg;
+            el.classList.toggle('error', !!isErr);
+            el.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+        }
+
+        function fmtBytes(n) {
+            if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+            if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+            return n + ' B';
+        }
+
+        function fmtUptime(s) {
+            const d = Math.floor(s / 86400);
+            const h = Math.floor((s % 86400) / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = s % 60;
+            if (d > 0) return d + ' 天 ' + h + ' 小时';
+            if (h > 0) return h + ' 小时 ' + m + ' 分';
+            if (m > 0) return m + ' 分 ' + sec + ' 秒';
+            return sec + ' 秒';
+        }
+
+        /* 加载并渲染系统状态。 */
+        async function loadStatus() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                const sys = d.system || {};
+                const fw = d.firmware || {};
+                const wifi = d.wifi || {};
+                const modeLabel = wifi.mode === 'AP' ? '热点 (AP)' : '站点 (STA)';
+                const connPill = wifi.connected
+                    ? '<span class="pill ok">已连接</span>'
+                    : '<span class="pill err">未连接</span>';
+                $('#status').innerHTML =
+                    '<div class="stat"><div class="label">运行时间</div><div class="value">' + fmtUptime(sys.uptime_s || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">剩余堆内存</div><div class="value">' + fmtBytes(sys.free_heap || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">历史最低堆</div><div class="value">' + fmtBytes(sys.min_free_heap || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">固件版本</div><div class="value">v' + esc(fw.version || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">WiFi 模式</div><div class="value">' + modeLabel + '</div></div>' +
+                    '<div class="stat"><div class="label">SSID</div><div class="value">' + esc(wifi.ssid || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">IP 地址</div><div class="value">' + esc(wifi.ip || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">连接状态</div><div class="value">' + connPill + '</div></div>';
+            } catch (e) {
+                /* 设备可能正在重启 / 网络切换，等待下次轮询自动恢复。 */
+            }
+        }
+
+        /* 加载当前配置到表单。 */
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/config');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                const mode = d.wifi_mode === 'sta' ? 'sta' : 'ap';
+                const radio = document.querySelector('input[name=wifi_mode][value="' + mode + '"]');
+                if (radio) radio.checked = true;
+                $('input[name=sta_ssid]').value = d.sta_ssid || '';
+                $('input[name=ap_ssid]').value = d.ap_ssid || '';
+                /* 密码不回填明文，仅在占位符中提示是否已保存。 */
+                $('input[name=sta_password]').value = '';
+                $('input[name=sta_password]').placeholder = d.sta_password ? '••••••（已保存）' : '（未设置）';
+                $('input[name=ap_password]').value = '';
+                $('input[name=ap_password]').placeholder = d.ap_password ? '••••••（已保存）' : '（未设置）';
+                $('input[name=clear_sta_password]').checked = false;
+                $('input[name=clear_ap_password]').checked = false;
+            } catch (e) {
+                /* 服务器暂不可达，忽略。 */
+            }
+        }
+
+        async function postForm(action, data) {
+            const res = await fetch(action, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: data
+            });
+            return res.json();
+        }
+
+        /* 保存并应用设置。 */
+        $('#configForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#configForm'));
+            const body = new URLSearchParams(fd).toString();
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('设置已保存，正在重新应用网络…');
+                    loadStatus();
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                /* WiFi 重启会中断当前连接，设备重新上线后自动恢复。 */
+                toast('设置已保存，连接断开，等待设备重新上线…');
+                setTimeout(loadConfig, 3000);
+            }
+        });
+
+        $('#wifiRestart').addEventListener('click', async () => {
+            try {
+                const d = await postForm('/api/wifi/restart', '');
+                if (d.ok) {
+                    toast('网络已重新应用');
+                    loadStatus();
+                } else {
+                    toast('失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('连接已断开，WiFi 正在重启…');
+            }
+        });
+
+        $('#reset').addEventListener('click', async () => {
+            if (!confirm('确定恢复出厂默认设置并重新应用网络吗？')) return;
+            try {
+                const d = await postForm('/api/config/reset', '');
+                if (d.ok) {
+                    toast('已恢复默认设置');
+                    loadConfig();
+                    loadStatus();
+                } else {
+                    toast('恢复失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('连接已断开，设备正在重新应用网络…');
+            }
+        });
+
+        $('#reboot').addEventListener('click', async () => {
+            if (!confirm('确定重启设备吗？')) return;
+            try {
+                await fetch('/api/system/reboot', { method: 'POST' });
+            } catch (e) { /* 连接会立即断开 */ }
+            toast('正在重启…');
+        });
+
+        /* 初次加载 + 周期刷新状态。 */
+        loadStatus();
+        loadConfig();
+        setInterval(loadStatus, 5000);
+    </script>
+</body>
+
+</html>
