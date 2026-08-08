@@ -45,7 +45,9 @@ ESPaperPlay
     ├── services/          # System service layer
     │   ├── input/         # Input event management: touch + physical buttons
     │   ├── power/         # Power management: sleep / wakeup / power domains
-    │   └── storage/       # Storage abstraction: SD card + file system
+    │   ├── storage/       # Storage abstraction: SD card + file system
+    │   ├── system/        # System config: WiFi mode & credentials persisted to NVS
+    │   └── wifi/          # WiFi service: AP / STA networking per system config
     ├── graphics/          # Graphics / UI layer
     │   └── ui/            # GUI abstraction (LVGL to be added)
     └── applications/      # Application layer
@@ -61,8 +63,12 @@ graph TD
     main --> input[input]
     main --> power[power]
     main --> storage[storage]
+    main --> system[system]
+    main --> wifi[wifi]
     main --> touch[touch]
     main --> epd[epd]
+
+    wifi --> system
 
     reader --> ui
     reader --> input
@@ -81,7 +87,7 @@ graph TD
 ```
 
 - `board` is the lowest-level hardware abstraction, providing pin and bus configuration upward;
-- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (input / power / storage);
+- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (input / power / storage / system / wifi);
 - `graphics/ui` and `applications/reader` belong to the application-layer framework and reserve interfaces for future features;
 - Modules communicate only through public APIs (`espaperplay_xxx()`); direct access to internal variables is prohibited.
 
@@ -178,7 +184,9 @@ ESPaperPlay
     ├── services/          # 系统服务层
     │   ├── input/         # 输入事件管理：触摸 + 物理按键
     │   ├── power/         # 电源管理：sleep / wakeup / 电源域控制
-    │   └── storage/       # 存储抽象：SD 卡 + 文件系统
+    │   ├── storage/       # 存储抽象：SD 卡 + 文件系统
+    │   ├── system/        # 系统配置：WiFi 模式与凭据持久化到 NVS
+    │   └── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
     ├── graphics/          # 图形 / 界面层
     │   └── ui/            # GUI 抽象层（未来接入 LVGL）
     └── applications/      # 应用层
@@ -194,8 +202,12 @@ graph TD
     main --> input[input]
     main --> power[power]
     main --> storage[storage]
+    main --> system[system]
+    main --> wifi[wifi]
     main --> touch[touch]
     main --> epd[epd]
+
+    wifi --> system
 
     reader --> ui
     reader --> input
@@ -214,7 +226,7 @@ graph TD
 ```
 
 - `board` 为最底层硬件抽象，向上提供引脚与总线配置；
-- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage）；
+- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage / system / wifi）；
 - `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
 - 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
 

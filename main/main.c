@@ -24,6 +24,7 @@
 #include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_touch.h"
+#include "espaperplay_wifi.h"
 
 static const char *TAG = "ESPaperPlay_MAIN";
 
@@ -67,6 +68,9 @@ void app_main(void) {
     /* 系统级初始化：先从 NVS 加载系统配置（不依赖硬件），再初始化 board / 总线。 */
     ESP_ERROR_CHECK(espaperplay_system_init());
     ESP_ERROR_CHECK(espaperplay_board_init());
+
+    /* 网络服务：依据系统配置（AP / STA 模式及凭据）启动 WiFi。 */
+    ESP_ERROR_CHECK(espaperplay_wifi_init());
 
     /* 外设模块。 */
     ESP_ERROR_CHECK(espaperplay_storage_mount());
