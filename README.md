@@ -50,7 +50,7 @@ ESPaperPlay
     │   ├── system/        # System config: WiFi mode & credentials persisted to NVS
     │   ├── session/       # Session mgmt: login state, token & rate limiting
     │   ├── wifi/          # WiFi service: AP / STA networking per system config
-    │   └── webserver/     # Web console: view status & change settings (esp_http_server)
+    │   └── webserver/     # Web console: view status & change settings (esp_https_server)
     ├── graphics/          # Graphics / UI layer
     │   └── ui/            # GUI abstraction (LVGL to be added)
     └── applications/      # Application layer
@@ -109,8 +109,12 @@ graph TD
 
 #### Web Console
 
-After boot, a management page is served on **port 80** of every network interface
-(reachable in both AP and STA modes):
+After boot, a management page is served over **HTTPS** on port **443** of every
+network interface (reachable in both AP and STA modes). Plain **HTTP on port
+80** is still listened to, but only redirects every request to HTTPS (no
+plaintext traffic). The device generates its own P-256 self-signed certificate
+on first boot (persisted in NVS, fingerprint stays stable across reboots); the
+private key never leaves the device, so it cannot be extracted from the firmware.
 
 | Route                | Method | Description                                       |
 | -------------------- | ------ | ------------------------------------------------- |
@@ -127,7 +131,10 @@ After boot, a management page is served on **port 80** of every network interfac
 | `/api/auth/logout`   | POST   | Revoke the current session                        |
 
 > AP mode: connect to the device AP from a phone / laptop and browse to
-> `http://192.168.4.1/`. On first boot (no password configured yet) the
+> `http://192.168.4.1/` (it redirects to `https://192.168.4.1/`). Your browser
+> will warn about the self-signed certificate — accept the security exception
+> once; the certificate SHA-256 fingerprint is printed in the serial log so you
+> can verify the connection. On first boot (no password configured yet) the
 > console guides you to set a password; afterwards login is required.
 > Sensitive APIs (config / wifi / reboot / status) are protected by a bearer
 > session token; 5 consecutive login failures trigger a temporary lockout.
@@ -172,7 +179,7 @@ GitHub Actions runs `idf.py build` automatically in `.github/workflows/build.yml
 - [ ] **Phase 5**: LVGL UI framework
 - [ ] **Phase 6**: Reader (TXT → EPUB → PDF)
 - [ ] **Phase 7**: Networking & IoT features (optional)
-  - [x] Web management console: esp_http_server status & settings
+  - [x] Web management console (HTTPS): esp_https_server status & settings
 
 ### License
 
@@ -225,7 +232,7 @@ ESPaperPlay
     │   ├── system/        # 系统配置：WiFi 模式与凭据持久化到 NVS
     │   ├── session/       # 会话管理：登录态、token 与失败限速锁定
     │   ├── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
-    │   └── webserver/     # Web 管理：状态查看与设置修改（esp_http_server）
+    │   └── webserver/     # Web 管理：状态查看与设置修改（esp_https_server）
     ├── graphics/          # 图形 / 界面层
     │   └── ui/            # GUI 抽象层（未来接入 LVGL）
     └── applications/      # 应用层
@@ -285,8 +292,10 @@ graph TD
 
 #### Web 管理控制台
 
-设备启动后会在**所有网络接口的 80 端口**提供管理页面（AP 与 STA 模式下均可
-访问）：
+设备启动后会在**所有网络接口的 443 端口**以 **HTTPS** 提供管理页面（AP 与
+STA 模式下均可访问）。**80 端口**仍会监听，但仅把所有请求 302 重定向到
+HTTPS，杜绝明文流量。设备在首次启动时自行生成 P-256 自签名证书（持久化于
+NVS，重启后指纹不变），私钥永不出设备，无法从固件中提取。
 
 | 路由                  | 方法  | 说明                                        |
 | --------------------- | ----- | ------------------------------------------- |
@@ -303,7 +312,10 @@ graph TD
 | `/api/auth/logout`    | POST  | 吊销当前会话                                      |
 
 > AP 模式下用手机 / 电脑连接设备热点，浏览器访问 `http://192.168.4.1/`
-> 即可。设备出厂未设置密码时，页面会引导首次设置密码；设置后访问需登录。
+>（会自动重定向到 `https://192.168.4.1/`）。浏览器会对自签名证书给出安全
+> 警告，首次访问需手动信任一次；证书 SHA-256 指纹会打印在串口日志中，可据
+> 此核对连接真实性。设备出厂未设置密码时，页面会引导首次设置密码；
+> 设置后访问需登录。
 > 配置 / WiFi / 重启 / 状态等敏感接口由会话 token 鉴权保护，连续 5 次登录
 > 失败会触发临时锁定。
 
@@ -349,7 +361,7 @@ GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
 - [ ] **Phase 5**：LVGL 界面框架
 - [ ] **Phase 6**：阅读器（TXT → EPUB → PDF）
 - [ ] **Phase 7**：网络与物联网功能（可选）
-  - [x] Web 管理控制台：esp_http_server 状态查看与设置
+  - [x] Web 管理控制台（HTTPS）：esp_https_server 状态查看与设置
 
 ### License
 

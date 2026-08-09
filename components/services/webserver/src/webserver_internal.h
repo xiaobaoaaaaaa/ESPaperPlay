@@ -105,6 +105,16 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req);
 esp_err_t webserver_handle_auth_logout_post(httpd_req_t *req);
 esp_err_t webserver_handle_auth_status_get(httpd_req_t *req);
 
+/* TLS 证书服务（webserver_tls.c）：运行时生成/加载自签名证书与私钥。 */
+esp_err_t webserver_tls_get(const uint8_t **cert, size_t *cert_len, const uint8_t **key,
+                            size_t *key_len);
+
+/* TLS 证书刷新（webserver_tls.c）：IP 变化时重新生成证书，out_changed 报告是否更新。 */
+esp_err_t webserver_tls_refresh(bool *out_changed);
+
+/* HTTP 重定向（webserver_handler_system.c）：把明文请求 302 到 HTTPS。 */
+esp_err_t webserver_handle_redirect_to_https(httpd_req_t *req);
+
 #ifdef __cplusplus
 }
 #endif

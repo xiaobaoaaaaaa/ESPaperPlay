@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <string.h>
+
 #include "esp_chip_info.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -92,4 +94,53 @@ esp_err_t webserver_handle_reboot_post(httpd_req_t *req) {
     vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();
     return ESP_OK; /* 不会执行到这里 */
+}
+
+/** GET/POST * (HTTP:80) —— 302 重定向到 HTTPS，杜绝明文访问。 */
+esp_err_t webserver_handle_redirect_to_https(httpd_req_t *req) {
+    char host[128] = {0};
+    /* URI 最长 CONFIG_HTTPD_MAX_URI_LEN(512)，加 host 与协议前缀后仍不截断。 */
+    char location[768];
+
+    /* 优先取 Host 头（浏览器访问 http://<host>/... 时携带）。 */
+    size_t hlen = httpd_req_get_hdr_value_len(req, "Host");
+    if (hlen > 0 && hlen < sizeof(host)) {
+        httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
+    }
+
+    /* 兜底：Host 缺失时取 WiFi 当前 IP（AP 或 STA）。 */
+    if (host[0] == '\0') {
+        espaperplay_wifi_status_t st;
+        if (espaperplay_wifi_get_status(&st) == ESP_OK && st.ip[0] != '\0' &&
+            strcmp(st.ip, "0.0.0.0") != 0) {
+            snprintf(host, sizeof(host), "%s", st.ip);
+        }
+    }
+
+    /* 去掉 Host 中附带的端口段（如 ":80"）。局域网为 IPv4，简单处理最后一个冒号。 */
+    char *colon = strrchr(host, ':');
+    if (colon != NULL && colon != host) {
+        bool digits_only = true;
+        for (const char *p = colon + 1; *p != '\0'; p++) {
+            if (*p < '0' || *p > '9') {
+                digits_only = false;
+                break;
+            }
+        }
+        if (digits_only) {
+            *colon = '\0';
+        }
+    }
+
+    if (host[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown host");
+        return ESP_FAIL;
+    }
+
+    snprintf(location, sizeof(location), "https://%s%s", host, req->uri);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
 }
