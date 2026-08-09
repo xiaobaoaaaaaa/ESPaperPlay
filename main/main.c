@@ -14,6 +14,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "espaperplay_auth.h"
 #include "espaperplay_board.h"
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
@@ -21,6 +22,7 @@
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
+#include "espaperplay_session.h"
 #include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_touch.h"
@@ -68,6 +70,11 @@ void app_main(void) {
 
     /* 系统级初始化：先从 NVS 加载系统配置（不依赖硬件），再初始化 board / 总线。 */
     ESP_ERROR_CHECK(espaperplay_system_init());
+    /* 设备鉴权：加载密码记录（不依赖硬件），供 Web 等模块校验使用。 */
+    ESP_ERROR_CHECK(espaperplay_auth_init());
+    /* 会话管理：签发/校验登录态与失败限速锁定（纯内存，不依赖硬件）。 */
+    ESP_ERROR_CHECK(espaperplay_session_init());
+
     ESP_ERROR_CHECK(espaperplay_board_init());
 
     /* 网络服务：依据系统配置（AP / STA 模式及凭据）启动 WiFi。 */

@@ -43,10 +43,12 @@ ESPaperPlay
     │   ├── epd/           # E-paper abstraction (UC8179 driver to be added)
     │   └── touch/         # GT911 touch abstraction
     ├── services/          # System service layer
+    │   ├── auth/          # Device auth: secure password storage & verification
     │   ├── input/         # Input event management: touch + physical buttons
     │   ├── power/         # Power management: sleep / wakeup / power domains
     │   ├── storage/       # Storage abstraction: SD card + file system
     │   ├── system/        # System config: WiFi mode & credentials persisted to NVS
+    │   ├── session/       # Session mgmt: login state, token & rate limiting
     │   ├── wifi/          # WiFi service: AP / STA networking per system config
     │   └── webserver/     # Web console: view status & change settings (esp_http_server)
     ├── graphics/          # Graphics / UI layer
@@ -65,6 +67,8 @@ graph TD
     main --> power[power]
     main --> storage[storage]
     main --> system[system]
+    main --> auth[auth]
+    main --> session[session]
     main --> wifi[wifi]
     main --> webserver[webserver]
     main --> touch[touch]
@@ -92,7 +96,7 @@ graph TD
 ```
 
 - `board` is the lowest-level hardware abstraction, providing pin and bus configuration upward;
-- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (input / power / storage / system / wifi / webserver);
+- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (auth / input / power / storage / system / session / wifi / webserver);
 - `graphics/ui` and `applications/reader` belong to the application-layer framework and reserve interfaces for future features;
 - Modules communicate only through public APIs (`espaperplay_xxx()`); direct access to internal variables is prohibited.
 
@@ -208,10 +212,12 @@ ESPaperPlay
     │   ├── epd/           # 电子纸抽象层（未来接入 UC8179 驱动）
     │   └── touch/         # GT911 触摸抽象层
     ├── services/          # 系统服务层
+    │   ├── auth/          # 设备鉴权：密码安全存储 / 校验 / 更改
     │   ├── input/         # 输入事件管理：触摸 + 物理按键
     │   ├── power/         # 电源管理：sleep / wakeup / 电源域控制
     │   ├── storage/       # 存储抽象：SD 卡 + 文件系统
     │   ├── system/        # 系统配置：WiFi 模式与凭据持久化到 NVS
+    │   ├── session/       # 会话管理：登录态、token 与失败限速锁定
     │   ├── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
     │   └── webserver/     # Web 管理：状态查看与设置修改（esp_http_server）
     ├── graphics/          # 图形 / 界面层
@@ -230,6 +236,8 @@ graph TD
     main --> power[power]
     main --> storage[storage]
     main --> system[system]
+    main --> auth[auth]
+    main --> session[session]
     main --> wifi[wifi]
     main --> webserver[webserver]
     main --> touch[touch]
@@ -257,7 +265,7 @@ graph TD
 ```
 
 - `board` 为最底层硬件抽象，向上提供引脚与总线配置；
-- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（input / power / storage / system / wifi / webserver）；
+- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（auth / input / power / storage / system / session / wifi / webserver）；
 - `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
 - 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
 
