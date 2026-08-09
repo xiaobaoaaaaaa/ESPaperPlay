@@ -377,6 +377,7 @@
         const $ = (sel) => document.querySelector(sel);
         let toastTimer = null;
         const TOKEN_KEY = 'espaperplay_token';
+        let currentWifiMode = 'ap'; /* 当前 WiFi 模式，用于判断保存时是否切换 */
 
         /* ---- 登录态管理 ---- */
         function getToken() {
@@ -644,6 +645,7 @@
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const d = await res.json();
                 const mode = d.wifi_mode === 'sta' ? 'sta' : 'ap';
+                currentWifiMode = mode;
                 const radio = document.querySelector('input[name=wifi_mode][value="' + mode + '"]');
                 if (radio) radio.checked = true;
                 $('input[name=sta_ssid]').value = d.sta_ssid || '';
@@ -674,20 +676,33 @@
             e.preventDefault();
             const fd = new FormData($('#configForm'));
             const body = new URLSearchParams(fd).toString();
+            const btn = $('#configForm button[type=submit]');
+            const sel = $('input[name=wifi_mode]:checked');
+            const modeChanged = !!sel && sel.value !== currentWifiMode;
+            /* 立即给出反馈，避免网络切换导致无响应感。 */
+            toast(modeChanged ? '正在保存并切换 WiFi 模式…' : '正在保存并应用设置…');
+            btn.disabled = true;
             try {
                 const d = await postForm('/api/config', body);
                 if (d.ok) {
-                    toast('设置已保存，正在重新应用网络…');
+                    if (modeChanged) {
+                        toast('已保存。WiFi 模式已切换，设备 IP 可能变化，请用新地址访问', true);
+                    } else {
+                        toast('设置已保存，正在重新应用网络…');
+                    }
                     loadStatus();
                     loadConfig();
                 } else {
                     toast('保存失败：' + (d.error || '未知错误'), true);
                 }
             } catch (err) {
-                /* WiFi 重启会中断当前连接，设备重新上线后自动恢复。 */
-                toast('设置已保存，连接断开，等待设备重新上线…');
+                /* WiFi 重启会中断当前连接（切换模式时 IP 可能变化）。 */
+                toast(modeChanged
+                    ? '已保存，但连接已断开。模式已切换，设备 IP 可能变化，请重新连接'
+                    : '已保存，连接短暂断开，等待设备重新上线…', true);
                 setTimeout(loadConfig, 3000);
             }
+            btn.disabled = false;
         });
 
         $('#wifiRestart').addEventListener('click', async () => {

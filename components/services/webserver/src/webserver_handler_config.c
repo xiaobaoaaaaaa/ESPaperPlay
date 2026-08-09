@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_http_server.h"
 #include "esp_log.h"
 
@@ -141,17 +144,19 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 重新应用 WiFi 配置（模式 / 凭据可能变化，可能短暂断开当前连接，属预期行为）。 */
+    /* 先返回成功响应，确保客户端收到反馈，再延时重启 WiFi。
+     * 切换工作模式会重建网络接口并可能改变 IP，重启会断开当前连接。 */
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "wifi_restarted", false); /* 实际重启在响应后延时进行 */
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
+
+    vTaskDelay(pdMS_TO_TICKS(200));
     err = espaperplay_wifi_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to re-apply wifi config: %s", esp_err_to_name(err));
     }
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddBoolToObject(root, "wifi_restarted", err == ESP_OK);
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
     return ESP_OK;
 }
 
@@ -162,17 +167,22 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     }
 
     esp_err_t err = espaperplay_system_reset_defaults();
-    if (err == ESP_OK) {
-        err = espaperplay_wifi_start();
+    if (err != ESP_OK) {
+        webserver_send_json_err(req, esp_err_to_name(err));
+        return ESP_FAIL;
     }
 
+    /* 先返回成功响应，再延时重启 WiFi（恢复默认可能切回 AP 模式并改变 IP）。 */
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
-    if (err != ESP_OK) {
-        cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
-    }
+    cJSON_AddBoolToObject(root, "ok", true);
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
+
+    vTaskDelay(pdMS_TO_TICKS(200));
+    err = espaperplay_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to re-apply wifi after reset: %s", esp_err_to_name(err));
+    }
     return ESP_OK;
 }
 
