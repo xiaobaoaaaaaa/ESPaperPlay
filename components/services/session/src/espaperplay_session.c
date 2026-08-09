@@ -392,6 +392,21 @@ size_t espaperplay_session_count(void) {
     return n;
 }
 
+esp_err_t espaperplay_session_clear_all(void) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    for (int i = 0; i < ESPAPERPLAY_SESSION_MAX; i++) {
+        s_sessions[i].active = false;
+    }
+    xSemaphoreGive(s_mutex);
+    ESP_LOGI(TAG, "All sessions cleared");
+    return ESP_OK;
+}
+
 bool espaperplay_session_login_allowed(void) {
     if (!s_initialized) {
         return true; /* 未初始化：视为未锁定 */

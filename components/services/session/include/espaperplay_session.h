@@ -126,6 +126,13 @@ esp_err_t espaperplay_session_cleanup(void);
 size_t espaperplay_session_count(void);
 
 /**
+ * @brief 吊销所有会话（如修改密码后强制重新登录）。
+ *
+ * @return 成功返回 ESP_OK。
+ */
+esp_err_t espaperplay_session_clear_all(void);
+
+/**
  * @brief 是否允许发起一次登录尝试。
  *
  * 返回 false 表示当前处于登录锁定期，调用方应直接拒绝（如 HTTP 429 +
