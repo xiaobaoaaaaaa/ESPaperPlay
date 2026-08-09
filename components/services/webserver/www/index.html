@@ -212,6 +212,57 @@
         #toast.error {
             background: #7f1d1d;
         }
+
+        /* 登录界面 */
+        #login {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            z-index: 10;
+        }
+
+        #login.hidden {
+            display: none;
+        }
+
+        .login-card {
+            width: min(360px, 90vw);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 28px 24px;
+        }
+
+        .login-card h2 {
+            margin: 0 0 4px;
+            font-size: 18px;
+        }
+
+        .login-sub {
+            margin: 0 0 18px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .login-error {
+            color: var(--err);
+            font-size: 13px;
+            min-height: 18px;
+            margin-bottom: 6px;
+        }
+
+        #logoutBtn {
+            margin-left: auto;
+            font-size: 13px;
+            padding: 6px 12px;
+        }
+
+        #logoutBtn.hidden {
+            display: none;
+        }
     </style>
 </head>
 
@@ -219,7 +270,24 @@
     <header>
         <h1>ESPaperPlay 控制台</h1>
         <span class="sub">系统状态与网络设置</span>
+        <button type="button" id="logoutBtn" class="hidden">退出登录</button>
     </header>
+    <div id="login">
+        <div class="login-card">
+            <h2>ESPaperPlay 控制台</h2>
+            <p class="login-sub">请输入设备密码以继续</p>
+            <form id="loginForm">
+                <div class="field">
+                    <input type="password" name="password" id="loginPassword" placeholder="设备密码"
+                        autocomplete="current-password">
+                </div>
+                <div id="loginError" class="login-error"></div>
+                <div class="actions">
+                    <button type="submit" class="primary" style="width:100%">登 录</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <main>
         <section>
             <h2>系统状态</h2>
@@ -274,6 +342,107 @@
     <script>
         const $ = (sel) => document.querySelector(sel);
         let toastTimer = null;
+        const TOKEN_KEY = 'espaperplay_token';
+
+        /* ---- 登录态管理 ---- */
+        function getToken() {
+            return localStorage.getItem(TOKEN_KEY) || '';
+        }
+
+        function setToken(t) {
+            localStorage.setItem(TOKEN_KEY, t);
+        }
+
+        function clearToken() {
+            localStorage.removeItem(TOKEN_KEY);
+        }
+
+        /* 带鉴权的 fetch：自动附加 Bearer token，401 时回到登录页。 */
+        async function apiFetch(path, opts) {
+            opts = opts || {};
+            opts.headers = Object.assign({}, opts.headers || {});
+            const t = getToken();
+            if (t) opts.headers['Authorization'] = 'Bearer ' + t;
+            const res = await fetch(path, opts);
+            if (res.status === 401) {
+                clearToken();
+                showLogin();
+                throw new Error('Unauthorized');
+            }
+            return res;
+        }
+
+        function showApp() {
+            $('#login').classList.add('hidden');
+            $('#logoutBtn').classList.remove('hidden');
+        }
+
+        function showLogin() {
+            $('#login').classList.remove('hidden');
+            $('#logoutBtn').classList.add('hidden');
+        }
+
+        /* 查询登录状态，决定显示登录页还是管理页。 */
+        async function checkAuth() {
+            const t = getToken();
+            try {
+                const res = await fetch('/api/auth/status', {
+                    headers: t ? { 'Authorization': 'Bearer ' + t } : {}
+                });
+                const d = await res.json();
+                if (d.authenticated) {
+                    showApp();
+                    loadStatus();
+                    loadConfig();
+                } else {
+                    showLogin();
+                }
+            } catch (e) {
+                /* 设备可能重启/网络切换，保持当前界面并稍后重试。 */
+                showLogin();
+            }
+        }
+
+        /* 登录。 */
+        $('#loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const pwd = $('#loginPassword').value;
+            $('#loginError').textContent = '';
+            if (!pwd) {
+                $('#loginError').textContent = '请输入密码';
+                return;
+            }
+            const btn = $('#loginForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok && d.token) {
+                    setToken(d.token);
+                    if (d.is_default_password) toast('当前为出厂默认密码，建议修改', true);
+                    $('#loginPassword').value = '';
+                    checkAuth();
+                } else {
+                    $('#loginError').textContent = d.error || ('登录失败（' + res.status + '）');
+                }
+            } catch (err) {
+                $('#loginError').textContent = '网络错误，请重试';
+            }
+            btn.disabled = false;
+        });
+
+        /* 登出。 */
+        $('#logoutBtn').addEventListener('click', async () => {
+            try {
+                await apiFetch('/api/auth/logout', { method: 'POST' });
+            } catch (e) { /* 已回到登录页 */ }
+            clearToken();
+            showLogin();
+        });
 
         /* 轻量转义，防止注入。 */
         function esc(s) {
@@ -311,7 +480,7 @@
         /* 加载并渲染系统状态。 */
         async function loadStatus() {
             try {
-                const res = await fetch('/api/status');
+                const res = await apiFetch('/api/status');
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const d = await res.json();
                 const sys = d.system || {};
@@ -338,7 +507,7 @@
         /* 加载当前配置到表单。 */
         async function loadConfig() {
             try {
-                const res = await fetch('/api/config');
+                const res = await apiFetch('/api/config');
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const d = await res.json();
                 const mode = d.wifi_mode === 'sta' ? 'sta' : 'ap';
@@ -359,7 +528,7 @@
         }
 
         async function postForm(action, data) {
-            const res = await fetch(action, {
+            const res = await apiFetch(action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: data
@@ -421,14 +590,14 @@
         $('#reboot').addEventListener('click', async () => {
             if (!confirm('确定重启设备吗？')) return;
             try {
-                await fetch('/api/system/reboot', { method: 'POST' });
+                await apiFetch('/api/system/reboot', { method: 'POST' });
             } catch (e) { /* 连接会立即断开 */ }
             toast('正在重启…');
         });
 
-        /* 初次加载 + 周期刷新状态。 */
-        loadStatus();
-        loadConfig();
+        /* 初次加载：先鉴权，登录后加载数据并周期刷新状态。 */
+        showLogin();
+        checkAuth();
         setInterval(loadStatus, 5000);
     </script>
 </body>

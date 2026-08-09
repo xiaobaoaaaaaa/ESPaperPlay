@@ -28,15 +28,19 @@ void webserver_send_json(httpd_req_t *req, const char *status, const cJSON *root
     free(body);
 }
 
-void webserver_send_json_err(httpd_req_t *req, const char *msg) {
+void webserver_send_json_err_status(httpd_req_t *req, const char *status, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     if (root != NULL) {
         cJSON_AddStringToObject(root, "error", msg);
-        webserver_send_json(req, "400 Bad Request", root);
+        webserver_send_json(req, status, root);
         cJSON_Delete(root);
     } else {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
     }
+}
+
+void webserver_send_json_err(httpd_req_t *req, const char *msg) {
+    webserver_send_json_err_status(req, "400 Bad Request", msg);
 }
 
 /* ------------------------------------------------------------------ */

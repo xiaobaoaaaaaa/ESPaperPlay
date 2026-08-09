@@ -25,6 +25,10 @@ static const char *TAG = "ESPaperPlay_WEB_CFG";
 
 /** GET /api/config —— 返回当前系统配置。 */
 esp_err_t webserver_handle_config_get(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     const espaperplay_system_config_t *cfg = espaperplay_system_get_config();
 
     cJSON *root = cJSON_CreateObject();
@@ -47,6 +51,10 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
 
 /** POST /api/config —— 更新系统配置并重新应用 WiFi。 */
 esp_err_t webserver_handle_config_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     /* 读取表单编码的请求体。 */
     int total = req->content_len;
     if (total <= 0 || total >= ESPAPERPLAY_WEB_FORM_BUF_SIZE) {
@@ -149,6 +157,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
 
 /** POST /api/config/reset —— 恢复出厂默认并重新应用 WiFi。 */
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     esp_err_t err = espaperplay_system_reset_defaults();
     if (err == ESP_OK) {
         err = espaperplay_wifi_start();
@@ -166,6 +178,10 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
 
 /** POST /api/wifi/restart —— 重新应用 WiFi 配置。 */
 esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     esp_err_t err = espaperplay_wifi_start();
 
     cJSON *root = cJSON_CreateObject();

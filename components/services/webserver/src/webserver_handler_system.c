@@ -75,6 +75,10 @@ esp_err_t webserver_handle_status_get(httpd_req_t *req) {
 
 /** POST /api/system/reboot —— 重启设备。 */
 esp_err_t webserver_handle_reboot_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
     webserver_send_json(req, "200 OK", root);

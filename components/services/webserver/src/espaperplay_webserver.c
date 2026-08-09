@@ -54,6 +54,18 @@ static esp_err_t register_handlers(httpd_handle_t server) {
          .method = HTTP_POST,
          .handler = webserver_handle_reboot_post,
          .user_ctx = NULL},
+        {.uri = "/api/auth/status",
+         .method = HTTP_GET,
+         .handler = webserver_handle_auth_status_get,
+         .user_ctx = NULL},
+        {.uri = "/api/auth/login",
+         .method = HTTP_POST,
+         .handler = webserver_handle_auth_login_post,
+         .user_ctx = NULL},
+        {.uri = "/api/auth/logout",
+         .method = HTTP_POST,
+         .handler = webserver_handle_auth_logout_post,
+         .user_ctx = NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
@@ -74,7 +86,7 @@ esp_err_t espaperplay_webserver_start(void) {
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192; /* JSON 序列化 / 表单解析需要较大栈 */
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_server, &config);

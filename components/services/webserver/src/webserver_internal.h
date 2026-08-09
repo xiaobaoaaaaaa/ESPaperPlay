@@ -49,6 +49,15 @@ extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 void webserver_send_json(httpd_req_t *req, const char *status, const cJSON *root);
 
 /**
+ * @brief 以指定状态码 + JSON 错误对象响应。
+ *
+ * @param req    当前请求。
+ * @param status 响应状态行（如 "401 Unauthorized"）。
+ * @param msg    错误描述。
+ */
+void webserver_send_json_err_status(httpd_req_t *req, const char *status, const char *msg);
+
+/**
  * @brief 以 400 + JSON 错误对象响应。
  *
  * @param req 当前请求。
@@ -85,6 +94,15 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req);
 esp_err_t webserver_handle_config_post(httpd_req_t *req);
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req);
 esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req);
+
+/* 鉴权守卫（webserver_auth_guard.c）。 */
+esp_err_t webserver_require_auth(httpd_req_t *req);
+bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size);
+
+/* 鉴权域（webserver_handler_auth.c）。 */
+esp_err_t webserver_handle_auth_login_post(httpd_req_t *req);
+esp_err_t webserver_handle_auth_logout_post(httpd_req_t *req);
+esp_err_t webserver_handle_auth_status_get(httpd_req_t *req);
 
 #ifdef __cplusplus
 }
