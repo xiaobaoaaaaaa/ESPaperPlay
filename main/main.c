@@ -22,6 +22,7 @@
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
+#include "espaperplay_session.h"
 #include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_touch.h"
@@ -70,6 +71,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_system_init());
     /* 设备鉴权：加载密码记录（不依赖硬件），供 Web 等模块校验使用。 */
     ESP_ERROR_CHECK(espaperplay_auth_init());
+    /* 会话管理：签发/校验登录态与失败限速锁定（纯内存，不依赖硬件）。 */
+    ESP_ERROR_CHECK(espaperplay_session_init());
 
     ESP_ERROR_CHECK(espaperplay_board_init());
 
