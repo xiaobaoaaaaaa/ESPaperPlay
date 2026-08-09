@@ -17,8 +17,7 @@
 static const char *TAG = "ESPaperPlay_AUTH";
 
 /* NVS 键名。 */
-#define NVS_KEY_PASSWORD "pwd"    /*!< 密码记录（blob） */
-#define NVS_KEY_DEFAULT "default" /*!< 是否出厂默认密码（u8） */
+#define NVS_KEY_PASSWORD "pwd" /*!< 密码记录（blob） */
 
 /**
  * @brief NVS 中密码记录的二进制布局（packed，共 53 字节）。
@@ -37,7 +36,6 @@ typedef struct __attribute__((packed)) {
 static espaperplay_auth_blob_t s_blob;
 static bool s_initialized = false;
 static bool s_configured = false;
-static bool s_is_default = false;
 
 /* ------------------------------------------------------------------ */
 /* 底层辅助函数                                                         */
@@ -123,9 +121,8 @@ static esp_err_t auth_load(void) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(ESPAPERPLAY_AUTH_NVS_NAMESPACE, NVS_READONLY, &handle);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-        /* 命名空间尚不存在：视为未配置，由 init 创建默认密码。 */
+        /* 命名空间尚不存在：视为未配置（出厂无密码状态）。 */
         s_configured = false;
-        s_is_default = false;
         return ESP_OK;
     }
     if (err != ESP_OK) {
@@ -144,18 +141,14 @@ static esp_err_t auth_load(void) {
         }
     }
 
-    uint8_t def = 0;
-    err = nvs_get_u8(handle, NVS_KEY_DEFAULT, &def);
-    s_is_default = (err == ESP_OK && def == 1 && s_configured);
-
     nvs_close(handle);
     return ESP_OK;
 }
 
 /**
- * @brief 将密码记录写回 NVS，并按需设置 / 清除"默认密码"标记。
+ * @brief 将密码记录写回 NVS 并刷新内存缓存。
  */
-static esp_err_t auth_save(const espaperplay_auth_blob_t *blob, bool is_default) {
+static esp_err_t auth_save(const espaperplay_auth_blob_t *blob) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(ESPAPERPLAY_AUTH_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
@@ -165,16 +158,6 @@ static esp_err_t auth_save(const espaperplay_auth_blob_t *blob, bool is_default)
 
     err = nvs_set_blob(handle, NVS_KEY_PASSWORD, blob, sizeof(*blob));
     if (err == ESP_OK) {
-        if (is_default) {
-            err = nvs_set_u8(handle, NVS_KEY_DEFAULT, 1);
-        } else {
-            err = nvs_erase_key(handle, NVS_KEY_DEFAULT);
-            if (err == ESP_ERR_NVS_NOT_FOUND) {
-                err = ESP_OK; /* 键本就不存在，视为成功 */
-            }
-        }
-    }
-    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -182,7 +165,6 @@ static esp_err_t auth_save(const espaperplay_auth_blob_t *blob, bool is_default)
     if (err == ESP_OK) {
         s_blob = *blob;
         s_configured = true;
-        s_is_default = is_default;
     }
     return err;
 }
@@ -219,31 +201,13 @@ esp_err_t espaperplay_auth_init(void) {
         return err;
     }
 
-    if (!s_configured) {
-        /* 首次上电：以出厂默认密码创建记录。 */
-        espaperplay_auth_blob_t blob;
-        err = auth_make_blob(ESPAPERPLAY_AUTH_DEFAULT_PASSWORD, &blob);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to create default password record");
-            return err;
-        }
-        err = auth_save(&blob, true);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to persist default password record: %s", esp_err_to_name(err));
-            return err;
-        }
-        ESP_LOGW(TAG, "No password record, created default password (please change it)");
-    }
-
     s_initialized = true;
     ESP_LOGI(TAG, "Auth initialized, password %s",
-             s_is_default ? "is default (change it)" : "configured");
+             s_configured ? "configured" : "NOT set (unconfigured, first-time setup required)");
     return ESP_OK;
 }
 
 bool espaperplay_auth_is_configured(void) { return s_configured; }
-
-bool espaperplay_auth_is_default(void) { return s_is_default; }
 
 esp_err_t espaperplay_auth_verify(const char *password) {
     if (password == NULL) {
@@ -287,7 +251,7 @@ esp_err_t espaperplay_auth_change_password(const char *new_password) {
     if (err != ESP_OK) {
         return err;
     }
-    err = auth_save(&blob, false);
+    err = auth_save(&blob);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to persist new password: %s", esp_err_to_name(err));
         return err;
@@ -296,17 +260,26 @@ esp_err_t espaperplay_auth_change_password(const char *new_password) {
     return ESP_OK;
 }
 
-esp_err_t espaperplay_auth_reset_defaults(void) {
-    espaperplay_auth_blob_t blob;
-    esp_err_t err = auth_make_blob(ESPAPERPLAY_AUTH_DEFAULT_PASSWORD, &blob);
+esp_err_t espaperplay_auth_clear_password(void) {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(ESPAPERPLAY_AUTH_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = auth_save(&blob, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to reset password to default: %s", esp_err_to_name(err));
-        return err;
+    err = nvs_erase_key(handle, NVS_KEY_PASSWORD);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK; /* 本就没有密码，视为成功 */
     }
-    ESP_LOGW(TAG, "Password reset to default");
-    return ESP_OK;
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+
+    if (err == ESP_OK) {
+        s_configured = false;
+        memset(&s_blob, 0, sizeof(s_blob));
+        ESP_LOGW(TAG, "Password cleared, auth unconfigured");
+    }
+    return err;
 }
