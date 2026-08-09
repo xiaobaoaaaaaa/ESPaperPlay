@@ -8,6 +8,7 @@
 
 #include "esp_http_server.h"
 
+#include "espaperplay_auth.h"
 #include "espaperplay_session.h"
 #include "webserver_internal.h"
 
@@ -45,9 +46,14 @@ bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size
  * @brief 受保护接口的鉴权守卫。
  *
  * 校验 Authorization: Bearer <token> 是否有效；失败时发送 401 并返回
- * ESP_FAIL，调用方应直接 return。
+ * ESP_FAIL，调用方应直接 return。出厂未设置密码时免鉴权放行（首次设置）。
  */
 esp_err_t webserver_require_auth(httpd_req_t *req) {
+    /* 出厂未设置密码：处于首次设置阶段，免鉴权放行。 */
+    if (!espaperplay_auth_is_configured()) {
+        return ESP_OK;
+    }
+
     char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
     if (!webserver_get_bearer_token(req, token, sizeof(token))) {
         webserver_send_json_err_status(req, "401 Unauthorized", "未登录");

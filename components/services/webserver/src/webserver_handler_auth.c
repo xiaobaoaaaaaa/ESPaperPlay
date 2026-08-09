@@ -47,8 +47,37 @@ static esp_err_t read_form_body(httpd_req_t *req, char **out_body) {
     return ESP_OK;
 }
 
+/** 签发会话并返回 JSON（token + password_configured）。 */
+static esp_err_t issue_session(httpd_req_t *req) {
+    char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
+    esp_err_t cerr = espaperplay_session_create(0, token, sizeof(token), NULL);
+    if (cerr != ESP_OK) {
+        webserver_send_json_err(req, esp_err_to_name(cerr));
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (root != NULL) {
+        cJSON_AddBoolToObject(root, "ok", true);
+        cJSON_AddStringToObject(root, "token", token);
+        cJSON_AddBoolToObject(root, "password_configured", espaperplay_auth_is_configured());
+        webserver_send_json(req, "200 OK", root);
+        cJSON_Delete(root);
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+    }
+    return ESP_OK;
+}
+
 /** POST /api/auth/login —— 密码登录，成功后签发会话 token。 */
 esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
+    /* 出厂未设置密码：免密码登录（首次设置阶段兜底，主要走 /api/auth/password）。 */
+    if (!espaperplay_auth_is_configured()) {
+        ESP_LOGI(TAG, "Login (passwordless, unconfigured)");
+        espaperplay_session_login_success();
+        return issue_session(req);
+    }
+
     /* 登录限速：锁定期间直接 429，不执行密码校验（节省 CPU，防暴力破解与 DoS）。 */
     if (!espaperplay_session_login_allowed()) {
         ESP_LOGW(TAG, "Login rejected: in lockout");
@@ -88,23 +117,48 @@ esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
     /* 登录成功：清零失败计数并签发会话。 */
     espaperplay_session_login_success();
     ESP_LOGI(TAG, "Login success");
-    char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
-    esp_err_t cerr = espaperplay_session_create(0, token, sizeof(token), NULL);
-    if (cerr != ESP_OK) {
-        webserver_send_json_err(req, esp_err_to_name(cerr));
+    return issue_session(req);
+}
+
+/** POST /api/auth/password —— 首次设置 / 修改密码。 */
+esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
+    bool configured = espaperplay_auth_is_configured();
+    /* 已配置时修改密码需要已登录；首次设置（未配置）免鉴权。 */
+    if (configured && webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
     }
 
-    cJSON *root = cJSON_CreateObject();
-    if (root != NULL) {
-        cJSON_AddBoolToObject(root, "ok", true);
-        cJSON_AddStringToObject(root, "token", token);
-        cJSON_AddBoolToObject(root, "is_default_password", espaperplay_auth_is_default());
-        webserver_send_json(req, "200 OK", root);
-        cJSON_Delete(root);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+    char *body = NULL;
+    if (read_form_body(req, &body) != ESP_OK) {
+        webserver_send_json_err(req, "请求体过大或为空");
+        return ESP_FAIL;
     }
+    char password[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
+    bool has_pwd = webserver_form_get_field(body, "password", password, sizeof(password));
+    free(body);
+    if (!has_pwd || password[0] == '\0') {
+        webserver_send_json_err(req, "缺少密码");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = espaperplay_auth_change_password(password);
+    if (err != ESP_OK) {
+        webserver_send_json_err(req, esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+
+    /* 首次设置：清零失败计数并签发会话，前端直接进入管理页。 */
+    if (!configured) {
+        espaperplay_session_login_success();
+        ESP_LOGI(TAG, "Password set (first-time setup)");
+        return issue_session(req);
+    }
+
+    ESP_LOGI(TAG, "Password changed");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
     return ESP_OK;
 }
 
@@ -131,7 +185,7 @@ esp_err_t webserver_handle_auth_status_get(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
     if (root != NULL) {
         cJSON_AddBoolToObject(root, "authenticated", authed);
-        cJSON_AddBoolToObject(root, "is_default_password", espaperplay_auth_is_default());
+        cJSON_AddBoolToObject(root, "password_configured", espaperplay_auth_is_configured());
         cJSON_AddBoolToObject(root, "login_locked", !espaperplay_session_login_allowed());
         cJSON_AddNumberToObject(root, "sessions", (double)espaperplay_session_count());
         webserver_send_json(req, "200 OK", root);

@@ -36,6 +36,10 @@ esp_err_t webserver_handle_favicon_get(httpd_req_t *req) {
 
 /** GET /api/status —— 系统运行状态。 */
 esp_err_t webserver_handle_status_get(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
     cJSON *root = cJSON_CreateObject();
     if (root == NULL) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");

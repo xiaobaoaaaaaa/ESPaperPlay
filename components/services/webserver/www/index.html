@@ -224,8 +224,8 @@
             z-index: 10;
         }
 
-        #login.hidden {
-            display: none;
+        .hidden {
+            display: none !important;
         }
 
         .login-card {
@@ -259,10 +259,6 @@
             font-size: 13px;
             padding: 6px 12px;
         }
-
-        #logoutBtn.hidden {
-            display: none;
-        }
     </style>
 </head>
 
@@ -275,17 +271,31 @@
     <div id="login">
         <div class="login-card">
             <h2>ESPaperPlay 控制台</h2>
-            <p class="login-sub">请输入设备密码以继续</p>
-            <form id="loginForm">
+            <p class="login-sub" id="authSubtitle">请输入设备密码以继续</p>
+            <form id="setupForm" class="hidden">
+                <div class="field">
+                    <label>设置设备密码（至少 8 位）</label>
+                    <input type="password" id="setupPassword" placeholder="新密码"
+                        minlength="8" maxlength="63" autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <input type="password" id="setupConfirm" placeholder="确认新密码"
+                        minlength="8" maxlength="63" autocomplete="new-password">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary" style="width:100%">设置密码并进入</button>
+                </div>
+            </form>
+            <form id="loginForm" class="hidden">
                 <div class="field">
                     <input type="password" name="password" id="loginPassword" placeholder="设备密码"
                         autocomplete="current-password">
                 </div>
-                <div id="loginError" class="login-error"></div>
                 <div class="actions">
                     <button type="submit" class="primary" style="width:100%">登 录</button>
                 </div>
             </form>
+            <div id="authError" class="login-error"></div>
         </div>
     </div>
     <main>
@@ -377,9 +387,20 @@
             $('#logoutBtn').classList.remove('hidden');
         }
 
+        function showSetup() {
+            $('#login').classList.remove('hidden');
+            $('#logoutBtn').classList.add('hidden');
+            $('#setupForm').classList.remove('hidden');
+            $('#loginForm').classList.add('hidden');
+            $('#authSubtitle').textContent = '首次使用：请先设置设备密码';
+        }
+
         function showLogin() {
             $('#login').classList.remove('hidden');
             $('#logoutBtn').classList.add('hidden');
+            $('#setupForm').classList.add('hidden');
+            $('#loginForm').classList.remove('hidden');
+            $('#authSubtitle').textContent = '请输入设备密码以继续';
         }
 
         /* 查询登录状态，决定显示登录页还是管理页。 */
@@ -390,7 +411,10 @@
                     headers: t ? { 'Authorization': 'Bearer ' + t } : {}
                 });
                 const d = await res.json();
-                if (d.authenticated) {
+                if (!d.password_configured) {
+                    /* 出厂未设置密码：引导首次设置。 */
+                    showSetup();
+                } else if (d.authenticated) {
                     showApp();
                     loadStatus();
                     loadConfig();
@@ -403,13 +427,52 @@
             }
         }
 
+        /* 首次设置密码。 */
+        $('#setupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const pwd = $('#setupPassword').value;
+            const confirm = $('#setupConfirm').value;
+            $('#authError').textContent = '';
+            if (pwd.length < 8) {
+                $('#authError').textContent = '密码至少 8 位';
+                return;
+            }
+            if (pwd !== confirm) {
+                $('#authError').textContent = '两次输入的密码不一致';
+                return;
+            }
+            const btn = $('#setupForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/auth/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok && d.token) {
+                    setToken(d.token);
+                    $('#setupPassword').value = '';
+                    $('#setupConfirm').value = '';
+                    showApp();
+                    loadStatus();
+                    loadConfig();
+                } else {
+                    $('#authError').textContent = d.error || ('设置失败（' + res.status + '）');
+                }
+            } catch (err) {
+                $('#authError').textContent = '网络错误，请重试';
+            }
+            btn.disabled = false;
+        });
+
         /* 登录。 */
         $('#loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const pwd = $('#loginPassword').value;
-            $('#loginError').textContent = '';
+            $('#authError').textContent = '';
             if (!pwd) {
-                $('#loginError').textContent = '请输入密码';
+                $('#authError').textContent = '请输入密码';
                 return;
             }
             const btn = $('#loginForm button[type=submit]');
@@ -423,14 +486,13 @@
                 const d = await res.json();
                 if (res.ok && d.token) {
                     setToken(d.token);
-                    if (d.is_default_password) toast('当前为出厂默认密码，建议修改', true);
                     $('#loginPassword').value = '';
                     checkAuth();
                 } else {
-                    $('#loginError').textContent = d.error || ('登录失败（' + res.status + '）');
+                    $('#authError').textContent = d.error || ('登录失败（' + res.status + '）');
                 }
             } catch (err) {
-                $('#loginError').textContent = '网络错误，请重试';
+                $('#authError').textContent = '网络错误，请重试';
             }
             btn.disabled = false;
         });
@@ -479,6 +541,7 @@
 
         /* 加载并渲染系统状态。 */
         async function loadStatus() {
+            if (!getToken()) return; /* 未登录时不轮询，避免无效 401 请求 */
             try {
                 const res = await apiFetch('/api/status');
                 if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -595,8 +658,7 @@
             toast('正在重启…');
         });
 
-        /* 初次加载：先鉴权，登录后加载数据并周期刷新状态。 */
-        showLogin();
+        /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
         checkAuth();
         setInterval(loadStatus, 5000);
     </script>

@@ -101,6 +101,7 @@ bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size
 
 /* 鉴权域（webserver_handler_auth.c）。 */
 esp_err_t webserver_handle_auth_login_post(httpd_req_t *req);
+esp_err_t webserver_handle_auth_password_post(httpd_req_t *req);
 esp_err_t webserver_handle_auth_logout_post(httpd_req_t *req);
 esp_err_t webserver_handle_auth_status_get(httpd_req_t *req);
 
