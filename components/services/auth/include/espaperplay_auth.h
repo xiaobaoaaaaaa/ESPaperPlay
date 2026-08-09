@@ -30,9 +30,6 @@ extern "C" {
 /** NVS 配置命名空间。 */
 #define ESPAPERPLAY_AUTH_NVS_NAMESPACE "auth"
 
-/** 出厂默认密码（首次上电或恢复出厂后生效，公开值，建议登录后立即修改）。 */
-#define ESPAPERPLAY_AUTH_DEFAULT_PASSWORD "espaperplay"
-
 /** 密码最小长度（不含结尾 '\0'）。 */
 #define ESPAPERPLAY_AUTH_PASSWORD_MIN_LEN 8
 /** 密码最大长度（含结尾 '\0'）。 */
@@ -53,8 +50,10 @@ extern "C" {
 /**
  * @brief 初始化鉴权服务。
  *
- * 初始化 NVS 与 PSA 密码学库；若尚无密码记录，则以出厂默认密码创建并
- * 标记为"默认密码"。应在其他使用鉴权的模块之前调用，且仅需调用一次。
+ * 初始化 NVS 与 PSA 密码学库并从 NVS 加载密码记录；出厂状态不设置密码
+ * （espaperplay_auth_is_configured() 返回 false），需通过
+ * espaperplay_auth_change_password() 设置。应在其他使用鉴权的模块之前
+ * 调用，且仅需调用一次。
  *
  * @return 成功返回 ESP_OK，否则返回错误码。
  */
@@ -66,16 +65,6 @@ esp_err_t espaperplay_auth_init(void);
  * @return 已配置返回 true；NVS 记录缺失或损坏时返回 false。
  */
 bool espaperplay_auth_is_configured(void);
-
-/**
- * @brief 当前密码是否为出厂默认密码。
- *
- * @warning 出厂默认密码为公开值（见 ESPAPERPLAY_AUTH_DEFAULT_PASSWORD），
- *          应在部署后通过 espaperplay_auth_change_password() 修改。
- *
- * @return 是默认密码返回 true，否则返回 false。
- */
-bool espaperplay_auth_is_default(void);
 
 /**
  * @brief 校验密码是否正确。
@@ -94,7 +83,7 @@ esp_err_t espaperplay_auth_verify(const char *password);
 /**
  * @brief 设置或更改密码。
  *
- * 生成新的随机盐并按当前迭代次数派生后写回 NVS，同时清除"默认密码"标记；
+ * 生成新的随机盐并按当前迭代次数派生后写回 NVS；
  * 新密码即刻生效，旧密码立即失效。
  *
  * @param new_password 新密码明文。
@@ -104,13 +93,14 @@ esp_err_t espaperplay_auth_verify(const char *password);
 esp_err_t espaperplay_auth_change_password(const char *new_password);
 
 /**
- * @brief 恢复出厂默认密码。
+ * @brief 清除密码（恢复"未配置"状态）。
  *
- * 将密码重置为 ESPAPERPLAY_AUTH_DEFAULT_PASSWORD 并重新标记为"默认密码"。
+ * 删除 NVS 中的密码记录，之后 espaperplay_auth_is_configured() 返回 false，
+ * 设备回到出厂免鉴权状态。
  *
  * @return 成功返回 ESP_OK，否则返回错误码。
  */
-esp_err_t espaperplay_auth_reset_defaults(void);
+esp_err_t espaperplay_auth_clear_password(void);
 
 #ifdef __cplusplus
 }
