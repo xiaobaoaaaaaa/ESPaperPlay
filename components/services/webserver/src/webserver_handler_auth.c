@@ -134,11 +134,29 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
     char password[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
+    char current[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
     bool has_pwd = webserver_form_get_field(body, "password", password, sizeof(password));
+    bool has_current =
+        webserver_form_get_field(body, "current_password", current, sizeof(current));
     free(body);
     if (!has_pwd || password[0] == '\0') {
         webserver_send_json_err(req, "缺少密码");
         return ESP_FAIL;
+    }
+
+    /* 已配置时：修改密码需验证当前密码（防已登录会话被滥用）。 */
+    if (configured) {
+        if (!has_current || current[0] == '\0') {
+            webserver_send_json_err(req, "缺少当前密码");
+            return ESP_FAIL;
+        }
+        if (espaperplay_auth_verify(current) != ESP_OK) {
+            /* 当前密码错误：计入登录失败限速，防爆破改密。 */
+            espaperplay_session_login_failure();
+            webserver_send_json_err(req, "当前密码错误");
+            return ESP_OK;
+        }
+        espaperplay_session_login_success();
     }
 
     esp_err_t err = espaperplay_auth_change_password(password);
@@ -147,16 +165,19 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 首次设置：清零失败计数并签发会话，前端直接进入管理页。 */
+    /* 首次设置（未配置）：清零失败计数并签发会话，前端直接进入管理页。 */
     if (!configured) {
         espaperplay_session_login_success();
         ESP_LOGI(TAG, "Password set (first-time setup)");
         return issue_session(req);
     }
 
-    ESP_LOGI(TAG, "Password changed");
+    /* 修改成功：吊销全部会话，强制重新登录。 */
+    espaperplay_session_clear_all();
+    ESP_LOGI(TAG, "Password changed, all sessions revoked");
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "reauthenticate", true);
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
     return ESP_OK;

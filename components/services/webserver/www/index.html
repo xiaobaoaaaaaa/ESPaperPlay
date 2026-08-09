@@ -346,6 +346,30 @@
                 </div>
             </form>
         </section>
+
+        <section>
+            <h2>账户安全</h2>
+            <form id="passwordForm">
+                <div class="field">
+                    <label>当前密码</label>
+                    <input type="password" id="curPassword" placeholder="当前密码" maxlength="63"
+                        autocomplete="current-password">
+                </div>
+                <div class="field">
+                    <label>新密码（至少 8 位）</label>
+                    <input type="password" id="newPassword" placeholder="新密码" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <input type="password" id="confirmPassword" placeholder="确认新密码" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div id="pwdError" class="login-error"></div>
+                <div class="actions">
+                    <button type="submit" class="primary">修改密码</button>
+                </div>
+            </form>
+        </section>
     </main>
     <div id="toast"></div>
 
@@ -504,6 +528,52 @@
             } catch (e) { /* 已回到登录页 */ }
             clearToken();
             showLogin();
+        });
+
+        /* 修改密码（改后全部会话失效，需重新登录）。 */
+        $('#passwordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const cur = $('#curPassword').value;
+            const pwd = $('#newPassword').value;
+            const confirm = $('#confirmPassword').value;
+            $('#pwdError').textContent = '';
+            if (!cur) {
+                $('#pwdError').textContent = '请输入当前密码';
+                return;
+            }
+            if (pwd.length < 8) {
+                $('#pwdError').textContent = '新密码至少 8 位';
+                return;
+            }
+            if (pwd !== confirm) {
+                $('#pwdError').textContent = '两次输入的新密码不一致';
+                return;
+            }
+            const btn = $('#passwordForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await apiFetch('/api/auth/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ current_password: cur, password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok) {
+                    toast('密码已修改，请重新登录');
+                    clearToken();
+                    $('#curPassword').value = '';
+                    $('#newPassword').value = '';
+                    $('#confirmPassword').value = '';
+                    showLogin();
+                } else {
+                    $('#pwdError').textContent = d.error || ('修改失败（' + res.status + '）');
+                }
+            } catch (err) {
+                if (err.message !== 'Unauthorized') {
+                    $('#pwdError').textContent = '网络错误，请重试';
+                }
+            }
+            btn.disabled = false;
         });
 
         /* 轻量转义，防止注入。 */
