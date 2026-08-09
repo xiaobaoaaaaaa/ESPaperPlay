@@ -115,16 +115,22 @@ After boot, a management page is served on **port 80** of every network interfac
 | Route                | Method | Description                                       |
 | -------------------- | ------ | ------------------------------------------------- |
 | `/`                  | GET    | Management page (embedded HTML)                   |
-| `/api/status`        | GET    | Runtime status: uptime / heap / firmware / WiFi   |
-| `/api/config`        | GET    | Current system config (WiFi mode & credentials)   |
-| `/api/config`        | POST   | Update config (form-encoded), save & re-apply WiFi |
-| `/api/config/reset`  | POST   | Restore factory defaults & re-apply WiFi          |
-| `/api/wifi/restart`  | POST   | Re-apply WiFi config                              |
-| `/api/system/reboot` | POST   | Reboot the device                                 |
+| `/api/status`        | GET    | Runtime status: uptime / heap / firmware / WiFi (auth) |
+| `/api/config`        | GET    | Current system config: WiFi mode & credentials (auth) |
+| `/api/config`        | POST   | Update config (form-encoded), save & re-apply WiFi (auth) |
+| `/api/config/reset`  | POST   | Restore factory defaults & re-apply WiFi (auth)   |
+| `/api/wifi/restart`  | POST   | Re-apply WiFi config (auth)                       |
+| `/api/system/reboot` | POST   | Reboot the device (auth)                          |
+| `/api/auth/status`   | GET    | Login state: authenticated / password configured  |
+| `/api/auth/login`    | POST   | Password login, returns a session token           |
+| `/api/auth/password` | POST   | Set (first-time) or change password (auth if set) |
+| `/api/auth/logout`   | POST   | Revoke the current session                        |
 
 > AP mode: connect to the device AP from a phone / laptop and browse to
-> `http://192.168.4.1/`. No authentication is implemented yet — use only on
-> trusted LANs.
+> `http://192.168.4.1/`. On first boot (no password configured yet) the
+> console guides you to set a password; afterwards login is required.
+> Sensitive APIs (config / wifi / reboot / status) are protected by a bearer
+> session token; 5 consecutive login failures trigger a temporary lockout.
 
 ### Building
 
@@ -285,15 +291,21 @@ graph TD
 | 路由                  | 方法  | 说明                                        |
 | --------------------- | ----- | ------------------------------------------- |
 | `/`                   | GET   | 管理页面（嵌入式 HTML）                     |
-| `/api/status`         | GET   | 运行状态：运行时间 / 堆 / 固件 / WiFi 等    |
-| `/api/config`         | GET   | 当前系统配置（WiFi 模式与凭据）             |
-| `/api/config`         | POST  | 更新配置（表单编码），保存并重新应用 WiFi   |
-| `/api/config/reset`   | POST  | 恢复出厂默认配置并重新应用 WiFi             |
-| `/api/wifi/restart`   | POST  | 重新应用 WiFi 配置                          |
-| `/api/system/reboot`  | POST  | 重启设备                                    |
+| `/api/status`         | GET   | 运行状态：运行时间 / 堆 / 固件 / WiFi 等（需登录）|
+| `/api/config`         | GET   | 当前系统配置：WiFi 模式与凭据（需登录）           |
+| `/api/config`         | POST  | 更新配置（表单编码），保存并重新应用 WiFi（需登录）|
+| `/api/config/reset`   | POST  | 恢复出厂默认配置并重新应用 WiFi（需登录）         |
+| `/api/wifi/restart`   | POST  | 重新应用 WiFi 配置（需登录）                      |
+| `/api/system/reboot`  | POST  | 重启设备（需登录）                                |
+| `/api/auth/status`    | GET   | 登录状态：是否已登录 / 是否已设置密码              |
+| `/api/auth/login`     | POST  | 密码登录，成功后返回会话 token                    |
+| `/api/auth/password`  | POST  | 首次设置 / 修改密码（已设置后需登录）              |
+| `/api/auth/logout`    | POST  | 吊销当前会话                                      |
 
 > AP 模式下用手机 / 电脑连接设备热点，浏览器访问 `http://192.168.4.1/`
-> 即可。当前版本未实现访问认证，仅适用于可信局域网。
+> 即可。设备出厂未设置密码时，页面会引导首次设置密码；设置后访问需登录。
+> 配置 / WiFi / 重启 / 状态等敏感接口由会话 token 鉴权保护，连续 5 次登录
+> 失败会触发临时锁定。
 
 ### 编译方法
 
