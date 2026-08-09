@@ -136,8 +136,7 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
     char password[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
     char current[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
     bool has_pwd = webserver_form_get_field(body, "password", password, sizeof(password));
-    bool has_current =
-        webserver_form_get_field(body, "current_password", current, sizeof(current));
+    bool has_current = webserver_form_get_field(body, "current_password", current, sizeof(current));
     free(body);
     if (!has_pwd || password[0] == '\0') {
         webserver_send_json_err(req, "缺少密码");
