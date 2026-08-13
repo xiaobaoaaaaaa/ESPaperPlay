@@ -15,7 +15,6 @@
 #include "driver/spi_master.h"
 
 #include "esp_check.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -34,9 +33,9 @@ static const char *TAG = "ESPaperPlay_EPD";
 #define UC8179_CMD_PON 0x04  /*!< Power ON（内部电源上电） */
 #define UC8179_CMD_BTST 0x06 /*!< Booster Soft Start（升压软启动） */
 #define UC8179_CMD_DSLP 0x07 /*!< Deep Sleep（深度睡眠，校验码 0xA5） */
-#define UC8179_CMD_DTM1 0x10 /*!< Data Start Transmission 1（OLD 数据） */
+#define UC8179_CMD_DTM1 0x10 /*!< Data Start Transmission 1（OLD/旧图像平面） */
 #define UC8179_CMD_DRF 0x12  /*!< Display Refresh（启动刷新，等待 BUSY） */
-#define UC8179_CMD_DTM2 0x13 /*!< Data Start Transmission 2（NEW 数据） */
+#define UC8179_CMD_DTM2 0x13 /*!< Data Start Transmission 2（NEW/新图像平面） */
 #define UC8179_CMD_CDI 0x50  /*!< VCOM and Data Interval Setting */
 #define UC8179_CMD_PTL 0x90  /*!< Partial Window（局部窗口，8 参数 + PT_SCAN） */
 #define UC8179_CMD_PTIN 0x91 /*!< Partial In（进入局部模式） */
@@ -45,7 +44,9 @@ static const char *TAG = "ESPaperPlay_EPD";
 #define UC8179_CMD_FORCE_TEMP 0xE5 /*!< Force Temperature（厂商未公开命令） */
 
 /* ====================================================================
- * 寄存器取值（全部取自参考工程 Display_EPD_W21.c，已上板验证）
+ * 寄存器取值
+ * 全屏/局部取值参考厂商 demo（Display_EPD_W21.c）；N2OCP 语义参考同面板
+ * （GDEY075T7）上验证过的 idfxx_epaper_uc8179 驱动。
  * ==================================================================== */
 
 /** PSR：REG=0（LUT 取自 OTP）、KW/R=1（黑白 KW 模式）、UD=1、SHL=1、
@@ -53,15 +54,17 @@ static const char *TAG = "ESPaperPlay_EPD";
 #define UC8179_PSR_VALUE 0x1F
 
 /* CDI 共 2 个数据字节：
- *   字节 1：BDZ | - | BDV[1:0] | N2OCP | - | DDX[1:0]（数据极性，01=默认）
+ *   字节 1：BDZ | - | BDV[1:0] | N2OCP | - | DDX[1:0]
  *   字节 2：- | - | - | SDEND | CDI[3:0]（VCOM 与数据间隔，0111=10 hsync 默认）
  *
- * 极性约定：本驱动统一使用 DDX=01（规格书默认），此时数据位 1 = 白、0 = 黑，
- * 与参考工程 GUI_Paint.h 的 WHITE=0xFF / BLACK=0x00 一致。注意参考工程的
- * EPD_init_Fast 用的是 CDI=0x10（DDX=00，极性相反），其配套位图按相反极性
- * 制作；本驱动不沿用，图像数据一律按「1=白」提供。 */
-#define UC8179_CDI_FULL_B0 0x21 /*!< 全屏刷新（参考工程 EPD_init，DDX=01） */
-#define UC8179_CDI_PARTIAL_B0 0xA9 /*!< 局部刷新（参考工程 EPD_partial_display） */
+ * N2OCP=1（bit3）：每次刷新完成后控制器自动把新图像平面（DTM2）拷贝到
+ * 旧图像平面（DTM1），因此驱动无需任何"上一帧"软件维护，每次刷新都按
+ * 真实的 {旧,新} 差分选择 LUT 波形（黑底画白、白底画黑均正确）。
+ * DDX=01（默认）：数据位 1 = 白（0xFF）、0 = 黑（0x00），与 GUI_Paint.h
+ * 的 WHITE=0xFF / BLACK=0x00 一致。注意厂商 demo 的 EPD_init_Fast 用
+ * CDI=0x10（DDX=00，极性相反），其位图按相反极性制作，本驱动不沿用。 */
+#define UC8179_CDI_FULL_B0 0x29 /*!< 全屏刷新：N2OCP=1，DDX=01（idfxx 取值） */
+#define UC8179_CDI_PARTIAL_B0 0xA9 /*!< 局部刷新：边界保持 + N2OCP=1（demo/idfxx 一致） */
 #define UC8179_CDI_SLEEP_B0 0xF7   /*!< 睡眠前设置（参考工程 EPD_sleep） */
 #define UC8179_CDI_B1 0x07         /*!< 间隔 10 hsync（默认值） */
 
@@ -92,44 +95,6 @@ static spi_device_handle_t s_spi_dev = NULL; /*!< EPD SPI 设备句柄 */
 static SemaphoreHandle_t s_lock = NULL;      /*!< 刷新互斥锁（自检任务与业务可并发调用） */
 static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
-static uint8_t *s_shadow = NULL;             /*!< 上一帧影子缓冲（实际显示内容），NULL=分配失败 */
-
-/* ====================================================================
- * 影子缓冲（上一帧跟踪）
- * ==================================================================== */
-
-/**
- * @brief 分配上一帧影子缓冲并初始化为全白。
- *
- * 局部/全屏刷新时 DTM1（OLD）必须反映面板上的*真实*旧内容，控制器才能按
- * {旧,新} 组合选择正确的 LUT 波形。若把 DTM1 固定为 0xFF（旧=全白），在
- * 黑底上局部画白将不会更新（{1,1}->LUTWW 保持白，物理黑像素不动）。
- *
- * 优先使用 PSRAM（8MB），失败回退内部 RAM；再失败则降级为"旧=全白"近似
- * （打印警告，局部刷新在非白背景上可能不更新）。
- *
- * 初始值 0xFF：假设上电时面板为白。首个操作若为清屏则不受影响（清屏强制
- * DTM1=0x00，全像素黑->白翻转）。
- */
-static esp_err_t epd_shadow_alloc(void) {
-    if (s_shadow != NULL) {
-        return ESP_OK;
-    }
-    s_shadow = heap_caps_malloc(EPD_FRAME_BYTES, MALLOC_CAP_SPIRAM);
-    if (s_shadow == NULL) {
-        s_shadow = heap_caps_malloc(EPD_FRAME_BYTES, MALLOC_CAP_8BIT);
-    }
-    if (s_shadow == NULL) {
-        ESP_LOGW(TAG,
-                 "shadow framebuffer alloc failed (%u bytes); DTM1 falls back to "
-                 "all-white (partial refresh on non-white background may not update)",
-                 (unsigned)EPD_FRAME_BYTES);
-        return ESP_ERR_NO_MEM;
-    }
-    memset(s_shadow, 0xFF, EPD_FRAME_BYTES); /* 假设上电时面板为全白 */
-    ESP_LOGI(TAG, "shadow framebuffer ready: %u bytes", (unsigned)EPD_FRAME_BYTES);
-    return ESP_OK;
-}
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -225,7 +190,7 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
 }
 
 /**
- * @brief 写 len 个相同字节（用于清屏 0x00/0xFF 填充，避免分配大缓冲）。
+ * @brief 写 len 个相同字节（用于清屏/平面填充，避免分配大缓冲）。
  */
 static esp_err_t epd_write_fill(uint8_t value, size_t len) {
     static uint8_t s_fill[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
@@ -263,6 +228,7 @@ static esp_err_t epd_wait_busy(void) {
 
 /**
  * @brief 硬件复位（参考工程 EPD_W21_Init：低电平至少 10ms 后释放）。
+ *        图像 RAM 在复位后保留（idfxx 在同面板上验证），旧平面数据不丢失。
  */
 static esp_err_t epd_hw_reset(void) {
     gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_RST, 0);
@@ -274,7 +240,7 @@ static esp_err_t epd_hw_reset(void) {
 
 /* ====================================================================
  * 控制器初始化（PSR -> [CDI] -> PON -> [BTST] -> 级联/温度）
- * 注：DTM1/DTM2 由各刷新流程写入。
+ * 注：DTM 数据由各刷新流程写入；旧图像平面由 N2OCP 自动维护。
  * ==================================================================== */
 
 /**
@@ -282,9 +248,8 @@ static esp_err_t epd_hw_reset(void) {
  *
  * 每次刷新前都会完整执行本流程（对应参考工程在每次显示操作前的
  * EPD_init_Fast / EPD_display_init），因此睡眠唤醒无需额外调用 init。
- * DTM1/DTM2 由各刷新流程写入（见 epd_refresh_full / epd_refresh_partial）。
  *
- * @param fast  true：全屏刷新参数（CDI 0x21/0x07、BTST、强制温度 0x5A）；
+ * @param fast  true：全屏刷新参数（CDI 0x29/0x07、BTST、强制温度 0x5A）；
  *              false：局部刷新参数（强制温度 0x6E，CDI 由局部流程另行设置）。
  */
 static esp_err_t epd_init_controller(bool fast) {
@@ -351,34 +316,80 @@ static esp_err_t epd_init_controller(bool fast) {
 }
 
 /* ====================================================================
+ * 局部窗口辅助
+ * ==================================================================== */
+
+/**
+ * @brief 进入局部模式并设置窗口（CDI 边界保持 -> PTIN -> PTL）。
+ *
+ * 窗口终点为含端点坐标（x_end = x+w-1，y_end = y+h-1），与 idfxx 驱动在
+ * 同面板上的取值一致；HRST/HRED 低 3 位按规格书填写（000/111）。
+ */
+static esp_err_t epd_window_begin(uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
+    static const uint8_t cdi_partial[2] = {UC8179_CDI_PARTIAL_B0, UC8179_CDI_B1};
+    const uint16_t x_end = x + width - 1;
+    const uint16_t y_end = y + height - 1;
+    const uint8_t ptl[9] = {
+        (uint8_t)(x >> 8),      (uint8_t)(x & 0xFF),        /* HRST[9:0] */
+        (uint8_t)(x_end >> 8),  (uint8_t)(x_end & 0xFF),    /* HRED[9:0] */
+        (uint8_t)(y >> 8),      (uint8_t)(y & 0xFF),        /* VRST[9:0] */
+        (uint8_t)(y_end >> 8),  (uint8_t)(y_end & 0xFF),    /* VRED[9:0] */
+        0x01,                                               /* PT_SCAN=1：全面板扫描（默认） */
+    };
+    esp_err_t ret;
+
+    /* VCOM/数据间隔：局部刷新取值（demo/idfxx 一致），边界保持防闪烁。 */
+    ret = epd_write_cmd(UC8179_CMD_CDI);
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
+    ret = epd_write_data(cdi_partial, sizeof(cdi_partial));
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
+
+    /* 进入局部模式并设置窗口。 */
+    ret = epd_write_cmd(UC8179_CMD_PTIN);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PTIN cmd failed");
+    ret = epd_write_cmd(UC8179_CMD_PTL);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PTL cmd failed");
+    return epd_write_data(ptl, sizeof(ptl));
+}
+
+/**
+ * @brief 退出局部模式。
+ */
+static esp_err_t epd_window_end(void) {
+    return epd_write_cmd(UC8179_CMD_PTOUT);
+}
+
+/* ====================================================================
  * 刷新流程
  * ==================================================================== */
 
 /**
- * @brief 全屏刷新：DTM1=上一帧（影子缓冲）-> DTM2=图像 -> DRF -> 等待 BUSY。
+ * @brief 启动刷新并等待完成（DRF 后等 10ms 再轮询 BUSY）。
+ *
+ * @note DRF 后 BUSY 需要一点时间才拉低，立即轮询会误读空闲电平导致提前
+ *       返回；参考工程与 idfxx 均延时 10ms（"!!!The delay here is necessary,
+ *       200uS at least!!!" 是保守下限）。
+ */
+static esp_err_t epd_refresh_and_wait(void) {
+    esp_err_t ret = epd_write_cmd(UC8179_CMD_DRF);
+    ESP_RETURN_ON_ERROR(ret, TAG, "DRF cmd failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    return epd_wait_busy();
+}
+
+/**
+ * @brief 全屏刷新：DTM2=图像 -> DRF -> 等待 BUSY。
+ *
+ * 旧图像平面（DTM1）由 N2OCP 在上次刷新后自动维护，因此本流程按真实的
+ * {旧,新} 差分选择波形。清屏（image_buf=NULL）时只写 DTM2=0xFF：黑像素
+ * 走 黑->白 深度擦除波形，白像素保持（参考 idfxx do_clear 的做法）。
  */
 static esp_err_t epd_refresh_full(const void *image_buf) {
     esp_err_t ret;
 
     ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
 
-    /* DTM1（OLD）：上一帧真实内容（影子缓冲），每个像素按 {旧,新} 组合选择
-     * 正确的 LUT 波形，无残影、无漏刷。清屏时强制 0x00：全像素经历 黑->白
-     * 翻转，保证面板被真正驱动为纯白（不依赖面板此前状态）。 */
-    ret = epd_write_cmd(UC8179_CMD_DTM1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
-    if (image_buf == NULL) {
-        ret = epd_write_fill(0x00, EPD_FRAME_BYTES);
-    } else if (s_shadow != NULL) {
-        ret = epd_write_data(s_shadow, EPD_FRAME_BYTES);
-    } else {
-        ret = epd_write_fill(0xFF, EPD_FRAME_BYTES);
-    }
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    /* DTM2（NEW）：新图像（NULL = 清屏为全白）。 */
+    /* DTM2（NEW）：新图像（NULL = 清屏为全白，保留 DTM1 使黑像素深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
     if (image_buf == NULL) {
@@ -390,81 +401,31 @@ static esp_err_t epd_refresh_full(const void *image_buf) {
         return ret;
     }
 
-    /* DRF：启动刷新；命令后至少等待 200us 再查询 BUSY（规格书/参考工程均要求）。 */
-    ret = epd_write_cmd(UC8179_CMD_DRF);
-    ESP_RETURN_ON_ERROR(ret, TAG, "DRF cmd failed");
-    vTaskDelay(pdMS_TO_TICKS(1));
-    ret = epd_wait_busy();
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    /* 同步影子缓冲：新图像成为下一帧的"旧图像"。 */
-    if (s_shadow != NULL) {
-        if (image_buf == NULL) {
-            memset(s_shadow, 0xFF, EPD_FRAME_BYTES);
-        } else {
-            memcpy(s_shadow, image_buf, EPD_FRAME_BYTES);
-        }
-    }
-    return ESP_OK;
+    return epd_refresh_and_wait();
 }
 
 /**
- * @brief 局部刷新：CDI(0xA9) -> PTIN -> PTL(窗口) -> DTM2 -> DRF -> PTOUT。
+ * @brief 局部刷新：CDI(0xA9) -> PTIN -> PTL(窗口) -> DTM2 -> PTOUT -> DRF。
  *
- * @note x 与 width 必须为 8 的倍数（1bpp 按字节寻址）；窗口终点取含端点
- *       （x+width-1）。参考工程对终点做了多余的 "-1"（off-by-one），本驱动
- *       不沿用；若实测出现 1 像素偏移，只需改回终点减 1。
+ * 只写窗口内的 DTM2（新数据），旧平面由 N2OCP 维护——黑底画白、白底画黑
+ * 均按真实 {旧,新} 差分正确更新。顺序与 idfxx（同面板验证）一致：
+ * PTOUT 在 DRF 之前发送。
+ *
+ * @note x 与 width 必须为 8 的倍数（1bpp 按字节寻址）。
  */
 static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t y, uint16_t width,
                                      uint16_t height) {
-    static const uint8_t cdi_partial[2] = {UC8179_CDI_PARTIAL_B0, UC8179_CDI_B1};
-    const uint16_t x_end = x + width - 1;
-    const uint16_t y_end = y + height - 1;
-    const uint8_t ptl[9] = {
-        (uint8_t)(x >> 8),      (uint8_t)(x & 0xFF),        /* HRST[9:0] */
-        (uint8_t)(x_end >> 8),  (uint8_t)(x_end & 0xFF),    /* HRED[9:0] */
-        (uint8_t)(y >> 8),      (uint8_t)(y & 0xFF),        /* VRST[9:0] */
-        (uint8_t)(y_end >> 8),  (uint8_t)(y_end & 0xFF),    /* VRED[9:0] */
-        0x01,                                               /* PT_SCAN=1：全面板扫描（默认） */
-    };
     const size_t window_bytes = (size_t)width * height / 8;
     esp_err_t ret;
 
     ESP_RETURN_ON_ERROR(epd_init_controller(false), TAG, "controller init (partial) failed");
 
-    /* VCOM/数据间隔：局部刷新取值（参考工程 EPD_partial_display）。 */
-    ret = epd_write_cmd(UC8179_CMD_CDI);
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
-    ret = epd_write_data(cdi_partial, sizeof(cdi_partial));
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
-
-    /* 进入局部模式并设置窗口。 */
-    ret = epd_write_cmd(UC8179_CMD_PTIN);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PTIN cmd failed");
-    ret = epd_write_cmd(UC8179_CMD_PTL);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PTL cmd failed");
-    ret = epd_write_data(ptl, sizeof(ptl));
-    ESP_RETURN_ON_ERROR(ret, TAG, "PTL data failed");
-
-    /* 窗口内 DTM1（OLD）：上一帧窗口内容（影子缓冲），黑底画白/白底画黑
-     * 均正确更新。清屏窗口时强制 0x00（黑->白翻转），保证窗口真正变白。 */
-    ret = epd_write_cmd(UC8179_CMD_DTM1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
-    if (image_buf == NULL) {
-        ret = epd_write_fill(0x00, window_bytes);
-    } else if (s_shadow != NULL) {
-        const uint8_t *old = s_shadow + (size_t)y * (ESPAPERPLAY_DISPLAY_WIDTH / 8) + x / 8;
-        ret = epd_write_data(old, window_bytes);
-    } else {
-        ret = epd_write_fill(0xFF, window_bytes);
-    }
+    ret = epd_window_begin(x, y, width, height);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    /* 窗口内 DTM2（NEW）：新数据（NULL = 窗口清白）。 */
+    /* 窗口内 DTM2（NEW）：新数据（NULL = 窗口清白，保留窗口 DTM1 深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
     if (image_buf == NULL) {
@@ -476,27 +437,12 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 刷新，等待完成，退出局部模式。 */
-    ret = epd_write_cmd(UC8179_CMD_DRF);
-    ESP_RETURN_ON_ERROR(ret, TAG, "DRF cmd failed");
-    vTaskDelay(pdMS_TO_TICKS(1));
-    ret = epd_wait_busy();
+    /* 退出局部模式后再刷新（idfxx 顺序；窗口数据已就位）。 */
+    ret = epd_window_end();
     if (ret != ESP_OK) {
         return ret;
     }
-    ret = epd_write_cmd(UC8179_CMD_PTOUT);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PTOUT cmd failed");
-
-    /* 同步影子缓冲窗口区域。 */
-    if (s_shadow != NULL) {
-        uint8_t *dst = s_shadow + (size_t)y * (ESPAPERPLAY_DISPLAY_WIDTH / 8) + x / 8;
-        if (image_buf == NULL) {
-            memset(dst, 0xFF, window_bytes);
-        } else {
-            memcpy(dst, image_buf, window_bytes);
-        }
-    }
-    return ESP_OK;
+    return epd_refresh_and_wait();
 }
 
 /* ====================================================================
@@ -523,10 +469,12 @@ static uint8_t *epd_make_test_pattern(void) {
 }
 
 /**
- * @brief 自检任务：全屏清白 -> 全屏测试图案 -> 局部刷新（黑底翻白块）。
+ * @brief 自检任务：全屏清白 -> 全屏测试图案 -> 局部刷新（黑底翻白块）
+ *        -> 局部刷新（白底画黑块）-> 睡眠。
  *
- * 用于上电验收：依次验证全屏刷新、局部窗口刷新与睡眠流程，全部完成后
- * 转为空闲轮询。接入正式 UI 前应将 ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
+ * 用于上电验收：依次验证全屏刷新、局部窗口刷新的两个差分方向（黑->白、
+ * 白->黑）与睡眠流程，全部完成后转为空闲轮询。接入正式 UI 前应将
+ * ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
     (void)arg;
@@ -534,8 +482,13 @@ static void epd_selftest_task(void *arg) {
     const uint16_t box_y = 190;
     const uint16_t box_w = 80;
     const uint16_t box_h = 80;
+    const uint16_t bx2_x = 496; /* 8 对齐（496/8=62） */
+    const uint16_t bx2_y = 80;
+    const uint16_t bx2_w = 64;
+    const uint16_t bx2_h = 64;
     uint8_t *pattern = NULL;
     uint8_t *box = NULL;
+    uint8_t *box2 = NULL;
     esp_err_t ret;
 
     ESP_LOGI(TAG, "EPD selftest started");
@@ -563,7 +516,7 @@ static void epd_selftest_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    /* 3. 局部刷新：左半屏黑色区域内翻转一个 80x80 白色方块。 */
+    /* 3. 局部刷新（黑->白）：左半屏黑色区域内翻白 80x80 方块。 */
     box = malloc((size_t)box_w * box_h / 8);
     if (box == NULL) {
         ESP_LOGE(TAG, "selftest box alloc failed");
@@ -571,7 +524,22 @@ static void epd_selftest_task(void *arg) {
     }
     memset(box, 0xFF, (size_t)box_w * box_h / 8);
     ret = espaperplay_epd_refresh(box, box_x, box_y, box_w, box_h, ESPAPERPLAY_EPD_MODE_PARTIAL);
-    ESP_LOGI(TAG, "selftest: partial %ux%u@(%u,%u) -> %s", box_w, box_h, box_x, box_y,
+    ESP_LOGI(TAG, "selftest: partial white %ux%u@(%u,%u) -> %s", box_w, box_h, box_x, box_y,
+             esp_err_to_name(ret));
+    if (ret != ESP_OK) {
+        goto out;
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    /* 4. 局部刷新（白->黑）：右半屏白色区域画黑 64x64 方块（反向差分）。 */
+    box2 = malloc((size_t)bx2_w * bx2_h / 8);
+    if (box2 == NULL) {
+        ESP_LOGE(TAG, "selftest box2 alloc failed");
+        goto out;
+    }
+    memset(box2, 0x00, (size_t)bx2_w * bx2_h / 8);
+    ret = espaperplay_epd_refresh(box2, bx2_x, bx2_y, bx2_w, bx2_h, ESPAPERPLAY_EPD_MODE_PARTIAL);
+    ESP_LOGI(TAG, "selftest: partial black %ux%u@(%u,%u) -> %s", bx2_w, bx2_h, bx2_x, bx2_y,
              esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -581,6 +549,7 @@ static void epd_selftest_task(void *arg) {
 out:
     free(pattern);
     free(box);
+    free(box2);
     /* 自检结束，进入低功耗。 */
     ret = espaperplay_epd_sleep();
     ESP_LOGI(TAG, "selftest done, EPD sleep -> %s", esp_err_to_name(ret));
@@ -626,9 +595,6 @@ esp_err_t espaperplay_epd_init(void) {
         return ret;
     }
 
-    /* 影子缓冲（跟踪实际显示内容，供 DTM1 使用）；分配失败自动降级。 */
-    epd_shadow_alloc();
-
     if (s_spi_dev == NULL) {
         spi_device_interface_config_t devcfg = {
             .mode = 0, /* CPOL=0, CPHA=0：参考工程位时序（CLK 空闲低，上升沿锁存） */
@@ -645,12 +611,53 @@ esp_err_t espaperplay_epd_init(void) {
         }
     }
 
-    /* 硬件复位后进入深度睡眠（低功耗待机）；首次刷新时自动重新初始化。 */
+    /* 上电并建立基线：硬件复位 -> PSR -> PON -> 把两个图像平面清为全白。
+     * 之后旧平面由 N2OCP 自动维护；本基线保证首次差分刷新有确定起点
+     * （假设上电时面板为白，与 idfxx 一致）。 */
     ret = epd_hw_reset();
     if (ret != ESP_OK) {
         xSemaphoreGive(s_lock);
         return ret;
     }
+    {
+        const uint8_t psr = UC8179_PSR_VALUE;
+        ret = epd_write_cmd(UC8179_CMD_PSR);
+        if (ret == ESP_OK) {
+            ret = epd_write_data(&psr, 1);
+        }
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_cmd(UC8179_CMD_PON);
+    }
+    if (ret == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        ret = epd_wait_busy();
+    }
+    if (ret == ESP_OK) {
+        /* 全屏窗口写入两个平面（0xFF = 全白）。 */
+        ret = epd_window_begin(0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_cmd(UC8179_CMD_DTM1);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_fill(0xFF, EPD_FRAME_BYTES);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_cmd(UC8179_CMD_DTM2);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_fill(0xFF, EPD_FRAME_BYTES);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_window_end();
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "initial plane clear failed: %s", esp_err_to_name(ret));
+        ret = ESP_OK; /* 不阻塞启动：刷新时会重新初始化 */
+    }
+
+    /* 硬件复位后进入深度睡眠（低功耗待机）；首次刷新时自动重新初始化。 */
     {
         static const uint8_t cdi_sleep[1] = {UC8179_CDI_SLEEP_B0};
         const uint8_t check = UC8179_DSLP_CHECK;
