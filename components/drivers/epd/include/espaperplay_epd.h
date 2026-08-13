@@ -42,8 +42,11 @@ extern "C" {
  *    同 idfxx 驱动在 GDEY075T7 上的取值），两张图像平面各存 1 bit——刷新时
  *    DTM1/DTM2 分别写入灰阶值 bit0/bit1 的取反（控制器 RAM (1,1)=白）。
  *    灰阶只支持全屏刷新（灰阶波形无法局部驱动），刷新更慢、残影更多，
- *    建议仅用于图片类内容；从灰阶切回黑白时，旧平面会被重置为全白近似，
- *    随后的黑白刷新为全屏重绘。
+ *    建议仅用于图片类内容；
+ *  - 快刷（翻页用）：注册表 LUT 短波形（PSR 0x3F + PLL/VDCS + 5 张 42 字节
+ *    波形表，同 idfxx），比 OTP 全刷波形更快，对比度/残影略差，仅支持全屏；
+ *  - 从灰阶切回黑白/快刷时，旧平面会被重置为全白近似，随后的黑白刷新为
+ *    全屏重绘。
  *  - 局部刷新：CDI(0xA9,0x07) -> PTIN(0x91) -> PTL(0x90, 窗口, 终点含端点)
  *    -> DTM2(0x13) -> PTOUT(0x92) -> DRF(0x12) -> 等 BUSY（DRF 后延时 10ms
  *    再轮询，防止 BUSY 未拉低导致提前返回）。x 与 width 必须为 8 的倍数
@@ -64,9 +67,10 @@ extern "C" {
  * @brief EPD 刷新模式。
  */
 typedef enum {
-    ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（1bpp，较慢，对比度更高，可清除残影） */
+    ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（1bpp，OTP 波形，较慢，对比度更高） */
     ESPAPERPLAY_EPD_MODE_PARTIAL,  /*!< 局部 / 快速刷新（1bpp，屏幕不闪烁，区域 8 像素对齐） */
     ESPAPERPLAY_EPD_MODE_GRAY4,    /*!< 4 灰阶全屏刷新（2bpp，仅全屏，不支持局部） */
+    ESPAPERPLAY_EPD_MODE_FAST,     /*!< 快刷（1bpp 全屏，注册表 LUT 短波形，刷新最快、残影略多） */
     ESPAPERPLAY_EPD_MODE_MAX,
 } espaperplay_epd_mode_t;
 
@@ -116,7 +120,7 @@ esp_err_t espaperplay_epd_init(void);
  * @brief 刷新电子纸显示屏。
  *
  * @param image_buf 图像缓冲指针（左上角为原点）。
- *                   全屏/局部模式：1 bpp，数据位 1=白 / 0=黑；
+ *                   全屏/局部/快刷模式：1 bpp，数据位 1=白 / 0=黑；
  *                   全屏整帧 48000 字节，局部窗口 width*height/8 字节；
  *                   灰阶模式：2 bpp，每像素 2bit（MSB 在前），
  *                   0=白 / 1=浅灰 / 2=深灰 / 3=黑，整帧 96000 字节，
@@ -126,10 +130,9 @@ esp_err_t espaperplay_epd_init(void);
  * @param y          区域左上角 Y 坐标（仅局部模式使用）。
  * @param width      区域宽度（像素；仅局部模式使用，须为 8 的倍数）。
  * @param height     区域高度（像素；仅局部模式使用）。
- * @param mode       刷新模式：全屏 / 局部 / 4 灰阶（灰阶仅全屏）。
+ * @param mode       刷新模式：全屏 / 局部 / 4 灰阶 / 快刷（后两者仅全屏）。
  *
- * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；灰阶模式配合
- *         局部窗口（不适用）返回 ESP_ERR_NOT_SUPPORTED；BUSY 超时返回
+ * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；BUSY 超时返回
  *         ESP_ERR_TIMEOUT；其余底层错误返回相应错误码。
  */
 esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y, uint16_t width,
