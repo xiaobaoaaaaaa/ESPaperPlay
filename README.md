@@ -40,7 +40,7 @@ ESPaperPlay
 └── components/
     ├── board/             # Board-level HW abstraction: GPIO/SPI/I2C config & peripheral init
     ├── drivers/           # Peripheral driver layer
-    │   ├── epd/           # E-paper abstraction (UC8179 driver to be added)
+    │   ├── epd/           # E-paper driver (GDEY075T7-T01 / UC8179: full/partial/gray4/fast)
     │   └── touch/         # GT911 touch abstraction
     ├── services/          # System service layer
     │   ├── auth/          # Device auth: secure password storage & verification
@@ -99,6 +99,26 @@ graph TD
 - `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (auth / input / power / storage / system / session / wifi / webserver);
 - `graphics/ui` and `applications/reader` belong to the application-layer framework and reserve interfaces for future features;
 - Modules communicate only through public APIs (`espaperplay_xxx()`); direct access to internal variables is prohibited.
+
+#### EPD Driver (GDEY075T7-T01 / UC8179)
+
+The e-paper driver uses a differential (NEW/OLD plane) architecture: the CDI
+`N2OCP` bit makes the controller auto-copy the new plane into the old plane
+after every refresh, so no software frame-tracking is needed and partial
+updates work on any background. Four refresh modes are exposed through
+`espaperplay_epd_refresh()`:
+
+| Mode | Frame format | Notes | Measured (room temp) |
+| ---- | ------------ | ----- | -------------------- |
+| `FULL` | 1 bpp, 48000 B | OTP fast waveform (force temp 0x5A) | ~1.7 s |
+| `PARTIAL` | 1 bpp window (x / width 8-aligned) | PTOUT after DRF (vendor order) | ~0.37 s (80x80), ~0.52 s (full window) |
+| `GRAY4` | 2 bpp, 96000 B (0=white ... 3=black) | factory 4-gray waveform, full screen only | — |
+| `FAST` | 1 bpp, 48000 B | same waveform as FULL (PLL has no effect on this panel) | ~1.7 s |
+
+Timings are end-to-end `espaperplay_epd_refresh()` durations including
+controller (re)initialization; consecutive refreshes in the same mode skip the
+re-init. A boot self-test (`ESPAPERPLAY_EPD_ENABLE_SELFTEST`, on by default)
+exercises every mode, prints timings, clears the panel to white and sleeps.
 
 #### Naming & Logging Conventions
 
@@ -171,9 +191,9 @@ GitHub Actions runs `idf.py build` automatically in `.github/workflows/build.yml
 
 ### Roadmap
 
-- [ ] **Phase 0 (current)**: software architecture bootstrap, module skeletons, build system & CI
-- [ ] **Phase 1**: Board drivers (GPIO / SPI / I2C bus init)
-- [ ] **Phase 2**: EPD (UC8179) driver & refresh, GT911 touch driver
+- [x] **Phase 0**: software architecture bootstrap, module skeletons, build system & CI
+- [x] **Phase 1**: Board drivers (GPIO / SPI / I2C bus init)
+- [x] **Phase 2**: EPD (UC8179) driver & refresh (full / partial / gray4 / fast), GT911 touch driver
 - [ ] **Phase 3**: Low-power power management (sleep / wake-up / power domains)
 - [ ] **Phase 4**: SD card + FATFS file system
 - [ ] **Phase 5**: LVGL UI framework
@@ -222,7 +242,7 @@ ESPaperPlay
 └── components/
     ├── board/             # Board 级硬件抽象：GPIO/SPI/I2C 配置与外设初始化
     ├── drivers/           # 外设驱动层
-    │   ├── epd/           # 电子纸抽象层（未来接入 UC8179 驱动）
+    │   ├── epd/           # 电子纸驱动（GDEY075T7-T01 / UC8179：全刷/局刷/灰阶/快刷）
     │   └── touch/         # GT911 触摸抽象层
     ├── services/          # 系统服务层
     │   ├── auth/          # 设备鉴权：密码安全存储 / 校验 / 更改
@@ -281,6 +301,23 @@ graph TD
 - `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（auth / input / power / storage / system / session / wifi / webserver）；
 - `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
 - 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
+
+#### EPD 驱动（GDEY075T7-T01 / UC8179）
+
+电子纸驱动采用差分（新旧平面）架构：CDI 的 `N2OCP` 位使控制器在每次
+刷新完成后自动把新平面拷贝到旧平面，无需软件维护"上一帧"，局部刷新可
+在任意背景上工作。`espaperplay_epd_refresh()` 提供四种刷新模式：
+
+| 模式 | 帧格式 | 说明 | 实测（室温） |
+| ---- | ------ | ---- | ------------ |
+| `FULL` | 1bpp 48000B | OTP 快刷波形（强制温度 0x5A） | ~1.7s |
+| `PARTIAL` | 1bpp 窗口（x/width 8 对齐） | PTOUT 在 DRF 后（厂商顺序） | ~0.37s（80x80）/ ~0.52s（全屏窗口） |
+| `GRAY4` | 2bpp 96000B（0=白…3=黑） | 出厂四灰阶波形，仅全屏 | — |
+| `FAST` | 1bpp 48000B | 与 FULL 同波形（PLL 对本面板无效） | ~1.7s |
+
+耗时为 `espaperplay_epd_refresh()` 端到端时长（含控制器初始化）；同模式
+连续刷新会跳过重复初始化。上电自检（`ESPAPERPLAY_EPD_ENABLE_SELFTEST`，
+默认开启）会依次验证各模式并打印耗时，最后刷成全白并进入睡眠。
 
 #### 命名与日志规范
 
@@ -353,9 +390,9 @@ GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
 
 ### 开发路线
 
-- [ ] **Phase 0（当前）**：软件架构初始化、模块骨架、构建系统与 CI
-- [ ] **Phase 1**：Board 驱动（GPIO / SPI / I2C 总线初始化）
-- [ ] **Phase 2**：EPD（UC8179）驱动与刷新、GT911 触摸驱动
+- [x] **Phase 0**：软件架构初始化、模块骨架、构建系统与 CI
+- [x] **Phase 1**：Board 驱动（GPIO / SPI / I2C 总线初始化）
+- [x] **Phase 2**：EPD（UC8179）驱动与刷新（全刷/局刷/灰阶/快刷）、GT911 触摸驱动
 - [ ] **Phase 3**：低功耗电源管理（sleep / 唤醒 / 电源域）
 - [ ] **Phase 4**：SD 卡 + FATFS 文件系统
 - [ ] **Phase 5**：LVGL 界面框架

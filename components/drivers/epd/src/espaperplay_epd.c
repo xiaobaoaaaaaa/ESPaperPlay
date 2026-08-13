@@ -121,8 +121,6 @@ static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
 static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
-static uint8_t s_test_ptscan = 1;     /*!< 局部窗口 PT_SCAN 覆盖（仅 selftest 扫描用；1=全面板扫描默认） */
-static uint8_t s_test_pout_after = 0; /*!< 局部 PTOUT 位置覆盖（仅 selftest 扫描用；1=PTOUT 在 DRF 后） */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -490,7 +488,7 @@ static esp_err_t epd_window_begin(uint16_t x, uint16_t y, uint16_t width, uint16
         (uint8_t)(x_end >> 8),  (uint8_t)(x_end & 0xFF),    /* HRED[9:0] */
         (uint8_t)(y >> 8),      (uint8_t)(y & 0xFF),        /* VRST[9:0] */
         (uint8_t)(y_end >> 8),  (uint8_t)(y_end & 0xFF),    /* VRED[9:0] */
-        s_test_ptscan ? 0x01 : 0x00, /* PT_SCAN：1=全面板扫描（默认），0=仅扫窗口行 */
+        0x01, /* PT_SCAN=1：全面板扫描（实测 0/1 对刷新耗时无影响，取默认值） */
     };
     esp_err_t ret;
 
@@ -612,23 +610,14 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 退出局部模式后再刷新（idfxx 顺序；窗口数据已就位）。
-     * s_test_pout_after=1 时改为官方 demo 顺序：刷新在局部模式下进行，
-     * 完成后才 PTOUT——两种顺序实测对比（selftest 扫描）。 */
-    if (!s_test_pout_after) {
-        ret = epd_window_end();
-        if (ret != ESP_OK) {
-            return ret;
-        }
-    }
+    /* 官方 demo 顺序：刷新在局部模式下进行（DRF 后等 BUSY），完成后再
+     * PTOUT。实测（窗口 80x80~800x480 扫描）此顺序比"先 PTOUT 再 DRF"
+     * （idfxx 顺序）快 0~13%（小窗口收益最大，全屏无差别），故为默认。 */
     ret = epd_refresh_and_wait();
     if (ret != ESP_OK) {
         return ret;
     }
-    if (s_test_pout_after) {
-        ret = epd_window_end();
-    }
-    return ret;
+    return epd_window_end();
 }
 
 /**
@@ -732,11 +721,12 @@ static uint8_t *epd_make_test_pattern(void) {
 
 /**
  * @brief 自检任务（性能测试）：全屏清白 -> 全屏图案 -> 局部（两个方向）
- *        -> 4 灰阶色带 -> 局刷大小/配置扫描 -> 刷成全白 -> 睡眠。
+ *        -> 4 灰阶色带 -> 局刷大小对照 -> 刷成全白 -> 睡眠。
  *
- * 对全刷（FULL）计时；局刷做窗口大小（80x80~800x480）x PT_SCAN x PTOUT
- * 位置的交叉扫描（研究局刷耗时构成与提速空间）；4 灰阶步骤仅作功能验证。
- * 测试结束后把面板刷成全白再进入睡眠。接入正式 UI 前应将
+ * 对全刷（FULL）与局刷（PARTIAL）计时；局刷含 80x80 与 400x480 大小
+ * 对照（实测结论：固定波形 ~350ms 主导耗时，区域大小仅贡献 0~150ms，
+ * PTOUT 在 DRF 后为默认顺序）；4 灰阶步骤仅作功能验证。测试结束后把
+ * 面板刷成全白再进入睡眠。接入正式 UI 前应将
  * ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
@@ -838,50 +828,40 @@ static void epd_selftest_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    /* 6. 局刷性能扫描：窗口大小 x 配置（PT_SCAN x PTOUT 位置）。
-     * 回答两个问题：
-     *  a) 局刷耗时与窗口大小的关系——波形相位数与扫描行数谁主导；
-     *  b) PT_SCAN=0（仅扫窗口行）与 PTOUT 在 DRF 后（局部模式下刷新，
-     *     官方 demo 顺序）能否让局刷更快。
-     * 每个 (配置,大小) 连续两次刷新，内容白/黑交替，保证每次都是真实
-     * 差分转换；窗口居中（8 对齐）；800x480 档即"全屏局部刷新"对照。 */
+    /* 6. 局刷大小对照：小窗口（80x80）与大窗口（400x480）各两次黑白交替，
+     * 展示区域大小对刷新耗时的影响（已实测：固定波形 ~350ms 主导，大小
+     * 仅贡献 0~150ms；PTOUT 已固化在 DRF 后）。 */
     {
         static const struct {
             uint16_t w, h;
-        } win_sz[] = {{80, 80}, {160, 160}, {320, 240}, {400, 480}, {800, 480}};
-        static const char *const cfg_desc[] = {"pout-pre,ptscan=1", "pout-pre,ptscan=0",
-                                               "pout-post,ptscan=1", "pout-post,ptscan=0"};
-        uint8_t *winbuf = malloc(EPD_FRAME_BYTES); /* 最大窗口 800x480 的缓冲 */
+        } win_sz[] = {{80, 80}, {400, 480}};
+        uint8_t *winbuf = malloc(EPD_FRAME_BYTES); /* 最大窗口缓冲 */
         int dir = 0;
         if (winbuf == NULL) {
             ESP_LOGE(TAG, "selftest window buf alloc failed (%u bytes)", (unsigned)EPD_FRAME_BYTES);
             goto out;
         }
-        for (int cfg = 0; cfg < 4; cfg++) {
-            s_test_pout_after = (cfg & 2) ? 1 : 0;
-            s_test_ptscan = (cfg & 1) ? 0 : 1;
-            for (size_t s = 0; s < sizeof(win_sz) / sizeof(win_sz[0]); s++) {
-                const uint16_t wx = (ESPAPERPLAY_DISPLAY_WIDTH - win_sz[s].w) / 2;
-                const uint16_t wy = (ESPAPERPLAY_DISPLAY_HEIGHT - win_sz[s].h) / 2;
+        for (size_t s = 0; s < sizeof(win_sz) / sizeof(win_sz[0]); s++) {
+            const uint16_t wx = (ESPAPERPLAY_DISPLAY_WIDTH - win_sz[s].w) / 2;
+            const uint16_t wy = (ESPAPERPLAY_DISPLAY_HEIGHT - win_sz[s].h) / 2;
+            for (int k = 0; k < 2; k++) {
                 memset(winbuf, dir ? 0x00 : 0xFF, (size_t)win_sz[s].w * win_sz[s].h / 8);
                 t0 = esp_timer_get_time();
                 ret = espaperplay_epd_refresh(winbuf, wx, wy, win_sz[s].w, win_sz[s].h,
                                               ESPAPERPLAY_EPD_MODE_PARTIAL);
-                ESP_LOGI(TAG, "selftest: PARTIAL %ux%u [%s] %s -> %s (%lld ms)", win_sz[s].w,
-                         win_sz[s].h, cfg_desc[cfg], dir ? "black" : "white",
-                         esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
+                ESP_LOGI(TAG, "selftest: PARTIAL %ux%u %s -> %s (%lld ms)", win_sz[s].w,
+                         win_sz[s].h, dir ? "black" : "white", esp_err_to_name(ret),
+                         (esp_timer_get_time() - t0) / 1000);
                 if (ret != ESP_OK) {
                     free(winbuf);
                     goto out;
                 }
                 dir = !dir; /* 黑白交替 */
-                vTaskDelay(pdMS_TO_TICKS(500));
+                vTaskDelay(pdMS_TO_TICKS(1000));
             }
         }
         free(winbuf);
     }
-    s_test_ptscan = 1;       /* 恢复正常默认 */
-    s_test_pout_after = 0;   /* 恢复正常默认 */
     s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 让最终清白走一次完整初始化 */
 
 out:
