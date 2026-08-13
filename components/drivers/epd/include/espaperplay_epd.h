@@ -58,8 +58,10 @@ extern "C" {
  *    刷新有确定起点（假设上电时面板为白，同 idfxx 驱动在 GDEY075T7 上的
  *    做法）；每次刷新前重新初始化控制器（硬件复位 + PON），图像 RAM 在
  *    复位/深度睡眠后保留，因此「睡眠唤醒后无需额外调用 init」；
- *  - 刷新完成后面板保持上电，由调用方决定何时调用 espaperplay_epd_sleep()
- *    进入低功耗（参考工程提示：刷新后应进入睡眠）。
+ *  - 刷新完成后面板保持上电；驱动提供空闲自动睡眠保底（最后一次刷新后
+ *    超过 ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 无新刷新即自动深度睡眠，
+ *    置 0 关闭）。上层仍可在合适的时机显式调用 espaperplay_epd_sleep()
+ *    （如进入设备级睡眠时，由 power 服务统一编排）。
  *
  * 硬件引脚与 SPI 参数集中在 espaperplay_config.h。EPD 与 SD 卡共用 SPI2
  * 主机，主机总线由 board 组件初始化；本组件仅注册自己的 SPI 设备，并自行
@@ -78,15 +80,28 @@ typedef enum {
 } espaperplay_epd_mode_t;
 
 /**
- * @brief 启动自检任务（显示测试图案）。
+ * @brief 空闲自动睡眠超时（毫秒）。
+ *
+ * 最后一次刷新后若在此时长内没有新的刷新调用，驱动自动让面板进入深度
+ * 睡眠（保底机制：防止上层忘记睡眠导致面板长期带电；参考工程要求刷新
+ * 后必须睡眠）。刷新会自动唤醒（重新初始化），因此本保底不影响正确性，
+ * 仅在下一次刷新时增加约 300ms 的唤醒初始化开销。置 0 关闭自动睡眠
+ * （改由上层显式调用 espaperplay_epd_sleep()）。
+ */
+#ifndef ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS
+#define ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 30000
+#endif
+
+/**
+ * @brief 启动自检任务（驱动验收用，默认关闭）。
  *
  * 使能后，espaperplay_epd_init() 会创建一个后台任务，依次执行：全屏清白、
- * 全屏测试图案（左半屏黑）、局部刷新测试（黑色区域内翻转白色方块），
- * 用于上电自检 / 验收；完成后自动进入睡眠并转为空闲轮询。
- * 接入正式 UI 后应置 0 关闭。
+ * 全屏测试图案（左半屏黑）、局部刷新（两个方向）、4 灰阶色带、局刷大小
+ * 对照、空闲自动睡眠验证，最后刷成全白并进入睡眠，同时打印各模式耗时。
+ * 驱动验收完成后置 0 关闭（默认）；需要复验时改回 1 重新编译即可。
  */
 #ifndef ESPAPERPLAY_EPD_ENABLE_SELFTEST
-#define ESPAPERPLAY_EPD_ENABLE_SELFTEST 1
+#define ESPAPERPLAY_EPD_ENABLE_SELFTEST 0
 #endif
 
 /**

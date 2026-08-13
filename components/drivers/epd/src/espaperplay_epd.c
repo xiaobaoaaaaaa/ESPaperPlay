@@ -121,6 +121,11 @@ static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
 static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+static esp_timer_handle_t s_idle_timer = NULL; /*!< 空闲自动睡眠定时器（一次性） */
+static volatile uint32_t s_idle_gen = 0;       /*!< 刷新代数：定时器回调核对，过期回调直接退出 */
+static uint32_t s_idle_timeout_override_ms = 0; /*!< 空闲超时覆盖（仅 selftest 验证用；0=用宏默认） */
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -721,12 +726,14 @@ static uint8_t *epd_make_test_pattern(void) {
 
 /**
  * @brief 自检任务（性能测试）：全屏清白 -> 全屏图案 -> 局部（两个方向）
- *        -> 4 灰阶色带 -> 局刷大小对照 -> 刷成全白 -> 睡眠。
+ *        -> 4 灰阶色带 -> 局刷大小对照 -> 刷成全白 -> 空闲自动睡眠验证
+ *        -> 睡眠。
  *
  * 对全刷（FULL）与局刷（PARTIAL）计时；局刷含 80x80 与 400x480 大小
  * 对照（实测结论：固定波形 ~350ms 主导耗时，区域大小仅贡献 0~150ms，
- * PTOUT 在 DRF 后为默认顺序）；4 灰阶步骤仅作功能验证。测试结束后把
- * 面板刷成全白再进入睡眠。接入正式 UI 前应将
+ * PTOUT 在 DRF 后为默认顺序）；4 灰阶步骤仅作功能验证。空闲自动睡眠
+ * 保底验证：临时 5s 超时等待自动入睡，再刷新一次验证自动唤醒。测试
+ * 结束后把面板刷成全白再进入睡眠。接入正式 UI 前应将
  * ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
@@ -876,7 +883,26 @@ out:
                                   ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: final white clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
+    if (ret != ESP_OK) {
+        goto sleep_out;
+    }
 
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+    /* 7. 空闲自动睡眠保底验证：临时把超时改为 5s，等待驱动自动深度睡眠
+     *    （应出现 "idle timeout: auto deep sleep" 日志），随后再刷新一次
+     *    验证自动唤醒（唤醒需重新初始化，耗时应比同模式连续刷新略长）。 */
+    s_idle_timeout_override_ms = 5000;
+    ESP_LOGI(TAG, "selftest: waiting for idle auto-sleep (timeout 5s)");
+    vTaskDelay(pdMS_TO_TICKS(8000));
+    s_idle_timeout_override_ms = 0; /* 恢复正常默认超时 */
+    t0 = esp_timer_get_time();
+    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
+                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
+    ESP_LOGI(TAG, "selftest: wake refresh after idle sleep -> %s (%lld ms)", esp_err_to_name(ret),
+             (esp_timer_get_time() - t0) / 1000);
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
+
+sleep_out:
     /* 自检结束，进入低功耗。 */
     ret = espaperplay_epd_sleep();
     ESP_LOGI(TAG, "selftest done, EPD sleep -> %s", esp_err_to_name(ret));
@@ -886,6 +912,72 @@ out:
     }
 }
 #endif /* ESPAPERPLAY_EPD_ENABLE_SELFTEST */
+
+/**
+ * @brief 执行深度睡眠时序（调用方须已持有 s_lock）。
+ *
+ * 睡眠时序（参考工程 EPD_sleep）：CDI -> POF（等待 BUSY）-> DSLP。
+ */
+static esp_err_t epd_sleep_locked(void) {
+    static const uint8_t cdi_sleep[1] = {UC8179_CDI_SLEEP_B0};
+    const uint8_t check = UC8179_DSLP_CHECK;
+    esp_err_t ret;
+
+    ret = epd_write_cmd(UC8179_CMD_CDI);
+    if (ret == ESP_OK) {
+        ret = epd_write_data(cdi_sleep, sizeof(cdi_sleep));
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_cmd(UC8179_CMD_POF);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_wait_busy();
+    }
+    vTaskDelay(pdMS_TO_TICKS(100)); /* POF 后至少 200us，此处取余量 */
+    if (ret == ESP_OK) {
+        ret = epd_write_cmd(UC8179_CMD_DSLP);
+    }
+    if (ret == ESP_OK) {
+        ret = epd_write_data(&check, 1);
+    }
+
+    if (ret == ESP_OK) {
+        s_asleep = true;
+        ESP_LOGI(TAG, "EPD deep sleep");
+    }
+    return ret;
+}
+
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+/**
+ * @brief 空闲自动睡眠定时器回调。
+ *
+ * 最后一次刷新后超过 ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 无新刷新时，
+ * 驱动自动让面板进入深度睡眠（保底：防止上层忘记睡眠导致面板长期带电）。
+ * 刷新会自动唤醒（重新初始化），因此本保底不影响正确性，仅在下一次刷新
+ * 时增加约 300ms 的唤醒初始化开销。
+ *
+ * 防误睡：记录触发时的刷新代数；若回调执行前已有新刷新（代数变化），
+ * 直接退出——新刷新已重新武装定时器。
+ */
+static void epd_idle_sleep_cb(void *arg) {
+    const uint32_t gen = s_idle_gen;
+    (void)arg;
+
+    /* 有界等待：若刷新正持锁（最长 ~2s），本轮放弃——刷新路径会递增代数
+     * 并重新武装定时器，过期回调自然失效。 */
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
+    if (gen == s_idle_gen && s_initialized && !s_asleep) {
+        ESP_LOGI(TAG, "idle timeout (%u ms): auto deep sleep",
+                 (unsigned)(s_idle_timeout_override_ms ? s_idle_timeout_override_ms
+                                                       : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS));
+        epd_sleep_locked();
+    }
+    xSemaphoreGive(s_lock);
+}
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
 /* ====================================================================
  * 公共 API
@@ -937,6 +1029,23 @@ esp_err_t espaperplay_epd_init(void) {
             return ret;
         }
     }
+
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+    /* 空闲自动睡眠定时器（一次性，由每次刷新重新武装）。创建失败仅告警：
+     * 保底失效不影响正常功能（上层仍可显式调用 espaperplay_epd_sleep()）。 */
+    if (s_idle_timer == NULL) {
+        const esp_timer_create_args_t idle_args = {
+            .callback = epd_idle_sleep_cb,
+            .arg = NULL,
+            .name = "epd_idle_sleep",
+        };
+        ret = esp_timer_create(&idle_args, &s_idle_timer);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "idle sleep timer create failed: %s (auto-sleep disabled)",
+                     esp_err_to_name(ret));
+        }
+    }
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
     /* 上电并建立基线：硬件复位 -> PSR -> PON -> 把两个图像平面清为全白。
      * 之后旧平面由 N2OCP 自动维护；本基线保证首次差分刷新有确定起点
@@ -1064,17 +1173,29 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
     if (ret == ESP_OK) {
         s_last_mode = mode;        /* 供灰阶<->黑白切换时重置旧平面 */
         s_controller_mode = mode;  /* 同模式连续刷新跳过重复初始化 */
-        s_asleep = false;          /* 刷新完成后面板保持上电，由调用方决定何时睡眠 */
+        s_asleep = false;          /* 刷新完成后面板保持上电 */
     } else {
         s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
     }
+
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+    /* 武装空闲自动睡眠：最后一次刷新后若超时无新刷新，驱动自动深度睡眠
+     * （保底机制）。在锁内递增代数并重启定时器，防止过期回调误睡眠。 */
+    if (s_idle_timer != NULL) {
+        s_idle_gen++;
+        esp_timer_start_once(s_idle_timer,
+                             (uint64_t)(s_idle_timeout_override_ms
+                                            ? s_idle_timeout_override_ms
+                                            : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS) *
+                                 1000);
+    }
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
+
     xSemaphoreGive(s_lock);
     return ret;
 }
 
 esp_err_t espaperplay_epd_sleep(void) {
-    static const uint8_t cdi_sleep[1] = {UC8179_CDI_SLEEP_B0};
-    const uint8_t check = UC8179_DSLP_CHECK;
     esp_err_t ret;
 
     if (!s_initialized) {
@@ -1086,30 +1207,7 @@ esp_err_t espaperplay_epd_sleep(void) {
     if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-
-    /* 睡眠时序（参考工程 EPD_sleep）：CDI -> POF（等待 BUSY）-> DSLP。 */
-    ret = epd_write_cmd(UC8179_CMD_CDI);
-    if (ret == ESP_OK) {
-        ret = epd_write_data(cdi_sleep, sizeof(cdi_sleep));
-    }
-    if (ret == ESP_OK) {
-        ret = epd_write_cmd(UC8179_CMD_POF);
-    }
-    if (ret == ESP_OK) {
-        ret = epd_wait_busy();
-    }
-    vTaskDelay(pdMS_TO_TICKS(100)); /* POF 后至少 200us，此处取余量 */
-    if (ret == ESP_OK) {
-        ret = epd_write_cmd(UC8179_CMD_DSLP);
-    }
-    if (ret == ESP_OK) {
-        ret = epd_write_data(&check, 1);
-    }
-
-    if (ret == ESP_OK) {
-        s_asleep = true;
-        ESP_LOGI(TAG, "EPD deep sleep");
-    }
+    ret = epd_sleep_locked();
     xSemaphoreGive(s_lock);
     return ret;
 }

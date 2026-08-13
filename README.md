@@ -117,8 +117,11 @@ updates work on any background. Four refresh modes are exposed through
 
 Timings are end-to-end `espaperplay_epd_refresh()` durations including
 controller (re)initialization; consecutive refreshes in the same mode skip the
-re-init. A boot self-test (`ESPAPERPLAY_EPD_ENABLE_SELFTEST`, on by default)
-exercises every mode, prints timings, clears the panel to white and sleeps.
+re-init, and the driver deep-sleeps the panel automatically when no refresh
+arrives for `ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS` (default 30 s, 0 to
+disable; refresh always re-initializes on wake). A boot self-test
+(`ESPAPERPLAY_EPD_ENABLE_SELFTEST`, off by default) exercises every mode,
+prints timings, clears the panel to white and sleeps.
 
 #### Naming & Logging Conventions
 
@@ -316,8 +319,10 @@ graph TD
 | `FAST` | 1bpp 48000B | 与 FULL 同波形（PLL 对本面板无效） | ~1.7s |
 
 耗时为 `espaperplay_epd_refresh()` 端到端时长（含控制器初始化）；同模式
-连续刷新会跳过重复初始化。上电自检（`ESPAPERPLAY_EPD_ENABLE_SELFTEST`，
-默认开启）会依次验证各模式并打印耗时，最后刷成全白并进入睡眠。
+连续刷新会跳过重复初始化；驱动在最后一次刷新后超过
+`ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS`（默认 30s，0 关闭）无新刷新时
+自动深度睡眠（保底，刷新会自动唤醒）。上电自检
+（`ESPAPERPLAY_EPD_ENABLE_SELFTEST`，默认关闭）可复验各模式并打印耗时。
 
 #### 命名与日志规范
 
