@@ -40,6 +40,7 @@ static const char *TAG = "ESPaperPlay_EPD";
 #define UC8179_CMD_PTL 0x90  /*!< Partial Window（局部窗口，8 参数 + PT_SCAN） */
 #define UC8179_CMD_PTIN 0x91 /*!< Partial In（进入局部模式） */
 #define UC8179_CMD_PTOUT 0x92 /*!< Partial Out（退出局部模式） */
+#define UC8179_CMD_TRES 0x61 /*!< Resolution Setting（分辨率设置） */
 #define UC8179_CMD_CASCADE 0xE0 /*!< Cascade Setting（厂商未公开命令） */
 #define UC8179_CMD_FORCE_TEMP 0xE5 /*!< Force Temperature（厂商未公开命令） */
 
@@ -77,9 +78,19 @@ static const char *TAG = "ESPaperPlay_EPD";
 /** 级联设置（未公开命令，取值来自参考工程）。 */
 #define UC8179_CASCADE_VALUE 0x02
 
-/** 强制温度（未公开命令，取值来自参考工程）：全屏 0x5A，局部 0x6E。 */
+/** 强制温度（未公开命令，取值来自参考工程）：全屏 0x5A，局部 0x6E，
+ *  4 灰阶 0x5F（选择出厂四灰阶波形，idfxx 在同面板验证）。 */
 #define UC8179_FORCE_TEMP_FULL 0x5A
 #define UC8179_FORCE_TEMP_PARTIAL 0x6E
+#define UC8179_FORCE_TEMP_GRAY4 0x5F
+
+/** 4 灰阶初始化参数（idfxx _init_gray，同面板验证）：
+ *  PWR：VGH/VGL=20V，VDH/VDL=0x3F；TRES：800x480。 */
+static const uint8_t UC8179_PWR_GRAY4[4] = {0x07, 0x07, 0x3F, 0x3F};
+static const uint8_t UC8179_TRES_GRAY4[4] = {
+    (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH >> 8),  (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH & 0xFF),
+    (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT >> 8), (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT & 0xFF),
+};
 
 /** DSLP 校验码：命令仅在数据 == 0xA5 时执行。 */
 #define UC8179_DSLP_CHECK 0xA5
@@ -95,6 +106,7 @@ static spi_device_handle_t s_spi_dev = NULL; /*!< EPD SPI 设备句柄 */
 static SemaphoreHandle_t s_lock = NULL;      /*!< 刷新互斥锁（自检任务与业务可并发调用） */
 static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
+static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -315,6 +327,123 @@ static esp_err_t epd_init_controller(bool fast) {
     return ESP_OK;
 }
 
+/**
+ * @brief 初始化 UC8179 控制器为 4 灰阶模式。
+ *
+ * 顺序与参数取自 idfxx _init_gray()（在 GDEY075T7 上验证）：PWR 电压配置、
+ * BTST 升压软启动、PON、PSR（KW 模式，LUT 取自 OTP）、TRES 分辨率、CDI
+ * （N2OCP=1，保持灰阶旧平面同步）、级联设置、强制温度 0x5F 选出厂四灰阶
+ * 波形。灰阶波形只能整屏驱动，不支持局部刷新。
+ */
+static esp_err_t epd_init_controller_gray4(void) {
+    static const uint8_t btst[4] = {UC8179_BTST_B0, UC8179_BTST_B1, UC8179_BTST_B2, UC8179_BTST_B3};
+    static const uint8_t cdi_full[2] = {UC8179_CDI_FULL_B0, UC8179_CDI_B1};
+    const uint8_t psr = UC8179_PSR_VALUE;
+    const uint8_t cascade = UC8179_CASCADE_VALUE;
+    const uint8_t force_temp = UC8179_FORCE_TEMP_GRAY4;
+    esp_err_t ret;
+
+    /* 1. 硬件复位（从任何波形模式/睡眠切换到灰阶前都先复位，清掉粘滞寄存器）。 */
+    ret = epd_hw_reset();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    /* 2. 电源配置 + 升压软启动（灰阶需要更高的驱动电压，勿用默认值）。 */
+    ret = epd_write_cmd(UC8179_CMD_PWR);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PWR cmd failed");
+    ret = epd_write_data(UC8179_PWR_GRAY4, sizeof(UC8179_PWR_GRAY4));
+    ESP_RETURN_ON_ERROR(ret, TAG, "PWR data failed");
+    ret = epd_write_cmd(UC8179_CMD_BTST);
+    ESP_RETURN_ON_ERROR(ret, TAG, "BTST cmd failed");
+    ret = epd_write_data(btst, sizeof(btst));
+    ESP_RETURN_ON_ERROR(ret, TAG, "BTST data failed");
+
+    /* 3. 内部电源上电。 */
+    ret = epd_write_cmd(UC8179_CMD_PON);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PON cmd failed");
+    vTaskDelay(pdMS_TO_TICKS(5));
+    ret = epd_wait_busy();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    /* 4. 面板设置 + 分辨率 + VCOM/数据间隔。 */
+    ret = epd_write_cmd(UC8179_CMD_PSR);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PSR cmd failed");
+    ret = epd_write_data(&psr, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PSR data failed");
+    ret = epd_write_cmd(UC8179_CMD_TRES);
+    ESP_RETURN_ON_ERROR(ret, TAG, "TRES cmd failed");
+    ret = epd_write_data(UC8179_TRES_GRAY4, sizeof(UC8179_TRES_GRAY4));
+    ESP_RETURN_ON_ERROR(ret, TAG, "TRES data failed");
+    ret = epd_write_cmd(UC8179_CMD_CDI);
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
+    ret = epd_write_data(cdi_full, sizeof(cdi_full));
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
+
+    /* 5. 级联设置 + 强制温度 0x5F（选择出厂四灰阶波形，未公开命令）。 */
+    ret = epd_write_cmd(UC8179_CMD_CASCADE);
+    ESP_RETURN_ON_ERROR(ret, TAG, "cascade cmd failed");
+    ret = epd_write_data(&cascade, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "cascade data failed");
+    ret = epd_write_cmd(UC8179_CMD_FORCE_TEMP);
+    ESP_RETURN_ON_ERROR(ret, TAG, "force temp cmd failed");
+    ret = epd_write_data(&force_temp, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "force temp data failed");
+
+    ESP_LOGI(TAG, "controller initialized (gray4 mode)");
+    return ESP_OK;
+}
+
+/**
+ * @brief 从 2bpp 灰阶帧缓冲解出单个位平面，输出即控制器 RAM 取值（已取反）。
+ *
+ * 灰阶帧布局：每像素 2bit（MSB 在前），0=白 / 1=浅灰 / 2=深灰 / 3=黑，
+ * 每字节 4 像素。bit0 平面写 DTM1（0x10），bit1 平面写 DTM2（0x13）；
+ * 控制器灰阶极性为 RAM (1,1)=白，与 1bpp 模式一致，故输出取反
+ * （idfxx 在同面板上的做法）。
+ *
+ * @param frame       2bpp 帧缓冲。
+ * @param frame_bytes 帧字节数（须为偶数）。
+ * @param out         输出缓冲（frame_bytes/2 字节）。
+ * @param plane       0 = 灰阶值 bit0，1 = bit1。
+ */
+static void gray4_unpack_plane(const uint8_t *frame, size_t frame_bytes, uint8_t *out,
+                               unsigned plane) {
+    const size_t out_bytes = frame_bytes / 2;
+
+    for (size_t j = 0; j < out_bytes; j++) {
+        uint8_t o = 0;
+        for (unsigned k = 0; k < 8; k++) {
+            const size_t px = j * 8 + k; /* 像素序号 */
+            const uint8_t v = (frame[px / 4] >> (6 - 2 * (px % 4))) & 0x03;
+            if ((v >> plane) & 1) {
+                o |= (uint8_t)(0x80 >> k);
+            }
+        }
+        out[j] = (uint8_t)~o;
+    }
+}
+
+/**
+ * @brief 从灰阶模式切回黑白时，把旧图像平面（DTM1）重置为全白。
+ *
+ * 灰阶刷新后 DTM1 保存的是灰阶 bit0/bit1 平面（N2OCP 拷贝），黑白差分若
+ * 直接使用会得到错误的 {旧,新} 组合；重置为 0xFF 即"旧=全白"近似——面板
+ * 当前是灰阶图像，逐像素差分本就无意义，随后的黑白刷新为全屏重绘。
+ */
+static esp_err_t epd_prepare_bw_old_plane(void) {
+    esp_err_t ret;
+
+    if (s_last_mode != ESPAPERPLAY_EPD_MODE_GRAY4) {
+        return ESP_OK;
+    }
+    ret = epd_write_cmd(UC8179_CMD_DTM1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
+    return epd_write_fill(0xFF, EPD_FRAME_BYTES);
+}
+
 /* ====================================================================
  * 局部窗口辅助
  * ==================================================================== */
@@ -389,6 +518,12 @@ static esp_err_t epd_refresh_full(const void *image_buf) {
 
     ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
 
+    /* 从灰阶切回黑白时重置旧平面（"旧=全白"近似）。 */
+    ret = epd_prepare_bw_old_plane();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     /* DTM2（NEW）：新图像（NULL = 清屏为全白，保留 DTM1 使黑像素深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
@@ -420,6 +555,12 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
 
     ESP_RETURN_ON_ERROR(epd_init_controller(false), TAG, "controller init (partial) failed");
 
+    /* 从灰阶切回黑白时重置旧平面（局部窗口同样按"旧=全白"近似）。 */
+    ret = epd_prepare_bw_old_plane();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
     ret = epd_window_begin(x, y, width, height);
     if (ret != ESP_OK) {
         return ret;
@@ -442,6 +583,43 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
     if (ret != ESP_OK) {
         return ret;
     }
+    return epd_refresh_and_wait();
+}
+
+/**
+ * @brief 4 灰阶全屏刷新：DTM1=~bit0 -> DTM2=~bit1 -> DRF -> 等待 BUSY。
+ *
+ * 仅支持全屏（灰阶波形无法局部驱动）。清屏（image_buf=NULL）时两个平面
+ * 均写 0xFF（全白 RAM）。从灰阶切回黑白时由 epd_prepare_bw_old_plane()
+ * 处理旧平面。
+ */
+static esp_err_t epd_refresh_gray4(const void *image_buf) {
+    static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2]; /* 位平面暂存 */
+    const size_t chunk_bytes = sizeof(s_plane) * 2;                /* 每块输入帧字节数 */
+    esp_err_t ret;
+
+    ESP_RETURN_ON_ERROR(epd_init_controller_gray4(), TAG, "controller init (gray4) failed");
+
+    for (unsigned plane = 0; plane < 2; plane++) {
+        ret = epd_write_cmd(plane == 0 ? UC8179_CMD_DTM1 : UC8179_CMD_DTM2);
+        ESP_RETURN_ON_ERROR(ret, TAG, "DTM%d cmd failed", plane + 1);
+        if (image_buf == NULL) {
+            ret = epd_write_fill(0xFF, EPD_FRAME_BYTES);
+        } else {
+            for (size_t off = 0; off < EPD_FRAME_BYTES && ret == ESP_OK; off += chunk_bytes) {
+                size_t chunk = EPD_FRAME_BYTES - off;
+                if (chunk > chunk_bytes) {
+                    chunk = chunk_bytes;
+                }
+                gray4_unpack_plane((const uint8_t *)image_buf + off, chunk, s_plane, plane);
+                ret = epd_write_data(s_plane, chunk / 2);
+            }
+        }
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
     return epd_refresh_and_wait();
 }
 
@@ -470,11 +648,11 @@ static uint8_t *epd_make_test_pattern(void) {
 
 /**
  * @brief 自检任务：全屏清白 -> 全屏测试图案 -> 局部刷新（黑底翻白块）
- *        -> 局部刷新（白底画黑块）-> 睡眠。
+ *        -> 局部刷新（白底画黑块）-> 4 灰阶色带 -> 睡眠。
  *
  * 用于上电验收：依次验证全屏刷新、局部窗口刷新的两个差分方向（黑->白、
- * 白->黑）与睡眠流程，全部完成后转为空闲轮询。接入正式 UI 前应将
- * ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
+ * 白->黑）、4 灰阶渲染与睡眠流程，全部完成后转为空闲轮询。接入正式 UI
+ * 前应将 ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
     (void)arg;
@@ -489,6 +667,7 @@ static void epd_selftest_task(void *arg) {
     uint8_t *pattern = NULL;
     uint8_t *box = NULL;
     uint8_t *box2 = NULL;
+    uint8_t *gray = NULL;
     esp_err_t ret;
 
     ESP_LOGI(TAG, "EPD selftest started");
@@ -546,10 +725,32 @@ static void epd_selftest_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
 
+    /* 5. 4 灰阶：四条纵向色带（白/浅灰/深灰/黑，各 200px 宽）。 */
+    gray = malloc(EPD_FRAME_BYTES * 2); /* 2bpp 整帧 */
+    if (gray == NULL) {
+        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)", (unsigned)(EPD_FRAME_BYTES * 2));
+        goto out;
+    }
+    memset(gray, 0x00, EPD_FRAME_BYTES * 2); /* 默认全白（灰阶值 0） */
+    for (uint16_t yy = 0; yy < ESPAPERPLAY_DISPLAY_HEIGHT; yy++) {
+        uint8_t *row = gray + (size_t)yy * (ESPAPERPLAY_DISPLAY_WIDTH / 4);
+        memset(row + 200 / 4, 0x55, 200 / 4);   /* 浅灰带（灰阶值 1） */
+        memset(row + 400 / 4, 0xAA, 200 / 4);   /* 深灰带（灰阶值 2） */
+        memset(row + 600 / 4, 0xFF, 200 / 4);   /* 黑带（灰阶值 3） */
+    }
+    ret = espaperplay_epd_refresh(gray, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
+                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_GRAY4);
+    ESP_LOGI(TAG, "selftest: gray4 bands -> %s", esp_err_to_name(ret));
+    if (ret != ESP_OK) {
+        goto out;
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
 out:
     free(pattern);
     free(box);
     free(box2);
+    free(gray);
     /* 自检结束，进入低功耗。 */
     ret = espaperplay_epd_sleep();
     ESP_LOGI(TAG, "selftest done, EPD sleep -> %s", esp_err_to_name(ret));
@@ -717,7 +918,7 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
 
     if (mode == ESPAPERPLAY_EPD_MODE_FULL) {
         ret = epd_refresh_full(image_buf);
-    } else {
+    } else if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
         /* 局部窗口参数校验：x/width 8 对齐，窗口在屏内。 */
         if ((x & 7) != 0 || (width & 7) != 0 || width == 0 || height == 0 ||
             (uint32_t)x + width > ESPAPERPLAY_DISPLAY_WIDTH ||
@@ -727,9 +928,14 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
             return ESP_ERR_INVALID_ARG;
         }
         ret = epd_refresh_partial(image_buf, x, y, width, height);
+    } else { /* ESPAPERPLAY_EPD_MODE_GRAY4：2bpp 整帧，仅全屏 */
+        ret = epd_refresh_gray4(image_buf);
     }
 
-    s_asleep = false; /* 刷新完成后面板保持上电，由调用方决定何时睡眠 */
+    if (ret == ESP_OK) {
+        s_last_mode = mode; /* 供灰阶<->黑白切换时重置旧平面 */
+        s_asleep = false;   /* 刷新完成后面板保持上电，由调用方决定何时睡眠 */
+    }
     xSemaphoreGive(s_lock);
     return ret;
 }

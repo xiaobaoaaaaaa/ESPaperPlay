@@ -38,6 +38,12 @@ extern "C" {
  *    可作用于任意背景（黑底画白、白底画黑均可），且无地址对齐伪影；
  *  - 清屏（image_buf=NULL）：只写 DTM2=0xFF，保留 DTM1——黑像素经历 黑->白
  *    深度擦除波形，白像素保持不动（避免整屏无谓翻转）；
+ *  - 4 灰阶（读图用）：UC8179 出厂四灰阶波形（强制温度 0x5F + PWR/BTST 配置，
+ *    同 idfxx 驱动在 GDEY075T7 上的取值），两张图像平面各存 1 bit——刷新时
+ *    DTM1/DTM2 分别写入灰阶值 bit0/bit1 的取反（控制器 RAM (1,1)=白）。
+ *    灰阶只支持全屏刷新（灰阶波形无法局部驱动），刷新更慢、残影更多，
+ *    建议仅用于图片类内容；从灰阶切回黑白时，旧平面会被重置为全白近似，
+ *    随后的黑白刷新为全屏重绘。
  *  - 局部刷新：CDI(0xA9,0x07) -> PTIN(0x91) -> PTL(0x90, 窗口, 终点含端点)
  *    -> DTM2(0x13) -> PTOUT(0x92) -> DRF(0x12) -> 等 BUSY（DRF 后延时 10ms
  *    再轮询，防止 BUSY 未拉低导致提前返回）。x 与 width 必须为 8 的倍数
@@ -58,8 +64,9 @@ extern "C" {
  * @brief EPD 刷新模式。
  */
 typedef enum {
-    ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（较慢，对比度更高，可清除残影） */
-    ESPAPERPLAY_EPD_MODE_PARTIAL,  /*!< 局部 / 快速刷新（屏幕不闪烁，区域 8 像素对齐） */
+    ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（1bpp，较慢，对比度更高，可清除残影） */
+    ESPAPERPLAY_EPD_MODE_PARTIAL,  /*!< 局部 / 快速刷新（1bpp，屏幕不闪烁，区域 8 像素对齐） */
+    ESPAPERPLAY_EPD_MODE_GRAY4,    /*!< 4 灰阶全屏刷新（2bpp，仅全屏，不支持局部） */
     ESPAPERPLAY_EPD_MODE_MAX,
 } espaperplay_epd_mode_t;
 
@@ -108,17 +115,21 @@ esp_err_t espaperplay_epd_init(void);
 /**
  * @brief 刷新电子纸显示屏。
  *
- * @param image_buf 图像缓冲指针（1 bpp，左上角为原点，数据位 1=白 / 0=黑）。
- *                   传 NULL 表示执行"清屏（全白）"刷新。
- *                   全屏模式：必须为整帧（800x480/8 = 48000 字节）；
- *                   局部模式：必须为窗口（width*height/8 字节）。
+ * @param image_buf 图像缓冲指针（左上角为原点）。
+ *                   全屏/局部模式：1 bpp，数据位 1=白 / 0=黑；
+ *                   全屏整帧 48000 字节，局部窗口 width*height/8 字节；
+ *                   灰阶模式：2 bpp，每像素 2bit（MSB 在前），
+ *                   0=白 / 1=浅灰 / 2=深灰 / 3=黑，整帧 96000 字节，
+ *                   忽略 x/y/width/height；
+ *                   传 NULL 表示执行"清屏（全白）"刷新（各模式通用）。
  * @param x          区域左上角 X 坐标（仅局部模式使用，须为 8 的倍数）。
  * @param y          区域左上角 Y 坐标（仅局部模式使用）。
  * @param width      区域宽度（像素；仅局部模式使用，须为 8 的倍数）。
  * @param height     区域高度（像素；仅局部模式使用）。
- * @param mode       刷新模式（全屏或局部）。
+ * @param mode       刷新模式：全屏 / 局部 / 4 灰阶（灰阶仅全屏）。
  *
- * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；BUSY 超时返回
+ * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；灰阶模式配合
+ *         局部窗口（不适用）返回 ESP_ERR_NOT_SUPPORTED；BUSY 超时返回
  *         ESP_ERR_TIMEOUT；其余底层错误返回相应错误码。
  */
 esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y, uint16_t width,
