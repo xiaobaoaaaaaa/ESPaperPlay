@@ -43,10 +43,10 @@ extern "C" {
  *    DTM1/DTM2 分别写入灰阶值 bit0/bit1 的取反（控制器 RAM (1,1)=白）。
  *    灰阶只支持全屏刷新（灰阶波形无法局部驱动），刷新更慢、残影更多，
  *    建议仅用于图片类内容；
- *  - 快刷（翻页用）：出厂 OTP 快刷波形（强制温度 0x5A）+ PLL 帧率 100Hz
- *    （规格书公开的 FRS 参数，默认 ESPAPERPLAY_EPD_FAST_PLL_FRS=0x0B），
- *    波形时长约为全屏模式的一半；相位更短，对比度/残影略差，仅支持全屏；
- *    实测注册表 LUT 波形（idfxx）反而比 OTP 波形慢，故不采用；
+ *  - 快刷（API 兼容保留）：与全屏模式相同的 OTP 快刷波形。实测 PLL 帧率
+ *    对本面板无效（规格书 FRS 表与 uc8151 同族编码的全部候选值耗时相同，
+ *    波形按时间而非帧数计时），快刷与全屏耗时相同；后续提速方向是注册表
+ *    LUT 或局部波形整屏刷新，另行验证；
  *  - 从灰阶切回黑白/快刷时，旧平面会被重置为全白近似，随后的黑白刷新为
  *    全屏重绘。
  *  - 局部刷新：CDI(0xA9,0x07) -> PTIN(0x91) -> PTL(0x90, 窗口, 终点含端点)
@@ -103,17 +103,6 @@ typedef enum {
  */
 #ifndef ESPAPERPLAY_EPD_BUSY_TIMEOUT_MS
 #define ESPAPERPLAY_EPD_BUSY_TIMEOUT_MS 10000
-#endif
-
-/**
- * @brief 快刷模式的 PLL 帧率设置（FRS[3:0]，规格书公开参数）。
- *
- * 0x06=50Hz（默认）、0x0B=100Hz（默认取值，波形时长约为全屏一半）、
- * 0x0D=130Hz、0x0F=200Hz。帧率越高刷新越快，但每个波形相位持续时间越短，
- * 可能降低对比度或加重残影——按实机效果调整。
- */
-#ifndef ESPAPERPLAY_EPD_FAST_PLL_FRS
-#define ESPAPERPLAY_EPD_FAST_PLL_FRS 0x0B
 #endif
 
 /**

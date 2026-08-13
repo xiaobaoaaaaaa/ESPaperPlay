@@ -97,14 +97,13 @@ static const uint8_t UC8179_TRES_VALUE[4] = {
 #define UC8179_DSLP_CHECK 0xA5
 
 /* ====================================================================
- * 快刷参数：出厂 OTP 快刷波形（强制温度 0x5A）+ PLL 帧率翻倍
+ * 快刷参数：出厂 OTP 快刷波形（强制温度 0x5A，与全屏相同）
  *
- * 实测（GDEY075T7，50Hz）：OTP 波形（FULL）约 71 帧 = 1.43s；idfxx 的
- * 注册表 LUT 波形约 93 帧 = 1.86s，反而更慢。快刷因此采用 OTP 波形 +
- * PLL 100Hz（规格书 FRS 公开参数），波形时长减半（约 0.71s）。
+ * 实测结论：PLL 帧率对本面板无效——规格书 FRS 表与 uc8151 同族编码的
+ * 全部候选值（0x06/0x0B/0x3C/0x3A/0x39/不写）刷新耗时完全相同（1826ms），
+ * OTP 波形相位按时间而非帧数计时。快刷与全屏耗时相同，保留模式仅为
+ * API 兼容；后续可尝试注册表 LUT 或局部波形做整屏刷新。
  * ==================================================================== */
-
-#define UC8179_CMD_PLL 0x30 /*!< PLL Control（帧率，FRS[3:0]，规格书公开参数） */
 
 /* ====================================================================
  * 内部状态
@@ -122,7 +121,8 @@ static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
 static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
-static uint8_t s_test_pll_override = 0; /*!< 快刷 PLL 档位覆盖（仅 selftest 扫描用；0=默认，0xFF=不写 PLL） */
+static uint8_t s_test_ptscan = 1;     /*!< 局部窗口 PT_SCAN 覆盖（仅 selftest 扫描用；1=全面板扫描默认） */
+static uint8_t s_test_pout_after = 0; /*!< 局部 PTOUT 位置覆盖（仅 selftest 扫描用；1=PTOUT 在 DRF 后） */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -413,75 +413,14 @@ static esp_err_t epd_init_controller_gray4(void) {
 }
 
 /**
- * @brief 初始化 UC8179 控制器为快刷模式（OTP 快刷波形 + PLL 100Hz）。
+ * @brief 快刷模式复用全屏初始化（OTP 快刷波形，强制温度 0x5A）。
  *
- * 与全屏模式共用出厂 OTP 快刷波形（强制温度 0x5A，约 71 帧 @50Hz = 1.43s），
- * 仅额外把帧率提高到 100Hz（规格书 PSR 之外公开的 FRS 参数，FRS=0x0B），
- * 波形时长减半（约 0.71s）。实测注册表 LUT 波形（idfxx，约 93 帧）反而
- * 比 OTP 波形慢，故不采用。仅支持全屏。
+ * 实测 PLL 对本面板无效（所有编码刷新耗时相同，见文件头注释），快刷
+ * 与全屏波形一致；保留独立初始化入口仅为模式语义清晰，后续若改用
+ * 注册表 LUT 可在此扩展。
  */
 static esp_err_t epd_init_controller_fast(void) {
-    static const uint8_t cdi_full[2] = {UC8179_CDI_FULL_B0, UC8179_CDI_B1};
-    static const uint8_t btst[4] = {UC8179_BTST_B0, UC8179_BTST_B1, UC8179_BTST_B2, UC8179_BTST_B3};
-    const uint8_t psr = UC8179_PSR_VALUE;
-    const uint8_t pll =
-        s_test_pll_override ? s_test_pll_override : ESPAPERPLAY_EPD_FAST_PLL_FRS;
-    const uint8_t cascade = UC8179_CASCADE_VALUE;
-    const uint8_t force_temp = UC8179_FORCE_TEMP_FULL;
-    esp_err_t ret;
-
-    /* 1. 硬件复位（从任何波形模式/睡眠切换到快刷前都先复位）。 */
-    ret = epd_hw_reset();
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    /* 2. PLL 帧率：默认 100Hz（0x0B，规格书 FRS 编码；实测待验证——
-     *    uc8151 同族芯片用 0x3A=100Hz，详见 selftest PLL 扫描）。 */
-    if (pll != 0xFF) { /* 0xFF = 不写 PLL（复位默认），供 selftest 对照 */
-        ret = epd_write_cmd(UC8179_CMD_PLL);
-        ESP_RETURN_ON_ERROR(ret, TAG, "PLL cmd failed");
-        ret = epd_write_data(&pll, 1);
-        ESP_RETURN_ON_ERROR(ret, TAG, "PLL data failed");
-    }
-
-    /* 3. 面板设置：KW 黑白模式、默认扫描方向、升压开。 */
-    ret = epd_write_cmd(UC8179_CMD_PSR);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PSR cmd failed");
-    ret = epd_write_data(&psr, 1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PSR data failed");
-
-    /* 4. VCOM/数据间隔（与全屏一致，N2OCP=1）。 */
-    ret = epd_write_cmd(UC8179_CMD_CDI);
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
-    ret = epd_write_data(cdi_full, sizeof(cdi_full));
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
-
-    /* 5. 内部电源上电。 */
-    ret = epd_write_cmd(UC8179_CMD_PON);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PON cmd failed");
-    vTaskDelay(pdMS_TO_TICKS(5));
-    ret = epd_wait_busy();
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
-    /* 6. 升压软启动 + 级联设置 + 强制温度 0x5A（OTP 快刷波形）。 */
-    ret = epd_write_cmd(UC8179_CMD_BTST);
-    ESP_RETURN_ON_ERROR(ret, TAG, "BTST cmd failed");
-    ret = epd_write_data(btst, sizeof(btst));
-    ESP_RETURN_ON_ERROR(ret, TAG, "BTST data failed");
-    ret = epd_write_cmd(UC8179_CMD_CASCADE);
-    ESP_RETURN_ON_ERROR(ret, TAG, "cascade cmd failed");
-    ret = epd_write_data(&cascade, 1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "cascade data failed");
-    ret = epd_write_cmd(UC8179_CMD_FORCE_TEMP);
-    ESP_RETURN_ON_ERROR(ret, TAG, "force temp cmd failed");
-    ret = epd_write_data(&force_temp, 1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "force temp data failed");
-
-    ESP_LOGI(TAG, "controller initialized (fast mode)");
-    return ESP_OK;
+    return epd_init_controller(true);
 }
 
 /**
@@ -551,7 +490,7 @@ static esp_err_t epd_window_begin(uint16_t x, uint16_t y, uint16_t width, uint16
         (uint8_t)(x_end >> 8),  (uint8_t)(x_end & 0xFF),    /* HRED[9:0] */
         (uint8_t)(y >> 8),      (uint8_t)(y & 0xFF),        /* VRST[9:0] */
         (uint8_t)(y_end >> 8),  (uint8_t)(y_end & 0xFF),    /* VRED[9:0] */
-        0x01,                                               /* PT_SCAN=1：全面板扫描（默认） */
+        s_test_ptscan ? 0x01 : 0x00, /* PT_SCAN：1=全面板扫描（默认），0=仅扫窗口行 */
     };
     esp_err_t ret;
 
@@ -673,12 +612,23 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 退出局部模式后再刷新（idfxx 顺序；窗口数据已就位）。 */
-    ret = epd_window_end();
+    /* 退出局部模式后再刷新（idfxx 顺序；窗口数据已就位）。
+     * s_test_pout_after=1 时改为官方 demo 顺序：刷新在局部模式下进行，
+     * 完成后才 PTOUT——两种顺序实测对比（selftest 扫描）。 */
+    if (!s_test_pout_after) {
+        ret = epd_window_end();
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+    ret = epd_refresh_and_wait();
     if (ret != ESP_OK) {
         return ret;
     }
-    return epd_refresh_and_wait();
+    if (s_test_pout_after) {
+        ret = epd_window_end();
+    }
+    return ret;
 }
 
 /**
@@ -782,12 +732,12 @@ static uint8_t *epd_make_test_pattern(void) {
 
 /**
  * @brief 自检任务（性能测试）：全屏清白 -> 全屏图案 -> 局部（两个方向）
- *        -> 4 灰阶色带 -> 快刷 PLL 档位扫描 -> 刷成全白 -> 睡眠。
+ *        -> 4 灰阶色带 -> 局刷大小/配置扫描 -> 刷成全白 -> 睡眠。
  *
- * 对全刷（FULL）、局刷（PARTIAL）计时，并对快刷（FAST）做 PLL 候选编码
- * 扫描（规格书 FRS 表与 uc8151 同族芯片编码不一致，逐一实测定位有效值）；
- * 4 灰阶步骤仅作功能验证。测试结束后把面板刷成全白再进入睡眠。接入正式
- * UI 前应将 ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
+ * 对全刷（FULL）计时；局刷做窗口大小（80x80~800x480）x PT_SCAN x PTOUT
+ * 位置的交叉扫描（研究局刷耗时构成与提速空间）；4 灰阶步骤仅作功能验证。
+ * 测试结束后把面板刷成全白再进入睡眠。接入正式 UI 前应将
+ * ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
     (void)arg;
@@ -804,7 +754,6 @@ static void epd_selftest_task(void *arg) {
     uint8_t *box = NULL;
     uint8_t *box2 = NULL;
     uint8_t *gray = NULL;
-    uint8_t *fastpat = NULL;
     esp_err_t ret;
 
     ESP_LOGI(TAG, "EPD selftest started (perf: FULL / PARTIAL / FAST)");
@@ -889,41 +838,50 @@ static void epd_selftest_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    /* 6. 快刷 PLL 档位扫描：候选帧率编码逐一实测。
-     * 面板规格书 FRS 表（0x06=50Hz/0x0B=100Hz）与 uc8151 同族芯片
-     * （0x3C=50Hz/0x3A=100Hz/0x39=200Hz）编码不一致，实测 0x0B 无提速，
-     * 故扫描所有候选值定位有效编码。每次强制重新初始化，并交替显示
-     * 左右半屏黑（pattern/fastpat），保证真实差分转换。 */
-    fastpat = malloc(EPD_FRAME_BYTES);
-    if (fastpat == NULL) {
-        ESP_LOGE(TAG, "selftest fast pattern alloc failed (%u bytes)", (unsigned)EPD_FRAME_BYTES);
-        goto out;
-    }
-    memset(fastpat, 0xFF, EPD_FRAME_BYTES); /* 全白 */
-    for (uint16_t yy = 0; yy < ESPAPERPLAY_DISPLAY_HEIGHT; yy++) {
-        memset(fastpat + (size_t)yy * (ESPAPERPLAY_DISPLAY_WIDTH / 8) + 400 / 8, 0x00, 400 / 8);
-    }
+    /* 6. 局刷性能扫描：窗口大小 x 配置（PT_SCAN x PTOUT 位置）。
+     * 回答两个问题：
+     *  a) 局刷耗时与窗口大小的关系——波形相位数与扫描行数谁主导；
+     *  b) PT_SCAN=0（仅扫窗口行）与 PTOUT 在 DRF 后（局部模式下刷新，
+     *     官方 demo 顺序）能否让局刷更快。
+     * 每个 (配置,大小) 连续两次刷新，内容白/黑交替，保证每次都是真实
+     * 差分转换；窗口居中（8 对齐）；800x480 档即"全屏局部刷新"对照。 */
     {
-        static const uint8_t pll_sweep[] = {0x06, 0x0B, 0x3C, 0x3A, 0x39, 0xFF};
-        static const char *const pll_desc[] = {"spec50", "spec100", "uc50", "uc100", "uc200",
-                                               "default"};
-        for (size_t i = 0; i < sizeof(pll_sweep); i++) {
-            s_test_pll_override = pll_sweep[i];
-            s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 强制重新初始化 */
-            t0 = esp_timer_get_time();
-            ret = espaperplay_epd_refresh((i & 1) ? (const void *)pattern : (const void *)fastpat,
-                                          0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
-                                          ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FAST);
-            ESP_LOGI(TAG, "selftest: FAST pll=%s(0x%02X) -> %s (%lld ms)", pll_desc[i],
-                     pll_sweep[i], esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
-            if (ret != ESP_OK) {
-                s_test_pll_override = 0;
-                goto out;
-            }
-            vTaskDelay(pdMS_TO_TICKS(2000));
+        static const struct {
+            uint16_t w, h;
+        } win_sz[] = {{80, 80}, {160, 160}, {320, 240}, {400, 480}, {800, 480}};
+        static const char *const cfg_desc[] = {"pout-pre,ptscan=1", "pout-pre,ptscan=0",
+                                               "pout-post,ptscan=1", "pout-post,ptscan=0"};
+        uint8_t *winbuf = malloc(EPD_FRAME_BYTES); /* 最大窗口 800x480 的缓冲 */
+        int dir = 0;
+        if (winbuf == NULL) {
+            ESP_LOGE(TAG, "selftest window buf alloc failed (%u bytes)", (unsigned)EPD_FRAME_BYTES);
+            goto out;
         }
+        for (int cfg = 0; cfg < 4; cfg++) {
+            s_test_pout_after = (cfg & 2) ? 1 : 0;
+            s_test_ptscan = (cfg & 1) ? 0 : 1;
+            for (size_t s = 0; s < sizeof(win_sz) / sizeof(win_sz[0]); s++) {
+                const uint16_t wx = (ESPAPERPLAY_DISPLAY_WIDTH - win_sz[s].w) / 2;
+                const uint16_t wy = (ESPAPERPLAY_DISPLAY_HEIGHT - win_sz[s].h) / 2;
+                memset(winbuf, dir ? 0x00 : 0xFF, (size_t)win_sz[s].w * win_sz[s].h / 8);
+                t0 = esp_timer_get_time();
+                ret = espaperplay_epd_refresh(winbuf, wx, wy, win_sz[s].w, win_sz[s].h,
+                                              ESPAPERPLAY_EPD_MODE_PARTIAL);
+                ESP_LOGI(TAG, "selftest: PARTIAL %ux%u [%s] %s -> %s (%lld ms)", win_sz[s].w,
+                         win_sz[s].h, cfg_desc[cfg], dir ? "black" : "white",
+                         esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
+                if (ret != ESP_OK) {
+                    free(winbuf);
+                    goto out;
+                }
+                dir = !dir; /* 黑白交替 */
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+        }
+        free(winbuf);
     }
-    s_test_pll_override = 0; /* 恢复正常默认 */
+    s_test_ptscan = 1;       /* 恢复正常默认 */
+    s_test_pout_after = 0;   /* 恢复正常默认 */
     s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 让最终清白走一次完整初始化 */
 
 out:
@@ -931,7 +889,6 @@ out:
     free(box);
     free(box2);
     free(gray);
-    free(fastpat);
 
     /* 性能测试完成：刷成全白（FULL 清屏，黑像素深擦除）。 */
     t0 = esp_timer_get_time();
