@@ -807,15 +807,17 @@ static uint8_t *epd_make_test_pattern(void) {
 }
 
 /**
- * @brief 自检任务：全屏清白 -> 全屏测试图案 -> 局部刷新（黑底翻白块）
- *        -> 局部刷新（白底画黑块）-> 4 灰阶色带 -> 快刷 -> 睡眠。
+ * @brief 自检任务（性能测试）：全屏清白 -> 全屏图案 -> 局部（两个方向）
+ *        -> 4 灰阶色带 -> 快刷 -> 刷成全白 -> 睡眠。
  *
- * 用于上电验收：依次验证全屏刷新、局部窗口刷新的两个差分方向（黑->白、
- * 白->黑）、4 灰阶渲染、快刷波形与睡眠流程，全部完成后转为空闲轮询。
+ * 对全刷（FULL）、局刷（PARTIAL）、快刷（FAST）三种模式计时（含控制器
+ * 初始化 + 数据上传 + 波形驱动，即 espaperplay_epd_refresh() 的端到端
+ * 耗时）；4 灰阶步骤仅作功能验证。测试结束后把面板刷成全白再进入睡眠。
  * 接入正式 UI 前应将 ESPAPERPLAY_EPD_ENABLE_SELFTEST 置 0。
  */
 static void epd_selftest_task(void *arg) {
     (void)arg;
+    int64_t t0; /* 刷新计时起点（esp_timer_get_time，us） */
     const uint16_t box_x = 96;  /* 8 对齐 */
     const uint16_t box_y = 190;
     const uint16_t box_w = 80;
@@ -831,26 +833,30 @@ static void epd_selftest_task(void *arg) {
     uint8_t *fastpat = NULL;
     esp_err_t ret;
 
-    ESP_LOGI(TAG, "EPD selftest started");
+    ESP_LOGI(TAG, "EPD selftest started (perf: FULL / PARTIAL / FAST)");
     vTaskDelay(pdMS_TO_TICKS(2000)); /* 等待系统启动完成 */
 
-    /* 1. 全屏清白。 */
+    /* 1. 全屏清白（FULL 模式，清屏样本）。 */
+    t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
                                   ESPAPERPLAY_EPD_MODE_FULL);
-    ESP_LOGI(TAG, "selftest: full clear -> %s", esp_err_to_name(ret));
+    ESP_LOGI(TAG, "selftest: FULL clear -> %s (%lld ms)", esp_err_to_name(ret),
+             (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
         goto out;
     }
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    /* 2. 全屏测试图案（左半屏黑）。 */
+    /* 2. 全屏测试图案（FULL 模式，左半屏黑）。 */
     pattern = epd_make_test_pattern();
     if (pattern == NULL) {
         goto out;
     }
+    t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(pattern, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
                                   ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
-    ESP_LOGI(TAG, "selftest: full pattern -> %s", esp_err_to_name(ret));
+    ESP_LOGI(TAG, "selftest: FULL pattern -> %s (%lld ms)", esp_err_to_name(ret),
+             (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
         goto out;
     }
@@ -863,9 +869,10 @@ static void epd_selftest_task(void *arg) {
         goto out;
     }
     memset(box, 0xFF, (size_t)box_w * box_h / 8);
+    t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(box, box_x, box_y, box_w, box_h, ESPAPERPLAY_EPD_MODE_PARTIAL);
-    ESP_LOGI(TAG, "selftest: partial white %ux%u@(%u,%u) -> %s", box_w, box_h, box_x, box_y,
-             esp_err_to_name(ret));
+    ESP_LOGI(TAG, "selftest: PARTIAL white %ux%u@(%u,%u) -> %s (%lld ms)", box_w, box_h, box_x,
+             box_y, esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
         goto out;
     }
@@ -878,9 +885,10 @@ static void epd_selftest_task(void *arg) {
         goto out;
     }
     memset(box2, 0x00, (size_t)bx2_w * bx2_h / 8);
+    t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(box2, bx2_x, bx2_y, bx2_w, bx2_h, ESPAPERPLAY_EPD_MODE_PARTIAL);
-    ESP_LOGI(TAG, "selftest: partial black %ux%u@(%u,%u) -> %s", bx2_w, bx2_h, bx2_x, bx2_y,
-             esp_err_to_name(ret));
+    ESP_LOGI(TAG, "selftest: PARTIAL black %ux%u@(%u,%u) -> %s (%lld ms)", bx2_w, bx2_h, bx2_x,
+             bx2_y, esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
         goto out;
     }
@@ -917,9 +925,11 @@ static void epd_selftest_task(void *arg) {
     for (uint16_t yy = 0; yy < ESPAPERPLAY_DISPLAY_HEIGHT; yy++) {
         memset(fastpat + (size_t)yy * (ESPAPERPLAY_DISPLAY_WIDTH / 8) + 400 / 8, 0x00, 400 / 8);
     }
+    t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(fastpat, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
                                   ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FAST);
-    ESP_LOGI(TAG, "selftest: fast refresh -> %s", esp_err_to_name(ret));
+    ESP_LOGI(TAG, "selftest: FAST refresh -> %s (%lld ms)", esp_err_to_name(ret),
+             (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
         goto out;
     }
@@ -931,6 +941,14 @@ out:
     free(box2);
     free(gray);
     free(fastpat);
+
+    /* 性能测试完成：刷成全白（FULL 清屏，黑像素深擦除）。 */
+    t0 = esp_timer_get_time();
+    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
+                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
+    ESP_LOGI(TAG, "selftest: final white clear -> %s (%lld ms)", esp_err_to_name(ret),
+             (esp_timer_get_time() - t0) / 1000);
+
     /* 自检结束，进入低功耗。 */
     ret = espaperplay_epd_sleep();
     ESP_LOGI(TAG, "selftest done, EPD sleep -> %s", esp_err_to_name(ret));
