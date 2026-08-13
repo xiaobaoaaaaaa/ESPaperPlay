@@ -97,36 +97,14 @@ static const uint8_t UC8179_TRES_VALUE[4] = {
 #define UC8179_DSLP_CHECK 0xA5
 
 /* ====================================================================
- * 快刷（注册表 LUT）参数——idfxx _init_fast，同面板验证
+ * 快刷参数：出厂 OTP 快刷波形（强制温度 0x5A）+ PLL 帧率翻倍
+ *
+ * 实测（GDEY075T7，50Hz）：OTP 波形（FULL）约 71 帧 = 1.43s；idfxx 的
+ * 注册表 LUT 波形约 93 帧 = 1.86s，反而更慢。快刷因此采用 OTP 波形 +
+ * PLL 100Hz（规格书 FRS 公开参数），波形时长减半（约 0.71s）。
  * ==================================================================== */
 
-#define UC8179_CMD_PLL 0x30      /*!< PLL Control（帧率） */
-#define UC8179_CMD_VDCS 0x82     /*!< VCOM_DC Setting */
-#define UC8179_CMD_LUTVCOM 0x20  /*!< VCOM LUT（61 字节命令结构，此处 42 字节） */
-#define UC8179_CMD_LUTWW 0x21    /*!< White->White LUT */
-#define UC8179_CMD_LUTKW 0x22    /*!< Black->White LUT */
-#define UC8179_CMD_LUTWK 0x23    /*!< White->Black LUT */
-#define UC8179_CMD_LUTKK 0x24    /*!< Black->Black LUT */
-
-/** PSR（快刷）：REG=1（LUT 取自寄存器）、KW/R=1、UD/SHL/SHD_N/RST_N=1。 */
-#define UC8179_PSR_FAST_VALUE 0x3F
-
-static const uint8_t UC8179_PWR_FAST[5] = {0x07, 0x17, 0x3F, 0x3F, 0x09};
-static const uint8_t UC8179_BTST_FAST[4] = {0x17, 0x17, 0x28, 0x17};
-
-/** 快刷波形表（42 字节/张；K2W 复用 W2W，K2K 复用 W2K）。 */
-static const uint8_t UC8179_LUT_VCOM_FAST[42] = {
-    0x26, 0x0F, 0x18, 0x18, 0x14, 0x01, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-static const uint8_t UC8179_LUT_WW_FAST[42] = {
-    0x55, 0x06, 0x0C, 0x17, 0x02, 0x01, 0x2A, 0x02, 0x1C, 0x02, 0x0D, 0x01, 0x80, 0x02,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-static const uint8_t UC8179_LUT_WK_FAST[42] = {
-    0xAA, 0x06, 0x0C, 0x17, 0x02, 0x01, 0x15, 0x02, 0x1C, 0x02, 0x0D, 0x01, 0x40, 0x02,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+#define UC8179_CMD_PLL 0x30 /*!< PLL Control（帧率，FRS[3:0]，规格书公开参数） */
 
 /* ====================================================================
  * 内部状态
@@ -143,6 +121,7 @@ static SemaphoreHandle_t s_lock = NULL;      /*!< 刷新互斥锁（自检任务
 static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
 static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
+static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -433,19 +412,20 @@ static esp_err_t epd_init_controller_gray4(void) {
 }
 
 /**
- * @brief 初始化 UC8179 控制器为快刷模式（注册表 LUT）。
+ * @brief 初始化 UC8179 控制器为快刷模式（OTP 快刷波形 + PLL 100Hz）。
  *
- * 顺序与参数取自 idfxx _init_fast()（在 GDEY075T7 上验证）：PWR 电压配置、
- * PLL、VCOM_DC、BTST、PON、PSR 0x3F（REG=1：LUT 取自寄存器）、TRES、CDI，
- * 最后写入 5 张快刷波形表（42 字节/张，K2W 复用 W2W、K2K 复用 W2K）。
- * 快刷波形比 OTP 全刷波形更短：刷新更快，但残影/对比度略差，适合页面
- * 翻动等对速度敏感的场景；仅支持全屏。
+ * 与全屏模式共用出厂 OTP 快刷波形（强制温度 0x5A，约 71 帧 @50Hz = 1.43s），
+ * 仅额外把帧率提高到 100Hz（规格书 PSR 之外公开的 FRS 参数，FRS=0x0B），
+ * 波形时长减半（约 0.71s）。实测注册表 LUT 波形（idfxx，约 93 帧）反而
+ * 比 OTP 波形慢，故不采用。仅支持全屏。
  */
 static esp_err_t epd_init_controller_fast(void) {
     static const uint8_t cdi_full[2] = {UC8179_CDI_FULL_B0, UC8179_CDI_B1};
-    const uint8_t psr = UC8179_PSR_FAST_VALUE;
-    const uint8_t pll = 0x06;
-    const uint8_t vdcs = 0x16;
+    static const uint8_t btst[4] = {UC8179_BTST_B0, UC8179_BTST_B1, UC8179_BTST_B2, UC8179_BTST_B3};
+    const uint8_t psr = UC8179_PSR_VALUE;
+    const uint8_t pll = ESPAPERPLAY_EPD_FAST_PLL_FRS; /* FRS=1011 -> 100Hz */
+    const uint8_t cascade = UC8179_CASCADE_VALUE;
+    const uint8_t force_temp = UC8179_FORCE_TEMP_FULL;
     esp_err_t ret;
 
     /* 1. 硬件复位（从任何波形模式/睡眠切换到快刷前都先复位）。 */
@@ -454,27 +434,25 @@ static esp_err_t epd_init_controller_fast(void) {
         return ret;
     }
 
-    /* 2. 电源配置（5 字节：BD/VSR/VS/VG、VCOM_SLEW/VG_LVL、VDH、VDL、VDHR）。 */
-    ret = epd_write_cmd(UC8179_CMD_PWR);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PWR cmd failed");
-    ret = epd_write_data(UC8179_PWR_FAST, sizeof(UC8179_PWR_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "PWR data failed");
-    /* PLL 帧率 + VCOM_DC。 */
+    /* 2. PLL 帧率：100Hz（比全屏的 50Hz 快一倍）。 */
     ret = epd_write_cmd(UC8179_CMD_PLL);
     ESP_RETURN_ON_ERROR(ret, TAG, "PLL cmd failed");
     ret = epd_write_data(&pll, 1);
     ESP_RETURN_ON_ERROR(ret, TAG, "PLL data failed");
-    ret = epd_write_cmd(UC8179_CMD_VDCS);
-    ESP_RETURN_ON_ERROR(ret, TAG, "VDCS cmd failed");
-    ret = epd_write_data(&vdcs, 1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "VDCS data failed");
-    /* 升压软启动。 */
-    ret = epd_write_cmd(UC8179_CMD_BTST);
-    ESP_RETURN_ON_ERROR(ret, TAG, "BTST cmd failed");
-    ret = epd_write_data(UC8179_BTST_FAST, sizeof(UC8179_BTST_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "BTST data failed");
 
-    /* 3. 内部电源上电。 */
+    /* 3. 面板设置：KW 黑白模式、默认扫描方向、升压开。 */
+    ret = epd_write_cmd(UC8179_CMD_PSR);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PSR cmd failed");
+    ret = epd_write_data(&psr, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "PSR data failed");
+
+    /* 4. VCOM/数据间隔（与全屏一致，N2OCP=1）。 */
+    ret = epd_write_cmd(UC8179_CMD_CDI);
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
+    ret = epd_write_data(cdi_full, sizeof(cdi_full));
+    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
+
+    /* 5. 内部电源上电。 */
     ret = epd_write_cmd(UC8179_CMD_PON);
     ESP_RETURN_ON_ERROR(ret, TAG, "PON cmd failed");
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -483,41 +461,19 @@ static esp_err_t epd_init_controller_fast(void) {
         return ret;
     }
 
-    /* 4. 面板设置（REG=1：LUT 取自寄存器）+ 分辨率 + VCOM/数据间隔。 */
-    ret = epd_write_cmd(UC8179_CMD_PSR);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PSR cmd failed");
-    ret = epd_write_data(&psr, 1);
-    ESP_RETURN_ON_ERROR(ret, TAG, "PSR data failed");
-    ret = epd_write_cmd(UC8179_CMD_TRES);
-    ESP_RETURN_ON_ERROR(ret, TAG, "TRES cmd failed");
-    ret = epd_write_data(UC8179_TRES_VALUE, sizeof(UC8179_TRES_VALUE));
-    ESP_RETURN_ON_ERROR(ret, TAG, "TRES data failed");
-    ret = epd_write_cmd(UC8179_CMD_CDI);
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI cmd failed");
-    ret = epd_write_data(cdi_full, sizeof(cdi_full));
-    ESP_RETURN_ON_ERROR(ret, TAG, "CDI data failed");
-
-    /* 5. 快刷波形表（K2W 复用 W2W，K2K 复用 W2K）。 */
-    ret = epd_write_cmd(UC8179_CMD_LUTVCOM);
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTVCOM cmd failed");
-    ret = epd_write_data(UC8179_LUT_VCOM_FAST, sizeof(UC8179_LUT_VCOM_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTVCOM data failed");
-    ret = epd_write_cmd(UC8179_CMD_LUTWW);
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTWW cmd failed");
-    ret = epd_write_data(UC8179_LUT_WW_FAST, sizeof(UC8179_LUT_WW_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTWW data failed");
-    ret = epd_write_cmd(UC8179_CMD_LUTKW);
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTKW cmd failed");
-    ret = epd_write_data(UC8179_LUT_WW_FAST, sizeof(UC8179_LUT_WW_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTKW data failed");
-    ret = epd_write_cmd(UC8179_CMD_LUTWK);
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTWK cmd failed");
-    ret = epd_write_data(UC8179_LUT_WK_FAST, sizeof(UC8179_LUT_WK_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTWK data failed");
-    ret = epd_write_cmd(UC8179_CMD_LUTKK);
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTKK cmd failed");
-    ret = epd_write_data(UC8179_LUT_WK_FAST, sizeof(UC8179_LUT_WK_FAST));
-    ESP_RETURN_ON_ERROR(ret, TAG, "LUTKK data failed");
+    /* 6. 升压软启动 + 级联设置 + 强制温度 0x5A（OTP 快刷波形）。 */
+    ret = epd_write_cmd(UC8179_CMD_BTST);
+    ESP_RETURN_ON_ERROR(ret, TAG, "BTST cmd failed");
+    ret = epd_write_data(btst, sizeof(btst));
+    ESP_RETURN_ON_ERROR(ret, TAG, "BTST data failed");
+    ret = epd_write_cmd(UC8179_CMD_CASCADE);
+    ESP_RETURN_ON_ERROR(ret, TAG, "cascade cmd failed");
+    ret = epd_write_data(&cascade, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "cascade data failed");
+    ret = epd_write_cmd(UC8179_CMD_FORCE_TEMP);
+    ESP_RETURN_ON_ERROR(ret, TAG, "force temp cmd failed");
+    ret = epd_write_data(&force_temp, 1);
+    ESP_RETURN_ON_ERROR(ret, TAG, "force temp data failed");
 
     ESP_LOGI(TAG, "controller initialized (fast mode)");
     return ESP_OK;
@@ -643,7 +599,11 @@ static esp_err_t epd_refresh_and_wait(void) {
 static esp_err_t epd_refresh_full(const void *image_buf) {
     esp_err_t ret;
 
-    ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
+    /* 同模式连续刷新跳过重复初始化（省掉每次的硬件复位 + PON 开销）；
+     * 睡眠唤醒或模式切换时仍完整初始化。 */
+    if (s_asleep || s_controller_mode != ESPAPERPLAY_EPD_MODE_FULL) {
+        ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
+    }
 
     /* 从灰阶切回黑白时重置旧平面（"旧=全白"近似）。 */
     ret = epd_prepare_bw_old_plane();
@@ -680,7 +640,10 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
     const size_t window_bytes = (size_t)width * height / 8;
     esp_err_t ret;
 
-    ESP_RETURN_ON_ERROR(epd_init_controller(false), TAG, "controller init (partial) failed");
+    /* 同模式连续刷新跳过重复初始化；睡眠唤醒或模式切换时完整初始化。 */
+    if (s_asleep || s_controller_mode != ESPAPERPLAY_EPD_MODE_PARTIAL) {
+        ESP_RETURN_ON_ERROR(epd_init_controller(false), TAG, "controller init (partial) failed");
+    }
 
     /* 从灰阶切回黑白时重置旧平面（局部窗口同样按"旧=全白"近似）。 */
     ret = epd_prepare_bw_old_plane();
@@ -722,7 +685,10 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
 static esp_err_t epd_refresh_fast(const void *image_buf) {
     esp_err_t ret;
 
-    ESP_RETURN_ON_ERROR(epd_init_controller_fast(), TAG, "controller init (fast) failed");
+    /* 同模式连续刷新跳过重复初始化；睡眠唤醒或模式切换时完整初始化。 */
+    if (s_asleep || s_controller_mode != ESPAPERPLAY_EPD_MODE_FAST) {
+        ESP_RETURN_ON_ERROR(epd_init_controller_fast(), TAG, "controller init (fast) failed");
+    }
 
     /* 从灰阶切回黑白/快刷时重置旧平面（"旧=全白"近似）。 */
     ret = epd_prepare_bw_old_plane();
@@ -757,7 +723,10 @@ static esp_err_t epd_refresh_gray4(const void *image_buf) {
     const size_t chunk_bytes = sizeof(s_plane) * 2;                /* 每块输入帧字节数 */
     esp_err_t ret;
 
-    ESP_RETURN_ON_ERROR(epd_init_controller_gray4(), TAG, "controller init (gray4) failed");
+    /* 同模式连续刷新跳过重复初始化；睡眠唤醒或模式切换时完整初始化。 */
+    if (s_asleep || s_controller_mode != ESPAPERPLAY_EPD_MODE_GRAY4) {
+        ESP_RETURN_ON_ERROR(epd_init_controller_gray4(), TAG, "controller init (gray4) failed");
+    }
 
     for (unsigned plane = 0; plane < 2; plane++) {
         ret = epd_write_cmd(plane == 0 ? UC8179_CMD_DTM1 : UC8179_CMD_DTM2);
@@ -1134,8 +1103,11 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
     }
 
     if (ret == ESP_OK) {
-        s_last_mode = mode; /* 供灰阶<->黑白切换时重置旧平面 */
-        s_asleep = false;   /* 刷新完成后面板保持上电，由调用方决定何时睡眠 */
+        s_last_mode = mode;        /* 供灰阶<->黑白切换时重置旧平面 */
+        s_controller_mode = mode;  /* 同模式连续刷新跳过重复初始化 */
+        s_asleep = false;          /* 刷新完成后面板保持上电，由调用方决定何时睡眠 */
+    } else {
+        s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
     }
     xSemaphoreGive(s_lock);
     return ret;
