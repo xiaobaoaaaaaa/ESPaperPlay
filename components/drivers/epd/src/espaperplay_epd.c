@@ -240,6 +240,30 @@ static esp_err_t epd_write_fill(uint8_t value, size_t len) {
 }
 
 /**
+ * @brief 分块写入 len 个"取反字节"（灰阶->黑白切换时构造反相旧平面用）。
+ *
+ * 复用填充暂存做分块取反，避免分配大缓冲；DC 由 epd_write_data 置位。
+ */
+static esp_err_t epd_write_inverted(const uint8_t *data, size_t len) {
+    static uint8_t s_tmp[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
+    esp_err_t ret;
+
+    while (len > 0) {
+        size_t chunk = len > sizeof(s_tmp) ? sizeof(s_tmp) : len;
+        for (size_t i = 0; i < chunk; i++) {
+            s_tmp[i] = (uint8_t)~data[i];
+        }
+        ret = epd_write_data(s_tmp, chunk);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        data += chunk;
+        len -= chunk;
+    }
+    return ESP_OK;
+}
+
+/**
  * @brief 等待 BUSY 释放（BUSY 低电平 = 忙，高电平 = 空闲）。
  *
  * @return ESP_OK 或 ESP_ERR_TIMEOUT。
@@ -457,13 +481,21 @@ static void gray4_unpack_plane(const uint8_t *frame, size_t frame_bytes, uint8_t
 }
 
 /**
- * @brief 从灰阶模式切回黑白时，把旧图像平面（DTM1）重置为全白。
+ * @brief 从灰阶模式切回黑白时，把旧图像平面（DTM1）写成"新帧的反相"。
  *
- * 灰阶刷新后 DTM1 保存的是灰阶 bit0/bit1 平面（N2OCP 拷贝），黑白差分若
- * 直接使用会得到错误的 {旧,新} 组合；重置为 0xFF 即"旧=全白"近似——面板
- * 当前是灰阶图像，逐像素差分本就无意义，随后的黑白刷新为全屏重绘。
+ * 灰阶刷新后 DTM1 保存的是灰阶位平面（N2OCP 拷贝），黑白差分若直接使用
+ * 会得到错误的 {旧,新} 组合；且面板上残留的中间灰无法被清除——白像素
+ * {1,1}->LUTWW 不驱动，灰点会留在新 UI 的白底上。
+ *
+ * 把 DTM1 写成 ~新帧后，每个像素的 {旧,新} 必为相反值：
+ *  - 白像素 {1,0}->K2W：强制驱动到白（中间灰被清除）；
+ *  - 黑像素 {0,1}->W2K：强制驱动到黑。
+ * 刷新完成后 N2OCP 把新帧拷贝为旧平面，后续差分照常工作。仅全屏路径
+ * 使用本函数（局部路径在窗口内做同样处理，见 epd_refresh_partial）。
+ *
+ * @param image_buf 新帧（NULL = 清屏：DTM1 写 0x00，全像素 黑->白 深擦除）。
  */
-static esp_err_t epd_prepare_bw_old_plane(void) {
+static esp_err_t epd_prepare_bw_old_plane(const void *image_buf) {
     esp_err_t ret;
 
     if (s_last_mode != ESPAPERPLAY_EPD_MODE_GRAY4) {
@@ -471,7 +503,10 @@ static esp_err_t epd_prepare_bw_old_plane(void) {
     }
     ret = epd_write_cmd(UC8179_CMD_DTM1);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
-    return epd_write_fill(0xFF, EPD_FRAME_BYTES);
+    if (image_buf == NULL) {
+        return epd_write_fill(0x00, EPD_FRAME_BYTES);
+    }
+    return epd_write_inverted(image_buf, EPD_FRAME_BYTES);
 }
 
 /* ====================================================================
@@ -552,13 +587,13 @@ static esp_err_t epd_refresh_full(const void *image_buf) {
         ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
     }
 
-    /* 从灰阶切回黑白时重置旧平面（"旧=全白"近似）。 */
-    ret = epd_prepare_bw_old_plane();
+    /* 从灰阶切回黑白：DTM1 = ~新帧（强制全像素翻转，清除中间灰残留）。 */
+    ret = epd_prepare_bw_old_plane(image_buf);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    /* DTM2（NEW）：新图像（NULL = 清屏为全白，保留 DTM1 使黑像素深擦除）。 */
+    /* DTM2（NEW）：新图像（NULL = 清屏为全白，DTM1=0x00 使全像素深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
     if (image_buf == NULL) {
@@ -592,18 +627,27 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         ESP_RETURN_ON_ERROR(epd_init_controller(false), TAG, "controller init (partial) failed");
     }
 
-    /* 从灰阶切回黑白时重置旧平面（局部窗口同样按"旧=全白"近似）。 */
-    ret = epd_prepare_bw_old_plane();
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
     ret = epd_window_begin(x, y, width, height);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    /* 窗口内 DTM2（NEW）：新数据（NULL = 窗口清白，保留窗口 DTM1 深擦除）。 */
+    /* 从灰阶切回黑白且做局部刷新：窗口内 DTM1 = ~新窗口数据（强制窗口内
+     * 全像素翻转，清除窗口区域的中间灰残留；窗口外不刷新，旧平面无需处理）。 */
+    if (s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+        ret = epd_write_cmd(UC8179_CMD_DTM1);
+        ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
+        if (image_buf == NULL) {
+            ret = epd_write_fill(0x00, window_bytes);
+        } else {
+            ret = epd_write_inverted(image_buf, window_bytes);
+        }
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
+    /* 窗口内 DTM2（NEW）：新数据（NULL = 窗口清白，DTM1=0x00 全像素深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
     if (image_buf == NULL) {
@@ -639,13 +683,13 @@ static esp_err_t epd_refresh_fast(const void *image_buf) {
         ESP_RETURN_ON_ERROR(epd_init_controller_fast(), TAG, "controller init (fast) failed");
     }
 
-    /* 从灰阶切回黑白/快刷时重置旧平面（"旧=全白"近似）。 */
-    ret = epd_prepare_bw_old_plane();
+    /* 从灰阶切回黑白/快刷：DTM1 = ~新帧（强制全像素翻转，清除灰阶残留）。 */
+    ret = epd_prepare_bw_old_plane(image_buf);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    /* DTM2（NEW）：新图像（NULL = 清屏为全白）。 */
+    /* DTM2（NEW）：新图像（NULL = 清屏为全白，DTM1=0x00 全像素深擦除）。 */
     ret = epd_write_cmd(UC8179_CMD_DTM2);
     ESP_RETURN_ON_ERROR(ret, TAG, "DTM2 cmd failed");
     if (image_buf == NULL) {
