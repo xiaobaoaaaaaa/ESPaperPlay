@@ -75,6 +75,8 @@ extern "C" {
  */
 typedef enum {
     ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（1bpp，OTP 波形，较慢，对比度更高） */
+    ESPAPERPLAY_EPD_MODE_FULL_FORCE, /*!< 强制全像素翻转全刷（DTM1=~新帧，全像素深波形，
+                                      清残影/鬼影；画面会闪黑一下，周期性使用） */
     ESPAPERPLAY_EPD_MODE_PARTIAL,  /*!< 局部 / 快速刷新（1bpp，屏幕不闪烁，区域 8 像素对齐） */
     ESPAPERPLAY_EPD_MODE_GRAY4,    /*!< 4 灰阶全屏刷新（2bpp，仅全屏，不支持局部） */
     ESPAPERPLAY_EPD_MODE_FAST,     /*!< 快刷（1bpp 全屏，注册表 LUT 短波形，刷新最快、残影略多） */

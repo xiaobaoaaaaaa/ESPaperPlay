@@ -578,7 +578,7 @@ static esp_err_t epd_refresh_and_wait(void) {
  * {旧,新} 差分选择波形。清屏（image_buf=NULL）时只写 DTM2=0xFF：黑像素
  * 走 黑->白 深度擦除波形，白像素保持（参考 idfxx do_clear 的做法）。
  */
-static esp_err_t epd_refresh_full(const void *image_buf) {
+static esp_err_t epd_refresh_full(const void *image_buf, bool force) {
     esp_err_t ret;
 
     /* 同模式连续刷新跳过重复初始化（省掉每次的硬件复位 + PON 开销）；
@@ -587,10 +587,13 @@ static esp_err_t epd_refresh_full(const void *image_buf) {
         ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
     }
 
-    /* 从灰阶切回黑白：DTM1 = ~新帧（强制全像素翻转，清除中间灰残留）。 */
-    ret = epd_prepare_bw_old_plane(image_buf);
-    if (ret != ESP_OK) {
-        return ret;
+    /* 强制翻转（清残影）或从灰阶切回黑白：DTM1 = ~新帧（强制全像素翻转，
+     * 全像素走深波形；画面闪黑一下，残影/中间灰残留一并清除）。 */
+    if (force || s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+        ret = epd_prepare_bw_old_plane(image_buf);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
     /* DTM2（NEW）：新图像（NULL = 清屏为全白，DTM1=0x00 使全像素深擦除）。 */
@@ -1167,6 +1170,16 @@ esp_err_t espaperplay_epd_init(void) {
     s_asleep = true;
     xSemaphoreGive(s_lock);
 
+    /* 初始化完成后执行一次全屏清白全刷：FULL_FORCE（DTM1 反相）强制全
+     * 像素走深擦除波形，面板从任何上电残留驱动为干净全白（普通差分在
+     * 首刷时旧平面状态未知，无法保证干净）。阻塞约 1.7s；失败不致命，
+     * 下次刷新会重新初始化。 */
+    ret = espaperplay_epd_refresh(NULL, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_FULL_FORCE);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "initial full clear failed: %s", esp_err_to_name(ret));
+        ret = ESP_OK;
+    }
+
     ESP_LOGI(TAG, "EPD %ux%u initialized (SPI%d, %u Hz)", ESPAPERPLAY_DISPLAY_WIDTH,
              ESPAPERPLAY_DISPLAY_HEIGHT, (int)ESPAPERPLAY_SPI_HOST_ID, ESPAPERPLAY_EPD_SPI_CLK_HZ);
 
@@ -1193,8 +1206,8 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
         return ESP_ERR_TIMEOUT;
     }
 
-    if (mode == ESPAPERPLAY_EPD_MODE_FULL) {
-        ret = epd_refresh_full(image_buf);
+    if (mode == ESPAPERPLAY_EPD_MODE_FULL || mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) {
+        ret = epd_refresh_full(image_buf, mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE);
     } else if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
         /* 局部窗口参数校验：x/width 8 对齐，窗口在屏内。 */
         if ((x & 7) != 0 || (width & 7) != 0 || width == 0 || height == 0 ||
@@ -1213,8 +1226,9 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
     }
 
     if (ret == ESP_OK) {
-        s_last_mode = mode;        /* 供灰阶<->黑白切换时重置旧平面 */
-        s_controller_mode = mode;  /* 同模式连续刷新跳过重复初始化 */
+        /* FULL_FORCE 与 FULL 同属全屏模式（旧平面/初始化状态按 FULL 记录）。 */
+        s_last_mode = (mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) ? ESPAPERPLAY_EPD_MODE_FULL : mode;
+        s_controller_mode = s_last_mode;
         s_asleep = false;          /* 刷新完成后面板保持上电 */
     } else {
         s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
