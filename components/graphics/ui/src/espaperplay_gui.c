@@ -36,20 +36,17 @@ static const char *TAG = "ESPaperPlay_GUI";
 static uint8_t *s_fb_rgb = NULL; /*!< RGB565 主帧缓冲 */
 /* 快照暂存（双槽位：A=优先处理，B=排队）——flush 时把主帧内容冻结进暂存，
  * 之后渲染器可继续修改主帧而不影响已排队帧。 */
-/* 快照暂存（双槽位：A=优先处理，B=排队）——flush 时把主帧内容冻结进暂存，
- * 之后渲染器可继续修改主帧而不影响已排队帧。 */
-static uint8_t *s_stage_a_bw = NULL;       /*!< 槽 A 的 1bpp 快照 */
-static uint8_t *s_stage_b_bw = NULL;       /*!< 槽 B 的 1bpp 快照 */
-static uint8_t *s_stage_a_gray4 = NULL;    /*!< 槽 A 的 2bpp 快照 */
-static uint8_t *s_stage_b_gray4 = NULL;    /*!< 槽 B 的 2bpp 快照 */
+static uint8_t *s_stage_a_bw = NULL;    /*!< 槽 A 的 1bpp 快照 */
+static uint8_t *s_stage_b_bw = NULL;    /*!< 槽 B 的 1bpp 快照 */
+static uint8_t *s_stage_a_gray4 = NULL; /*!< 槽 A 的 2bpp 快照 */
+static uint8_t *s_stage_b_gray4 = NULL; /*!< 槽 B 的 2bpp 快照 */
 static espaperplay_gui_color_t s_color = ESPAPERPLAY_GUI_COLOR_BW;
 static espaperplay_gui_converter_t s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
 static espaperplay_gui_gray4_dither_t s_gray4_dither = ESPAPERPLAY_GUI_GRAY4_DITHER_FS;
 static bool s_initialized = false;
 
-static SemaphoreHandle_t s_lock = NULL;     /*!< 槽位/脏区状态互斥（渲染任务 vs worker） */
-static TaskHandle_t s_worker_task = NULL;   /*!< 异步刷新 worker（NULL=退化同步） */
-static volatile bool s_worker_busy = false; /*!< worker 正在执行刷新 */
+static SemaphoreHandle_t s_lock = NULL;   /*!< 槽位/脏区状态互斥（渲染任务 vs worker） */
+static TaskHandle_t s_worker_task = NULL; /*!< 异步刷新 worker（NULL=退化同步） */
 
 /* 脏区（8 对齐包围盒，一帧内合并；由渲染任务在锁内读写） */
 static bool s_dirty = false;
@@ -62,18 +59,24 @@ static uint16_t s_dirty_h = 0;
  * 连续达到 FULL_FORCE_AFTER 次才强制一次全像素翻转全刷，清除累积残影。 */
 static uint8_t s_area_over_count = 0;
 
+/* 刷新操作槽位状态：
+ *   IDLE  = 空闲，可被渲染端快照写入；
+ *   READY = 已快照、待 worker 取走（可被渲染端并入重快照取最新帧）；
+ *   BUSY  = worker 正在执行（stage 缓冲正被 SPI 读取，渲染端严禁触碰）。 */
+typedef enum { GUI_SLOT_IDLE = 0, GUI_SLOT_READY, GUI_SLOT_BUSY } gui_slot_state_t;
+
 /* 刷新操作槽位 */
 typedef enum { GUI_OP_FRAME = 0, GUI_OP_CLEAR } gui_op_type_t;
 typedef struct {
-    bool ready;                      /*!< 已快照、待 worker 处理 */
-    gui_op_type_t type;              /*!< FRAME=快照帧；CLEAR=深擦除清白 */
-    espaperplay_gui_color_t color;   /*!< 快照时的模式 */
-    uint16_t x, y, w, h;             /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
-    bool force_full;                 /*!< 强制全像素翻转全刷（清残影） */
-    const uint8_t *stage;            /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
+    gui_slot_state_t state;        /*!< 槽位状态（IDLE/READY/BUSY） */
+    gui_op_type_t type;            /*!< FRAME=快照帧；CLEAR=深擦除清白 */
+    espaperplay_gui_color_t color; /*!< 快照时的模式 */
+    uint16_t x, y, w, h;           /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
+    bool force_full;               /*!< 强制全像素翻转全刷（清残影） */
+    const uint8_t *stage;          /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
 } gui_op_t;
 static gui_op_t s_op_a; /*!< 槽 A：worker 优先处理 */
-static gui_op_t s_op_b; /*!< 槽 B：排队（两槽都满时新脏区并入 B 重快照） */
+static gui_op_t s_op_b; /*!< 槽 B：排队（槽满时新脏区并入 READY 的 FRAME 槽重快照） */
 
 /* ====================================================================
  * 颜色转换（RGB565 -> 亮度 -> 1bpp / 2bpp）
@@ -154,7 +157,7 @@ static void gui_convert_gray4_bayer(const uint8_t *fb, uint8_t *out) {
                 v = L + ((int)gui_bayer_threshold((uint16_t)(px % ESPAPERPLAY_DISPLAY_WIDTH),
                                                   (uint16_t)(px / ESPAPERPLAY_DISPLAY_WIDTH)) -
                          128) /
-                             3;
+                            3;
             }
             byte |= (uint8_t)(gui_quantize_gray4(v) << (6 - 2 * k));
         }
@@ -164,8 +167,8 @@ static void gui_convert_gray4_bayer(const uint8_t *fb, uint8_t *out) {
 
 static void gui_convert_gray4_fs(const uint8_t *fb, uint8_t *out) {
     static int16_t s_err[2][ESPAPERPLAY_DISPLAY_WIDTH + 2];
-    int16_t(*cur)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[0];
-    int16_t(*nxt)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[1];
+    int16_t (*cur)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[0];
+    int16_t (*nxt)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[1];
 
     memset(s_err, 0, sizeof(s_err));
     for (uint16_t y = 0; y < ESPAPERPLAY_DISPLAY_HEIGHT; y++) {
@@ -196,7 +199,7 @@ static void gui_convert_gray4_fs(const uint8_t *fb, uint8_t *out) {
                 byte = 0;
             }
         }
-        int16_t(*tmp)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = cur;
+        int16_t (*tmp)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = cur;
         cur = nxt;
         nxt = tmp;
         memset(*nxt, 0, sizeof(*nxt));
@@ -223,6 +226,7 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
  * 全刷（op->force_full），清除局刷累积的残影。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
+    op->state = GUI_SLOT_READY;
     op->color = s_color;
     if (s_color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
         gui_convert_gray4(s_fb_rgb, stage_gray4);
@@ -274,8 +278,8 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
 static esp_err_t gui_execute_op(const gui_op_t *op) {
     esp_err_t ret;
 
-    /* 数据安全由三缓冲保证：本 op 的 stage 缓冲在快照时已分配为"非 worker
-     * 执行中"的索引，worker 读取期间快照不会再写它（见 gui_pick_stage）。 */
+    /* 数据安全由槽位状态机保证：本 op 所在槽在 worker 执行期间为 BUSY，
+     * 渲染端不会重写其 stage 缓冲；epd 驱动内部亦会快照，双重防护。 */
     if (op->type == GUI_OP_CLEAR) {
         ret = (op->color == ESPAPERPLAY_GUI_COLOR_GRAY4)
                   ? espaperplay_epd_refresh(NULL, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_GRAY4)
@@ -310,21 +314,18 @@ static void gui_worker_task(void *arg) {
             continue;
         }
         gui_op_t op;
-        bool got = false;
-        if (s_op_a.ready) {
-            op = s_op_a;
-            s_op_a.ready = false;
-            got = true;
-        } else if (s_op_b.ready) {
-            op = s_op_b;
-            s_op_b.ready = false;
-            got = true;
+        gui_op_t *slot = NULL;
+        if (s_op_a.state == GUI_SLOT_READY) {
+            slot = &s_op_a;
+        } else if (s_op_b.state == GUI_SLOT_READY) {
+            slot = &s_op_b;
         }
-        if (got) {
-            s_worker_busy = true;
+        if (slot != NULL) {
+            op = *slot;
+            slot->state = GUI_SLOT_BUSY; /* 占用：渲染端不得再写该槽 */
         }
         xSemaphoreGive(s_lock);
-        if (!got) {
+        if (slot == NULL) {
             continue;
         }
 
@@ -347,8 +348,9 @@ static void gui_worker_task(void *arg) {
             ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(ret));
         }
 
+        /* 执行完毕：释放槽位，渲染端可再次快照写入。 */
         if (xSemaphoreTake(s_lock, portMAX_DELAY) == pdTRUE) {
-            s_worker_busy = false;
+            slot->state = GUI_SLOT_IDLE;
             xSemaphoreGive(s_lock);
         }
     }
@@ -360,7 +362,8 @@ static void gui_worker_task(void *arg) {
 
 #if ESPAPERPLAY_GUI_ENABLE_SELFTEST
 static void gui_test_pixel(uint8_t *fb, uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b) {
-    const uint16_t p = (uint16_t)(((uint16_t)(r >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (b >> 3));
+    const uint16_t p =
+        (uint16_t)(((uint16_t)(r >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (b >> 3));
     uint8_t *px = fb + (size_t)y * GUI_STRIDE_RGB + (size_t)x * 2;
     px[0] = (uint8_t)(p & 0xFF);
     px[1] = (uint8_t)(p >> 8);
@@ -553,11 +556,11 @@ esp_err_t espaperplay_gui_init(void) {
     s_stage_b_bw = gui_alloc(GUI_FB_BW_BYTES);
     s_stage_a_gray4 = gui_alloc(GUI_FB_GRAY4_BYTES);
     s_stage_b_gray4 = gui_alloc(GUI_FB_GRAY4_BYTES);
-    if (s_fb_rgb == NULL || s_stage_a_bw == NULL || s_stage_b_bw == NULL || s_stage_a_gray4 == NULL ||
-        s_stage_b_gray4 == NULL) {
-        ESP_LOGE(TAG, "alloc failed (rgb=%u bw=%u+%u gray4=%u+%u)",
-                 (unsigned)GUI_FB_RGB_BYTES, (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_BW_BYTES,
-                 (unsigned)GUI_FB_GRAY4_BYTES, (unsigned)GUI_FB_GRAY4_BYTES);
+    if (s_fb_rgb == NULL || s_stage_a_bw == NULL || s_stage_b_bw == NULL ||
+        s_stage_a_gray4 == NULL || s_stage_b_gray4 == NULL) {
+        ESP_LOGE(TAG, "alloc failed (rgb=%u bw=%u+%u gray4=%u+%u)", (unsigned)GUI_FB_RGB_BYTES,
+                 (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_GRAY4_BYTES,
+                 (unsigned)GUI_FB_GRAY4_BYTES);
         heap_caps_free(s_fb_rgb);
         heap_caps_free(s_stage_a_bw);
         heap_caps_free(s_stage_b_bw);
@@ -574,8 +577,8 @@ esp_err_t espaperplay_gui_init(void) {
     s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
     s_gray4_dither = ESPAPERPLAY_GUI_GRAY4_DITHER_FS;
     s_dirty = false;
-    s_op_a.ready = false;
-    s_op_b.ready = false;
+    s_op_a.state = GUI_SLOT_IDLE;
+    s_op_b.state = GUI_SLOT_IDLE;
     s_initialized = true;
 
     /* 异步刷新 worker（创建失败退化为同步执行，仅告警）。 */
@@ -585,8 +588,7 @@ esp_err_t espaperplay_gui_init(void) {
     }
 
     ESP_LOGI(TAG, "GUI backend ready: rgb %uB + 2x bw %uB + 2x gray4 %uB (%s)",
-             (unsigned)GUI_FB_RGB_BYTES, (unsigned)GUI_FB_BW_BYTES,
-             (unsigned)GUI_FB_GRAY4_BYTES,
+             (unsigned)GUI_FB_RGB_BYTES, (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_GRAY4_BYTES,
              s_worker_task != NULL ? "async worker" : "sync fallback");
 
 #if ESPAPERPLAY_GUI_ENABLE_SELFTEST
@@ -693,9 +695,8 @@ esp_err_t espaperplay_gui_submit_area(uint16_t x, uint16_t y, uint16_t width, ui
     } else {
         const uint16_t x0 = s_dirty_x < xa ? s_dirty_x : xa;
         const uint16_t y0 = s_dirty_y < y ? s_dirty_y : y;
-        const uint16_t x1 = (uint16_t)(s_dirty_x + s_dirty_w) > x_end
-                                ? (uint16_t)(s_dirty_x + s_dirty_w)
-                                : x_end;
+        const uint16_t x1 =
+            (uint16_t)(s_dirty_x + s_dirty_w) > x_end ? (uint16_t)(s_dirty_x + s_dirty_w) : x_end;
         const uint16_t y1 = (uint16_t)(s_dirty_y + s_dirty_h) > (uint16_t)(y + height)
                                 ? (uint16_t)(s_dirty_y + s_dirty_h)
                                 : (uint16_t)(y + height);
@@ -706,6 +707,26 @@ esp_err_t espaperplay_gui_submit_area(uint16_t x, uint16_t y, uint16_t width, ui
     }
     xSemaphoreGive(s_lock);
     return ESP_OK;
+}
+
+/**
+ * @brief 把当前脏区并入一个已就绪槽的窗口（包围盒），供重快照取最新帧。
+ *
+ * 仅用于 READY 且 type==FRAME 的槽（CLEAR 槽无有效窗口，不允许合并）。
+ */
+static void gui_merge_dirty(const gui_op_t *op) {
+    const uint16_t x0 = op->x < s_dirty_x ? op->x : s_dirty_x;
+    const uint16_t y0 = op->y < s_dirty_y ? op->y : s_dirty_y;
+    const uint16_t x1 = (uint16_t)(op->x + op->w) > (uint16_t)(s_dirty_x + s_dirty_w)
+                            ? (uint16_t)(op->x + op->w)
+                            : (uint16_t)(s_dirty_x + s_dirty_w);
+    const uint16_t y1 = (uint16_t)(op->y + op->h) > (uint16_t)(s_dirty_y + s_dirty_h)
+                            ? (uint16_t)(op->y + op->h)
+                            : (uint16_t)(s_dirty_y + s_dirty_h);
+    s_dirty_x = x0;
+    s_dirty_y = y0;
+    s_dirty_w = (uint16_t)(x1 - x0);
+    s_dirty_h = (uint16_t)(y1 - y0);
 }
 
 esp_err_t espaperplay_gui_flush(void) {
@@ -722,41 +743,37 @@ esp_err_t espaperplay_gui_flush(void) {
         return ESP_OK;
     }
 
-    if (!s_op_a.ready) {
-        /* 槽 A 空闲：快照到 A，唤醒 worker。 */
-        gui_snapshot(&s_op_a, s_stage_a_bw, s_stage_a_gray4);
-        s_op_a.ready = true;
-        if (s_worker_task != NULL) {
-            xTaskNotifyGive(s_worker_task);
-        } else {
-            ret = gui_execute_op(&s_op_a);
-            s_op_a.ready = false;
-        }
-    } else if (!s_op_b.ready) {
-        /* 槽 A 已占：快照到 B。 */
-        gui_snapshot(&s_op_b, s_stage_b_bw, s_stage_b_gray4);
-        s_op_b.ready = true;
-        if (s_worker_task != NULL) {
-            xTaskNotifyGive(s_worker_task);
-        } else {
-            ret = gui_execute_op(&s_op_b);
-            s_op_b.ready = false;
-        }
+    /* 选槽：优先空闲槽（快照）；其次 READY 的 FRAME 槽（并入重快照取最新帧）。
+     * BUSY 槽正被 worker 的 SPI 传输读取，严禁触碰——否则会撕裂在途帧。 */
+    gui_op_t *target = NULL;
+    if (s_op_a.state == GUI_SLOT_IDLE) {
+        target = &s_op_a;
+        gui_snapshot(target, s_stage_a_bw, s_stage_a_gray4);
+    } else if (s_op_b.state == GUI_SLOT_IDLE) {
+        target = &s_op_b;
+        gui_snapshot(target, s_stage_b_bw, s_stage_b_gray4);
+    } else if (s_op_b.state == GUI_SLOT_READY && s_op_b.type == GUI_OP_FRAME) {
+        target = &s_op_b;
+        gui_merge_dirty(target);
+        gui_snapshot(target, s_stage_b_bw, s_stage_b_gray4);
+    } else if (s_op_a.state == GUI_SLOT_READY && s_op_a.type == GUI_OP_FRAME) {
+        target = &s_op_a;
+        gui_merge_dirty(target);
+        gui_snapshot(target, s_stage_a_bw, s_stage_a_gray4);
     } else {
-        /* 两槽都满（worker 尚未取走）：把新脏区并入 B（包围盒）重快照（取最新帧）。 */
-        const uint16_t x0 = s_op_b.x < s_dirty_x ? s_op_b.x : s_dirty_x;
-        const uint16_t y0 = s_op_b.y < s_dirty_y ? s_op_b.y : s_dirty_y;
-        const uint16_t x1 = (uint16_t)(s_op_b.x + s_op_b.w) > (uint16_t)(s_dirty_x + s_dirty_w)
-                                ? (uint16_t)(s_op_b.x + s_op_b.w)
-                                : (uint16_t)(s_dirty_x + s_dirty_w);
-        const uint16_t y1 = (uint16_t)(s_op_b.y + s_op_b.h) > (uint16_t)(s_dirty_y + s_dirty_h)
-                                ? (uint16_t)(s_op_b.y + s_op_b.h)
-                                : (uint16_t)(s_dirty_y + s_dirty_h);
-        s_dirty_x = x0;
-        s_dirty_y = y0;
-        s_dirty_w = (uint16_t)(x1 - x0);
-        s_dirty_h = (uint16_t)(y1 - y0);
-        gui_snapshot(&s_op_b, s_stage_b_bw, s_stage_b_gray4);
+        /* 两个槽都无法写入（双双 BUSY 或唯一 READY 槽是 CLEAR）：理论不可达
+         * 或极短暂窗口。丢弃本帧但保留脏区，下一帧自动重试。 */
+        ESP_LOGE(TAG, "no writable refresh slot, frame dropped (retry next flush)");
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_worker_task != NULL) {
+        xTaskNotifyGive(s_worker_task);
+    } else {
+        /* 退化同步路径：无并发，直接执行并复位槽位。 */
+        ret = gui_execute_op(target);
+        target->state = GUI_SLOT_IDLE;
     }
 
     s_dirty = false;
@@ -773,7 +790,7 @@ esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms) {
     for (;;) {
         bool busy;
         if (xSemaphoreTake(s_lock, portMAX_DELAY) == pdTRUE) {
-            busy = s_op_a.ready || s_op_b.ready || s_worker_busy;
+            busy = s_op_a.state != GUI_SLOT_IDLE || s_op_b.state != GUI_SLOT_IDLE;
             xSemaphoreGive(s_lock);
         } else {
             busy = true;
@@ -814,19 +831,45 @@ esp_err_t espaperplay_gui_clear(void) {
     if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-    /* 丢弃排队帧，排一个深擦除清白。 */
-    s_op_a.ready = false;
-    s_op_b.ready = false;
+
+    /* 选一个非 BUSY 槽承载清白操作（IDLE 或 READY 皆可复用）；BUSY 槽正被
+     * worker 的 SPI 传输读取，必须保留。另一非 BUSY 槽的排队帧一并丢弃。 */
+    gui_op_t *slot = NULL;
+    if (s_op_a.state != GUI_SLOT_BUSY) {
+        slot = &s_op_a;
+    } else if (s_op_b.state != GUI_SLOT_BUSY) {
+        slot = &s_op_b;
+    } else {
+        /* 两槽皆 BUSY：单 worker 下不可达；防御性拒绝，避免覆盖在途帧。 */
+        ESP_LOGE(TAG, "clear: no free slot (both busy)");
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    slot->state = GUI_SLOT_READY;
+    slot->type = GUI_OP_CLEAR;
+    slot->color = s_color;
+    slot->stage = NULL;
+    slot->force_full = false;
+    slot->x = slot->y = slot->w = slot->h = 0;
+
+    /* 丢弃另一槽的排队帧（BUSY 槽保留）。 */
+    if (slot == &s_op_a) {
+        if (s_op_b.state != GUI_SLOT_BUSY) {
+            s_op_b.state = GUI_SLOT_IDLE;
+        }
+    } else {
+        if (s_op_a.state != GUI_SLOT_BUSY) {
+            s_op_a.state = GUI_SLOT_IDLE;
+        }
+    }
     s_dirty = false;
-    s_op_a.type = GUI_OP_CLEAR;
-    s_op_a.color = s_color;
-    s_op_a.stage = NULL;
-    s_op_a.ready = true;
+
     if (s_worker_task != NULL) {
         xTaskNotifyGive(s_worker_task);
     } else {
-        const esp_err_t ret = gui_execute_op(&s_op_a);
-        s_op_a.ready = false;
+        const esp_err_t ret = gui_execute_op(slot);
+        slot->state = GUI_SLOT_IDLE;
         xSemaphoreGive(s_lock);
         return ret;
     }

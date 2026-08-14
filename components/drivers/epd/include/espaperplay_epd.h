@@ -74,12 +74,12 @@ extern "C" {
  * @brief EPD 刷新模式。
  */
 typedef enum {
-    ESPAPERPLAY_EPD_MODE_FULL = 0, /*!< 全屏刷新（1bpp，OTP 波形，较慢，对比度更高） */
+    ESPAPERPLAY_EPD_MODE_FULL = 0,   /*!< 全屏刷新（1bpp，OTP 波形，较慢，对比度更高） */
     ESPAPERPLAY_EPD_MODE_FULL_FORCE, /*!< 强制全像素翻转全刷（DTM1=~新帧，全像素深波形，
                                       清残影/鬼影；画面会闪黑一下，周期性使用） */
-    ESPAPERPLAY_EPD_MODE_PARTIAL,  /*!< 局部 / 快速刷新（1bpp，屏幕不闪烁，区域 8 像素对齐） */
-    ESPAPERPLAY_EPD_MODE_GRAY4,    /*!< 4 灰阶全屏刷新（2bpp，仅全屏，不支持局部） */
-    ESPAPERPLAY_EPD_MODE_FAST,     /*!< 快刷（1bpp 全屏，注册表 LUT 短波形，刷新最快、残影略多） */
+    ESPAPERPLAY_EPD_MODE_PARTIAL,    /*!< 局部 / 快速刷新（1bpp，屏幕不闪烁，区域 8 像素对齐） */
+    ESPAPERPLAY_EPD_MODE_GRAY4,      /*!< 4 灰阶全屏刷新（2bpp，仅全屏，不支持局部） */
+    ESPAPERPLAY_EPD_MODE_FAST, /*!< 快刷（1bpp 全屏，注册表 LUT 短波形，刷新最快、残影略多） */
     ESPAPERPLAY_EPD_MODE_MAX,
 } espaperplay_epd_mode_t;
 
@@ -171,6 +171,11 @@ esp_err_t espaperplay_epd_init(void);
  *                   0=白 / 1=浅灰 / 2=深灰 / 3=黑，整帧 96000 字节，
  *                   忽略 x/y/width/height；
  *                   传 NULL 表示执行"清屏（全白）"刷新（各模式通用）。
+ *
+ * @note 驱动会在刷新开始时把图像复制进内部私有快照缓冲，SPI 传输只读
+ *       私有内存——调用方在本函数返回前只需保证 image_buf 指向的字节
+ *       内容稳定即可，返回后即可改写/释放源缓冲；并发调用由驱动内部
+ *       互斥锁串行化。
  * @param x          区域左上角 X 坐标（仅局部模式使用，须为 8 的倍数）。
  * @param y          区域左上角 Y 坐标（仅局部模式使用）。
  * @param width      区域宽度（像素；仅局部模式使用，须为 8 的倍数）。

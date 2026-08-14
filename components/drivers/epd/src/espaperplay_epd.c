@@ -15,6 +15,7 @@
 #include "driver/spi_master.h"
 
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -27,21 +28,21 @@ static const char *TAG = "ESPaperPlay_EPD";
  * UC8179 命令定义（《GDEY075T7-T01 规格书》第 7 章命令表）
  * ==================================================================== */
 
-#define UC8179_CMD_PSR 0x00  /*!< Panel Setting（面板设置） */
-#define UC8179_CMD_PWR 0x01  /*!< Power Setting（内部电源选择，本驱动用默认值） */
-#define UC8179_CMD_POF 0x02  /*!< Power OFF（关断内部电源） */
-#define UC8179_CMD_PON 0x04  /*!< Power ON（内部电源上电） */
-#define UC8179_CMD_BTST 0x06 /*!< Booster Soft Start（升压软启动） */
-#define UC8179_CMD_DSLP 0x07 /*!< Deep Sleep（深度睡眠，校验码 0xA5） */
-#define UC8179_CMD_DTM1 0x10 /*!< Data Start Transmission 1（OLD/旧图像平面） */
-#define UC8179_CMD_DRF 0x12  /*!< Display Refresh（启动刷新，等待 BUSY） */
-#define UC8179_CMD_DTM2 0x13 /*!< Data Start Transmission 2（NEW/新图像平面） */
-#define UC8179_CMD_CDI 0x50  /*!< VCOM and Data Interval Setting */
-#define UC8179_CMD_PTL 0x90  /*!< Partial Window（局部窗口，8 参数 + PT_SCAN） */
-#define UC8179_CMD_PTIN 0x91 /*!< Partial In（进入局部模式） */
-#define UC8179_CMD_PTOUT 0x92 /*!< Partial Out（退出局部模式） */
-#define UC8179_CMD_TRES 0x61 /*!< Resolution Setting（分辨率设置） */
-#define UC8179_CMD_CASCADE 0xE0 /*!< Cascade Setting（厂商未公开命令） */
+#define UC8179_CMD_PSR 0x00        /*!< Panel Setting（面板设置） */
+#define UC8179_CMD_PWR 0x01        /*!< Power Setting（内部电源选择，本驱动用默认值） */
+#define UC8179_CMD_POF 0x02        /*!< Power OFF（关断内部电源） */
+#define UC8179_CMD_PON 0x04        /*!< Power ON（内部电源上电） */
+#define UC8179_CMD_BTST 0x06       /*!< Booster Soft Start（升压软启动） */
+#define UC8179_CMD_DSLP 0x07       /*!< Deep Sleep（深度睡眠，校验码 0xA5） */
+#define UC8179_CMD_DTM1 0x10       /*!< Data Start Transmission 1（OLD/旧图像平面） */
+#define UC8179_CMD_DRF 0x12        /*!< Display Refresh（启动刷新，等待 BUSY） */
+#define UC8179_CMD_DTM2 0x13       /*!< Data Start Transmission 2（NEW/新图像平面） */
+#define UC8179_CMD_CDI 0x50        /*!< VCOM and Data Interval Setting */
+#define UC8179_CMD_PTL 0x90        /*!< Partial Window（局部窗口，8 参数 + PT_SCAN） */
+#define UC8179_CMD_PTIN 0x91       /*!< Partial In（进入局部模式） */
+#define UC8179_CMD_PTOUT 0x92      /*!< Partial Out（退出局部模式） */
+#define UC8179_CMD_TRES 0x61       /*!< Resolution Setting（分辨率设置） */
+#define UC8179_CMD_CASCADE 0xE0    /*!< Cascade Setting（厂商未公开命令） */
 #define UC8179_CMD_FORCE_TEMP 0xE5 /*!< Force Temperature（厂商未公开命令） */
 
 /* ====================================================================
@@ -64,7 +65,7 @@ static const char *TAG = "ESPaperPlay_EPD";
  * DDX=01（默认）：数据位 1 = 白（0xFF）、0 = 黑（0x00），与 GUI_Paint.h
  * 的 WHITE=0xFF / BLACK=0x00 一致。注意厂商 demo 的 EPD_init_Fast 用
  * CDI=0x10（DDX=00，极性相反），其位图按相反极性制作，本驱动不沿用。 */
-#define UC8179_CDI_FULL_B0 0x29 /*!< 全屏刷新：N2OCP=1，DDX=01（idfxx 取值） */
+#define UC8179_CDI_FULL_B0 0x29    /*!< 全屏刷新：N2OCP=1，DDX=01（idfxx 取值） */
 #define UC8179_CDI_PARTIAL_B0 0xA9 /*!< 局部刷新：边界保持 + N2OCP=1（demo/idfxx 一致） */
 #define UC8179_CDI_SLEEP_B0 0xF7   /*!< 睡眠前设置（参考工程 EPD_sleep） */
 #define UC8179_CDI_B1 0x07         /*!< 间隔 10 hsync（默认值） */
@@ -89,8 +90,10 @@ static const char *TAG = "ESPaperPlay_EPD";
 static const uint8_t UC8179_PWR_GRAY4[4] = {0x07, 0x07, 0x3F, 0x3F};
 /** 面板分辨率 800x480（TRES 命令参数，灰阶/快刷初始化使用）。 */
 static const uint8_t UC8179_TRES_VALUE[4] = {
-    (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH >> 8),  (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH & 0xFF),
-    (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT >> 8), (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT & 0xFF),
+    (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH >> 8),
+    (uint8_t)(ESPAPERPLAY_DISPLAY_WIDTH & 0xFF),
+    (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT >> 8),
+    (uint8_t)(ESPAPERPLAY_DISPLAY_HEIGHT & 0xFF),
 };
 
 /** DSLP 校验码：命令仅在数据 == 0xA5 时执行。 */
@@ -115,17 +118,25 @@ static const uint8_t UC8179_TRES_VALUE[4] = {
 /** 4 灰阶整帧字节数（2bpp：每像素 2bit，96000）。 */
 #define EPD_GRAY4_FRAME_BYTES (EPD_FRAME_BYTES * 2)
 
+/** 私有快照缓冲字节数（取各模式帧大小的最大值：4 灰阶整帧）。 */
+#define EPD_SNAPSHOT_BYTES EPD_GRAY4_FRAME_BYTES
+
 static spi_device_handle_t s_spi_dev = NULL; /*!< EPD SPI 设备句柄 */
 static SemaphoreHandle_t s_lock = NULL;      /*!< 刷新互斥锁（自检任务与业务可并发调用） */
 static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
-static espaperplay_epd_mode_t s_last_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
-static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
+static uint8_t *s_snapshot =
+    NULL; /*!< 私有帧快照：SPI 传输只读此缓冲，杜绝并发改写源缓冲导致错位 */
+static espaperplay_epd_mode_t s_last_mode =
+    ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
+static espaperplay_epd_mode_t s_controller_mode =
+    ESPAPERPLAY_EPD_MODE_MAX; /*!< 控制器当前波形模式（同模式连续刷新跳过重复初始化） */
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
 static esp_timer_handle_t s_idle_timer = NULL; /*!< 空闲自动睡眠定时器（一次性） */
 static volatile uint32_t s_idle_gen = 0;       /*!< 刷新代数：定时器回调核对，过期回调直接退出 */
-static uint32_t s_idle_sleep_timeout_ms = ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS; /*!< 当前超时（0=关闭；可运行期调整并经 NVS 持久化） */
-#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
+static uint32_t s_idle_sleep_timeout_ms =
+    ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS; /*!< 当前超时（0=关闭；可运行期调整并经 NVS 持久化） */
+#endif                                     /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
 /* ====================================================================
  * 底层：GPIO / SPI
@@ -203,7 +214,8 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     esp_err_t ret;
     gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_DC, 1); /* 数据 */
     while (len > 0) {
-        size_t chunk = len > ESPAPERPLAY_EPD_SPI_MAX_TRANSFER ? ESPAPERPLAY_EPD_SPI_MAX_TRANSFER : len;
+        size_t chunk =
+            len > ESPAPERPLAY_EPD_SPI_MAX_TRANSFER ? ESPAPERPLAY_EPD_SPI_MAX_TRANSFER : len;
         spi_transaction_t t = {
             .tx_buffer = data,
             .length = (uint32_t)chunk * 8,
@@ -446,9 +458,7 @@ static esp_err_t epd_init_controller_gray4(void) {
  * 与全屏波形一致；保留独立初始化入口仅为模式语义清晰，后续若改用
  * 注册表 LUT 可在此扩展。
  */
-static esp_err_t epd_init_controller_fast(void) {
-    return epd_init_controller(true);
-}
+static esp_err_t epd_init_controller_fast(void) { return epd_init_controller(true); }
 
 /**
  * @brief 从 2bpp 灰阶帧缓冲解出单个位平面，输出即控制器 RAM 取值（已取反）。
@@ -524,11 +534,15 @@ static esp_err_t epd_window_begin(uint16_t x, uint16_t y, uint16_t width, uint16
     const uint16_t x_end = x + width - 1;
     const uint16_t y_end = y + height - 1;
     const uint8_t ptl[9] = {
-        (uint8_t)(x >> 8),      (uint8_t)(x & 0xFF),        /* HRST[9:0] */
-        (uint8_t)(x_end >> 8),  (uint8_t)(x_end & 0xFF),    /* HRED[9:0] */
-        (uint8_t)(y >> 8),      (uint8_t)(y & 0xFF),        /* VRST[9:0] */
-        (uint8_t)(y_end >> 8),  (uint8_t)(y_end & 0xFF),    /* VRED[9:0] */
-        0x01, /* PT_SCAN=1：全面板扫描（实测 0/1 对刷新耗时无影响，取默认值） */
+        (uint8_t)(x >> 8),
+        (uint8_t)(x & 0xFF), /* HRST[9:0] */
+        (uint8_t)(x_end >> 8),
+        (uint8_t)(x_end & 0xFF), /* HRED[9:0] */
+        (uint8_t)(y >> 8),
+        (uint8_t)(y & 0xFF), /* VRST[9:0] */
+        (uint8_t)(y_end >> 8),
+        (uint8_t)(y_end & 0xFF), /* VRED[9:0] */
+        0x01,                    /* PT_SCAN=1：全面板扫描（实测 0/1 对刷新耗时无影响，取默认值） */
     };
     esp_err_t ret;
 
@@ -549,9 +563,7 @@ static esp_err_t epd_window_begin(uint16_t x, uint16_t y, uint16_t width, uint16
 /**
  * @brief 退出局部模式。
  */
-static esp_err_t epd_window_end(void) {
-    return epd_write_cmd(UC8179_CMD_PTOUT);
-}
+static esp_err_t epd_window_end(void) { return epd_write_cmd(UC8179_CMD_PTOUT); }
 
 /* ====================================================================
  * 刷新流程
@@ -716,7 +728,7 @@ static esp_err_t epd_refresh_fast(const void *image_buf) {
  */
 static esp_err_t epd_refresh_gray4(const void *image_buf) {
     static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2]; /* 位平面暂存 */
-    const size_t chunk_bytes = sizeof(s_plane) * 2;                /* 每块输入帧字节数 */
+    const size_t chunk_bytes = sizeof(s_plane) * 2;               /* 每块输入帧字节数 */
     esp_err_t ret;
 
     /* 同模式连续刷新跳过重复初始化；睡眠唤醒或模式切换时完整初始化。 */
@@ -785,8 +797,8 @@ static uint8_t *epd_make_test_pattern(void) {
  */
 static void epd_selftest_task(void *arg) {
     (void)arg;
-    int64_t t0; /* 刷新计时起点（esp_timer_get_time，us） */
-    const uint16_t box_x = 96;  /* 8 对齐 */
+    int64_t t0;                /* 刷新计时起点（esp_timer_get_time，us） */
+    const uint16_t box_x = 96; /* 8 对齐 */
     const uint16_t box_y = 190;
     const uint16_t box_w = 80;
     const uint16_t box_h = 80;
@@ -864,18 +876,19 @@ static void epd_selftest_task(void *arg) {
     /* 5. 4 灰阶：四条纵向色带（白/浅灰/深灰/黑，各 200px 宽）。 */
     gray = malloc(EPD_FRAME_BYTES * 2); /* 2bpp 整帧 */
     if (gray == NULL) {
-        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)", (unsigned)(EPD_FRAME_BYTES * 2));
+        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)",
+                 (unsigned)(EPD_FRAME_BYTES * 2));
         goto out;
     }
     memset(gray, 0x00, EPD_FRAME_BYTES * 2); /* 默认全白（灰阶值 0） */
     for (uint16_t yy = 0; yy < ESPAPERPLAY_DISPLAY_HEIGHT; yy++) {
         uint8_t *row = gray + (size_t)yy * (ESPAPERPLAY_DISPLAY_WIDTH / 4);
-        memset(row + 200 / 4, 0x55, 200 / 4);   /* 浅灰带（灰阶值 1） */
-        memset(row + 400 / 4, 0xAA, 200 / 4);   /* 深灰带（灰阶值 2） */
-        memset(row + 600 / 4, 0xFF, 200 / 4);   /* 黑带（灰阶值 3） */
+        memset(row + 200 / 4, 0x55, 200 / 4); /* 浅灰带（灰阶值 1） */
+        memset(row + 400 / 4, 0xAA, 200 / 4); /* 深灰带（灰阶值 2） */
+        memset(row + 600 / 4, 0xFF, 200 / 4); /* 黑带（灰阶值 3） */
     }
-    ret = espaperplay_epd_refresh(gray, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
-                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_GRAY4);
+    ret = espaperplay_epd_refresh(gray, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+                                  ESPAPERPLAY_EPD_MODE_GRAY4);
     ESP_LOGI(TAG, "selftest: gray4 bands -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -926,8 +939,8 @@ out:
 
     /* 性能测试完成：刷成全白（FULL 清屏，黑像素深擦除）。 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
-                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+                                  ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: final white clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -943,8 +956,8 @@ out:
     vTaskDelay(pdMS_TO_TICKS(8000));
     espaperplay_epd_set_idle_sleep_timeout_ms(ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS); /* 恢复默认 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
-                                  ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+                                  ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: wake refresh after idle sleep -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
@@ -1075,6 +1088,21 @@ esp_err_t espaperplay_epd_init(void) {
         }
     }
 
+    /* 私有帧快照缓冲：刷新时先把调用方图像复制进来，SPI 传输只读私有内存，
+     * 从根本上杜绝"传输期间调用方源缓冲被并发修改"导致的画面错位。
+     * 取各模式最大帧（4 灰阶 96000 字节）；PSRAM 优先，回退内部 RAM。 */
+    if (s_snapshot == NULL) {
+        s_snapshot = heap_caps_malloc(EPD_SNAPSHOT_BYTES, MALLOC_CAP_SPIRAM);
+        if (s_snapshot == NULL) {
+            s_snapshot = heap_caps_malloc(EPD_SNAPSHOT_BYTES, MALLOC_CAP_8BIT);
+        }
+        if (s_snapshot == NULL) {
+            ESP_LOGE(TAG, "snapshot buffer alloc failed (%u bytes)", (unsigned)EPD_SNAPSHOT_BYTES);
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
     /* 空闲自动睡眠定时器（一次性，由每次刷新重新武装）。创建失败仅告警：
      * 保底失效不影响正常功能（上层仍可显式调用 espaperplay_epd_sleep()）。 */
@@ -1193,6 +1221,7 @@ esp_err_t espaperplay_epd_init(void) {
 esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y, uint16_t width,
                                   uint16_t height, espaperplay_epd_mode_t mode) {
     esp_err_t ret;
+    size_t frame_bytes;
 
     if (!s_initialized) {
         ESP_LOGE(TAG, "not initialized (call espaperplay_epd_init first)");
@@ -1202,34 +1231,56 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    if (mode == ESPAPERPLAY_EPD_MODE_FULL || mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) {
-        ret = epd_refresh_full(image_buf, mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE);
-    } else if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
+    /* 计算需要快照的字节数；局部窗口参数在持锁前校验（避免按非法窗口
+     * 从调用方缓冲越界拷贝）。 */
+    if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
         /* 局部窗口参数校验：x/width 8 对齐，窗口在屏内。 */
         if ((x & 7) != 0 || (width & 7) != 0 || width == 0 || height == 0 ||
             (uint32_t)x + width > ESPAPERPLAY_DISPLAY_WIDTH ||
             (uint32_t)y + height > ESPAPERPLAY_DISPLAY_HEIGHT) {
             ESP_LOGE(TAG, "invalid partial window: x=%u y=%u w=%u h=%u", x, y, width, height);
-            xSemaphoreGive(s_lock);
             return ESP_ERR_INVALID_ARG;
         }
-        ret = epd_refresh_partial(image_buf, x, y, width, height);
+        frame_bytes = (size_t)width * height / 8;
+    } else if (mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+        frame_bytes = EPD_GRAY4_FRAME_BYTES;
+    } else { /* FULL / FULL_FORCE / FAST：1bpp 整帧 */
+        frame_bytes = EPD_FRAME_BYTES;
+    }
+
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* 快照：把调用方缓冲复制进私有缓冲，后续 SPI 传输只读私有内存，
+     * 调用方在本函数返回后即可随意改写/释放源缓冲。 */
+    const void *frame = NULL;
+    if (image_buf != NULL) {
+        if (s_snapshot == NULL) {
+            ESP_LOGE(TAG, "snapshot buffer not allocated");
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+        memcpy(s_snapshot, image_buf, frame_bytes);
+        frame = s_snapshot;
+    }
+
+    if (mode == ESPAPERPLAY_EPD_MODE_FULL || mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) {
+        ret = epd_refresh_full(frame, mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE);
+    } else if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
+        ret = epd_refresh_partial(frame, x, y, width, height);
     } else if (mode == ESPAPERPLAY_EPD_MODE_FAST) {
         /* 快刷：1bpp 整帧，注册表 LUT 短波形，仅全屏。 */
-        ret = epd_refresh_fast(image_buf);
+        ret = epd_refresh_fast(frame);
     } else { /* ESPAPERPLAY_EPD_MODE_GRAY4：2bpp 整帧，仅全屏 */
-        ret = epd_refresh_gray4(image_buf);
+        ret = epd_refresh_gray4(frame);
     }
 
     if (ret == ESP_OK) {
         /* FULL_FORCE 与 FULL 同属全屏模式（旧平面/初始化状态按 FULL 记录）。 */
         s_last_mode = (mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) ? ESPAPERPLAY_EPD_MODE_FULL : mode;
         s_controller_mode = s_last_mode;
-        s_asleep = false;          /* 刷新完成后面板保持上电 */
+        s_asleep = false; /* 刷新完成后面板保持上电 */
     } else {
         s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
     }
