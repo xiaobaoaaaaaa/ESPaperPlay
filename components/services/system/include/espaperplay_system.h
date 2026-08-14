@@ -70,7 +70,7 @@ typedef struct {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
     uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
-    uint32_t gui_full_force_after;                      /*!< 连续大面积局刷后强制全刷阈值（0=禁用） */
+    uint32_t gui_full_force_after; /*!< 连续大面积局刷后强制全刷阈值（0=禁用） */
 } espaperplay_system_config_t;
 
 /**

@@ -98,8 +98,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_power_init());
     ESP_ERROR_CHECK(espaperplay_gui_init());
     /* 应用"连续大面积局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
-    espaperplay_gui_set_full_force_after(
-        espaperplay_system_get_config()->gui_full_force_after);
+    espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
     ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
     espaperplay_ui_benchmark_show(); /* LVGL 自带 benchmark（多场景高速重绘暴露局刷竞态） */
     ESP_ERROR_CHECK(espaperplay_reader_init());

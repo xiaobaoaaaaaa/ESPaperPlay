@@ -97,8 +97,8 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
     char epd_idle_sleep_s[16] = {0}; /* 屏幕空闲自动睡眠超时（秒） */
     char gui_force_after_s[8] = {0}; /* 连续大面积局刷后强制全刷阈值（0=禁用） */
-    const bool has_wifi_mode = webserver_form_get_field(body, "wifi_mode", wifi_mode_str,
-                                                        sizeof(wifi_mode_str));
+    const bool has_wifi_mode =
+        webserver_form_get_field(body, "wifi_mode", wifi_mode_str, sizeof(wifi_mode_str));
     const bool has_sta_ssid =
         webserver_form_get_field(body, "sta_ssid", sta_ssid, sizeof(sta_ssid));
     const bool has_sta_pass =
@@ -108,9 +108,8 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
     const bool has_epd_idle = webserver_form_get_field(body, "epd_idle_sleep_timeout_s",
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
-    const bool has_gui_force = webserver_form_get_field(body, "gui_full_force_after",
-                                                        gui_force_after_s,
-                                                        sizeof(gui_force_after_s));
+    const bool has_gui_force = webserver_form_get_field(
+        body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     free(body);
@@ -136,12 +135,12 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     const char *new_sta_pass = cur->sta_password;
     const char *new_ap_pass = cur->ap_password;
     if (has_sta_pass) {
-        new_sta_pass = (sta_password[0] == '\0' && !clear_sta_password) ? cur->sta_password
-                                                                         : sta_password;
+        new_sta_pass =
+            (sta_password[0] == '\0' && !clear_sta_password) ? cur->sta_password : sta_password;
     }
     if (has_ap_pass) {
-        new_ap_pass = (ap_password[0] == '\0' && !clear_ap_password) ? cur->ap_password
-                                                                      : ap_password;
+        new_ap_pass =
+            (ap_password[0] == '\0' && !clear_ap_password) ? cur->ap_password : ap_password;
     }
 
     /* 校验：出现且为目标模式时，SSID 不能为空。 */

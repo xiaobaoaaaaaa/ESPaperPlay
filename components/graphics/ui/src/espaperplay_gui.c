@@ -678,8 +678,7 @@ esp_err_t espaperplay_gui_set_full_force_after(uint32_t count) {
     if (count != s_full_force_after) {
         s_full_force_after = count;
         s_large_partial_count = 0; /* 阈值变化，重新开始计数 */
-        ESP_LOGI(TAG, "full force after: %u (%s)", (unsigned)count,
-                 count ? "enabled" : "disabled");
+        ESP_LOGI(TAG, "full force after: %u (%s)", (unsigned)count, count ? "enabled" : "disabled");
     }
     xSemaphoreGive(s_lock);
     return ESP_OK;

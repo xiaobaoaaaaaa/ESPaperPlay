@@ -194,8 +194,7 @@ static esp_err_t system_load(void) {
         s_config.gui_full_force_after = force_after;
     } else {
         if (err != ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_GUI_FORCE_AFTER,
-                     esp_err_to_name(err));
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_GUI_FORCE_AFTER, esp_err_to_name(err));
         }
         s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
         missing = true;
