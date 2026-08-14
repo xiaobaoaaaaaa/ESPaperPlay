@@ -24,13 +24,17 @@ extern "C" {
  * 渲染后端架构：
  *   - 单一 RGB565 主帧缓冲（800x480，750KB，PSRAM）：LVGL / 阅读器统一
  *     渲染目标（后续 LVGL 配 LV_COLOR_DEPTH=16 直接画入）；
- *   - flush 时按当前模式把 RGB 转换为 e-paper 帧格式：
+ *   - flush 时按当前模式把 RGB 快照转换为 e-paper 帧格式（帧内容冻结）：
  *       · 交互模式（BW）：RGB -> 1bpp，脏区转换 + 局部刷新（~370ms），
  *         转换器可选快速阈值或 Bayer 4x4 有序抖动（默认，纯黑/纯白
  *         位精确，零伪影）；
  *       · 高清模式（GRAY4）：RGB -> 2bpp 四灰阶，默认 Floyd–Steinberg
  *         误差扩散抖动（质量最好；Bayer 4x4 为快速选项），整帧转换 +
  *         全屏刷新（~2.5s，仅全屏）；
+ *   - 刷新异步化：flush() 只快照并排队，真实刷新由内部 worker 任务执行
+ *     （阻塞只发生在 worker），渲染/调用线程永不被屏幕刷新阻塞；双槽位
+ *     允许渲染器连续提交，worker 顺序消费并天然节流。需要同步点时用
+ *     espaperplay_gui_wait_idle()；
  *   - 模式切换是页面级操作（espaperplay_gui_show_ui / show_image），
  *     切换后主帧内容不变，只是转换路径不同；驱动保证切换刷新干净
  *     （灰阶->黑白旧平面反相，清除中间灰残留）。
@@ -93,12 +97,14 @@ typedef struct {
 /**
  * @brief 启动渲染后端自检任务（验收用，默认关闭）。
  *
- * 使能后 espaperplay_gui_init() 会创建一个后台任务，依次验证：纯黑白 UI
- * 位精确性（Bayer 无伪影）、灰度渐变（Bayer 平滑点阵）、阈值对照、
- * gray4 高清全屏、模式切换无残留，最后恢复黑白并清白。
+ * 使能后 espaperplay_gui_init() 会创建一个后台任务，依次验证：清白、
+ * 纯黑白 UI 位精确性（Bayer 无伪影）、灰度渐变（Bayer）、阈值对照、
+ * 四种转换路径性能计时、gray4 高清（FS 与 Bayer 对比）、模式切换无残留，
+ * 最后恢复黑白并清白。每步 flush 后 wait_idle 确认画面已更新（worker 日志
+ * 含各次刷新的真实耗时）。
  */
 #ifndef ESPAPERPLAY_GUI_ENABLE_SELFTEST
-#define ESPAPERPLAY_GUI_ENABLE_SELFTEST 1
+#define ESPAPERPLAY_GUI_ENABLE_SELFTEST 0
 #endif
 
 /**
@@ -186,15 +192,30 @@ esp_err_t espaperplay_gui_get_framebuffer(espaperplay_gui_framebuffer_t *fb);
 esp_err_t espaperplay_gui_submit_area(uint16_t x, uint16_t y, uint16_t width, uint16_t height);
 
 /**
- * @brief 执行一次合并后的转换 + 刷新。
+ * @brief 排队一次合并后的转换 + 刷新（异步，不阻塞调用方）。
  *
- * BW 模式：脏区面积达阈值用整帧转换 + 全屏刷新，否则只转换脏区（输出即
- * 窗口打包行）做局部刷新；GRAY4 模式：整帧转换 + 全屏刷新（驱动约束）。
+ * 在调用线程内把脏区从 RGB565 主帧快照转换进暂存（帧内容冻结），然后交给
+ * 内部 worker 任务执行真实刷新（局部/全屏/灰阶按模式与面积选择）。刷新
+ * 期间 LVGL 等渲染任务不会被阻塞；若已有两帧排队，新脏区合并进待刷帧。
+ * 需要等待屏幕真正更新完成时使用 espaperplay_gui_wait_idle()。
  *
- * @return 成功返回 ESP_OK；无脏区返回 ESP_OK（空操作）；失败返回相应
- *         错误码（脏区保留，可重试）。
+ * @return 成功返回 ESP_OK（已排队）；无脏区返回 ESP_OK（空操作）；
+ *         未初始化返回 ESP_ERR_INVALID_STATE。
  */
 esp_err_t espaperplay_gui_flush(void);
+
+/**
+ * @brief 等待内部刷新 worker 排空（可选同步点）。
+ *
+ * 阻塞直到所有已排队刷新完成，或超时。用于自检、清屏后、"需要确认画面
+ * 已更新"的应用路径；常规渲染流程无需调用。
+ *
+ * @param timeout_ms 超时（毫秒）。
+ *
+ * @return ESP_OK；超时返回 ESP_ERR_TIMEOUT；未初始化返回
+ *         ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms);
 
 /**
  * @brief 切回交互模式并整帧刷新（页面级操作）。
@@ -216,9 +237,10 @@ esp_err_t espaperplay_gui_show_ui(void);
 esp_err_t espaperplay_gui_show_image(void);
 
 /**
- * @brief 清屏为全白并全屏刷新。
+ * @brief 清屏为全白并全屏刷新（异步排队）。
  *
- * 主帧填充 RGB565 白（0xFFFF），面板走深擦除波形。
+ * 主帧填充 RGB565 白（0xFFFF），丢弃尚未刷新的排队帧，面板走深擦除波形。
+ * 需要确认清屏完成时调用 espaperplay_gui_wait_idle()。
  *
  * @return 成功返回 ESP_OK，否则返回相应错误码。
  */

@@ -136,11 +136,16 @@ later renders directly into it with `LV_COLOR_DEPTH=16`), and the e-paper's
 | High-definition (`GRAY4`) | RGB -> 2bpp: Floyd-Steinberg error diffusion (default) or Bayer 4x4 | full screen, ~2.5 s |
 
 Dirty areas are clipped, 8-pixel aligned (X) and merged into one refresh per
-frame. Page-level switches (`espaperplay_gui_show_ui` / `show_image`) only
-change the conversion path — the framebuffer is never re-rendered — and the
-driver guarantees clean transitions (gray4 -> BW inverts the old plane, so
-residual mid-grays are erased). A self-test (`ESPAPERPLAY_GUI_ENABLE_SELFTEST`,
-off by default) exercises both paths and prints conversion timings.
+frame. Refreshes run **asynchronously on an internal worker task**: flush()
+only snapshots (converts) the dirty area and queues it, so renderers (LVGL)
+are never blocked by the ~0.4-2.6 s panel update; up to one frame is queued
+ahead and later frames merge into it. `espaperplay_gui_wait_idle()` provides
+an optional sync point. Page-level switches (`espaperplay_gui_show_ui` /
+`show_image`) only change the conversion path — the framebuffer is never
+re-rendered — and the driver guarantees clean transitions (gray4 -> BW inverts
+the old plane, so residual mid-grays are erased). A self-test
+(`ESPAPERPLAY_GUI_ENABLE_SELFTEST`, off by default) exercises both paths and
+prints conversion and worker timings.
 
 #### Naming & Logging Conventions
 
@@ -354,10 +359,14 @@ GUI 服务（`components/graphics/ui`）提供渲染后端：单一 **RGB565 主
 | 交互（`BW`） | RGB->1bpp：快速阈值 或 Bayer 4x4（默认；纯黑/纯白位精确，无伪影） | 脏区局部，~0.37-0.52s |
 | 高清（`GRAY4`） | RGB->2bpp：Floyd-Steinberg 误差扩散（默认）或 Bayer 4x4 | 全屏，~2.5s |
 
-脏区自动裁剪、X 方向 8 像素对齐并合并为一帧一次刷新。页面级切换
+脏区自动裁剪、X 方向 8 像素对齐并合并为一帧一次刷新。刷新**异步化**：
+flush() 只把脏区快照转换后排队，真实刷新由内部 worker 任务执行（约
+0.4-2.6s 的面板更新不阻塞渲染器/LVGL）；最多一帧排队，后续帧合并进待刷帧；
+`espaperplay_gui_wait_idle()` 提供可选同步点。页面级切换
 （`espaperplay_gui_show_ui` / `show_image`）只改变转换路径、不重渲染主帧；
 驱动保证切换刷新干净（灰阶->黑白反相旧平面，清除中间灰残留）。自检
-（`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换耗时。
+（`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换与
+worker 刷新耗时。
 
 #### 命名与日志规范
 
