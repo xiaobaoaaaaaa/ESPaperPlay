@@ -210,7 +210,7 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-On a fresh clone, `sdkconfig.defaults` (16MB Flash / 8MB PSRAM) is applied automatically; adjust via `idf.py menuconfig` if needed.
+On a fresh clone, `sdkconfig.defaults` (16MB Flash / 8MB PSRAM) is applied automatically; adjust via `idf.py menuconfig` if needed. The defaults enable `-O2` compilation and CPU dynamic frequency scaling (DFS: up to 240 MHz when busy, 80 MHz when idle) to balance performance and power.
 
 #### CI
 
@@ -430,7 +430,8 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
 首次克隆时，`sdkconfig.defaults`（Flash 16MB / PSRAM 8MB）会自动生效；
-如需调整请使用 `idf.py menuconfig`。
+如需调整请使用 `idf.py menuconfig`。默认配置已启用 `-O2` 编译优化与 CPU
+动态调频（DFS：繁忙升至 240MHz，空闲降至 80MHz），平衡性能与功耗。
 
 #### CI
 
