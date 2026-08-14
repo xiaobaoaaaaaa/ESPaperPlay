@@ -43,6 +43,9 @@ extern "C" {
 /** 出厂默认 AP 模式密码（留空表示开放网络）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS ""
 
+/** 出厂默认屏幕空闲自动睡眠超时（毫秒；与 ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 一致，0=关闭）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS 30000
+
 /**
  * @brief WiFi 工作模式。
  */
@@ -63,6 +66,7 @@ typedef struct {
     char sta_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN]; /*!< STA 模式密码 */
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
+    uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
 } espaperplay_system_config_t;
 
 /**
@@ -111,6 +115,15 @@ esp_err_t espaperplay_system_set_sta_credentials(const char *ssid, const char *p
  * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG / ESP_ERR_INVALID_SIZE。
  */
 esp_err_t espaperplay_system_set_ap_credentials(const char *ssid, const char *password);
+
+/**
+ * @brief 设置屏幕空闲自动睡眠超时（毫秒，0=关闭）并持久化。
+ *
+ * @param timeout_ms 超时毫秒数（0 表示关闭自动睡眠）。
+ * @return 成功返回 ESP_OK；超过 24 小时（86400000）返回 ESP_ERR_INVALID_ARG；
+ *         NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms);
 
 /**
  * @brief 恢复出厂默认配置并持久化。

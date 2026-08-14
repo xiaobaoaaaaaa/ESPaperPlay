@@ -348,6 +348,20 @@
         </section>
 
         <section>
+            <h2>屏幕设置</h2>
+            <form id="screenForm">
+                <div class="field">
+                    <label>屏幕空闲自动睡眠（秒，0 = 关闭自动睡眠）</label>
+                    <input type="number" name="epd_idle_sleep_timeout_s" min="0" max="86400" step="1"
+                        placeholder="30">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                </div>
+            </form>
+        </section>
+
+        <section>
             <h2>账户安全</h2>
             <form id="passwordForm">
                 <div class="field">
@@ -657,6 +671,8 @@
                 $('input[name=ap_password]').placeholder = d.ap_password ? '••••••（已保存）' : '（未设置）';
                 $('input[name=clear_sta_password]').checked = false;
                 $('input[name=clear_ap_password]').checked = false;
+                $('input[name=epd_idle_sleep_timeout_s]').value = d.epd_idle_sleep_timeout_s != null
+                    ? d.epd_idle_sleep_timeout_s : '';
             } catch (e) {
                 /* 服务器暂不可达，忽略。 */
             }
@@ -670,6 +686,27 @@
             });
             return res.json();
         }
+
+        /* 保存屏幕设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#screenForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#screenForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#screenForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('屏幕设置已保存');
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
 
         /* 保存并应用设置。 */
         $('#configForm').addEventListener('submit', async (e) => {

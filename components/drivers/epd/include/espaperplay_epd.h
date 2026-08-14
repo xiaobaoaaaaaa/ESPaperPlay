@@ -82,17 +82,40 @@ typedef enum {
 } espaperplay_epd_mode_t;
 
 /**
- * @brief 空闲自动睡眠超时（毫秒）。
+ * @brief 空闲自动睡眠超时（毫秒）——初始默认值。
  *
  * 最后一次刷新后若在此时长内没有新的刷新调用，驱动自动让面板进入深度
  * 睡眠（保底机制：防止上层忘记睡眠导致面板长期带电；参考工程要求刷新
  * 后必须睡眠）。刷新会自动唤醒（重新初始化），因此本保底不影响正确性，
  * 仅在下一次刷新时增加约 300ms 的唤醒初始化开销。置 0 关闭自动睡眠
  * （改由上层显式调用 espaperplay_epd_sleep()）。
+ *
+ * 运行期可用 espaperplay_epd_set_idle_sleep_timeout_ms() 调整（Web 控制台
+ * 可配置并经 NVS 持久化）；本宏仅作为上电初始值。
  */
 #ifndef ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS
 #define ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 30000
 #endif
+
+/**
+ * @brief 设置空闲自动睡眠超时（毫秒，0 = 关闭自动睡眠）。
+ *
+ * 立即生效：若面板正处于空闲计时（定时器运行中），会用新值重新武装；
+ * 置 0 时取消待触发的自动睡眠。持久化由上层（系统配置 / Web）负责，
+ * 本函数只改运行期行为。
+ *
+ * @param timeout_ms 超时毫秒数（0 表示关闭）。
+ *
+ * @return 成功返回 ESP_OK；未初始化返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_epd_set_idle_sleep_timeout_ms(uint32_t timeout_ms);
+
+/**
+ * @brief 获取当前空闲自动睡眠超时（毫秒，0 = 关闭）。
+ *
+ * @return 当前超时值。
+ */
+uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void);
 
 /**
  * @brief 启动自检任务（驱动验收用，默认关闭）。

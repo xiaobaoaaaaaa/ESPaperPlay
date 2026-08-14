@@ -86,6 +86,9 @@ void app_main(void) {
     /* 外设模块。 */
     ESP_ERROR_CHECK(espaperplay_storage_mount());
     ESP_ERROR_CHECK(espaperplay_epd_init());
+    /* 应用屏幕空闲自动睡眠超时（Web 可配置，NVS 持久化）。 */
+    espaperplay_epd_set_idle_sleep_timeout_ms(
+        espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
     ESP_ERROR_CHECK(espaperplay_touch_init());
 
     /* 应用级模块。 */

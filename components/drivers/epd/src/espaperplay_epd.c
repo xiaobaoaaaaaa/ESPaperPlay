@@ -124,7 +124,7 @@ static espaperplay_epd_mode_t s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /*!<
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
 static esp_timer_handle_t s_idle_timer = NULL; /*!< 空闲自动睡眠定时器（一次性） */
 static volatile uint32_t s_idle_gen = 0;       /*!< 刷新代数：定时器回调核对，过期回调直接退出 */
-static uint32_t s_idle_timeout_override_ms = 0; /*!< 空闲超时覆盖（仅 selftest 验证用；0=用宏默认） */
+static uint32_t s_idle_sleep_timeout_ms = ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS; /*!< 当前超时（0=关闭；可运行期调整并经 NVS 持久化） */
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
 /* ====================================================================
@@ -935,10 +935,10 @@ out:
     /* 7. 空闲自动睡眠保底验证：临时把超时改为 5s，等待驱动自动深度睡眠
      *    （应出现 "idle timeout: auto deep sleep" 日志），随后再刷新一次
      *    验证自动唤醒（唤醒需重新初始化，耗时应比同模式连续刷新略长）。 */
-    s_idle_timeout_override_ms = 5000;
+    espaperplay_epd_set_idle_sleep_timeout_ms(5000);
     ESP_LOGI(TAG, "selftest: waiting for idle auto-sleep (timeout 5s)");
     vTaskDelay(pdMS_TO_TICKS(8000));
-    s_idle_timeout_override_ms = 0; /* 恢复正常默认超时 */
+    espaperplay_epd_set_idle_sleep_timeout_ms(ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS); /* 恢复默认 */
     t0 = esp_timer_get_time();
     ret = espaperplay_epd_refresh(NULL, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
                                   ESPAPERPLAY_DISPLAY_HEIGHT, ESPAPERPLAY_EPD_MODE_FULL);
@@ -1014,9 +1014,7 @@ static void epd_idle_sleep_cb(void *arg) {
         return;
     }
     if (gen == s_idle_gen && s_initialized && !s_asleep) {
-        ESP_LOGI(TAG, "idle timeout (%u ms): auto deep sleep",
-                 (unsigned)(s_idle_timeout_override_ms ? s_idle_timeout_override_ms
-                                                       : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS));
+        ESP_LOGI(TAG, "idle timeout (%u ms): auto deep sleep", (unsigned)s_idle_sleep_timeout_ms);
         epd_sleep_locked();
     }
     xSemaphoreGive(s_lock);
@@ -1225,14 +1223,10 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
     /* 武装空闲自动睡眠：最后一次刷新后若超时无新刷新，驱动自动深度睡眠
      * （保底机制）。在锁内递增代数并重置定时器，防止过期回调误睡眠。
-     * 注意 esp_timer_start_once 在定时器运行中会返回 INVALID_STATE（此前
-     * 每次重新武装静默失败、定时器保留了首次到期时间——已修复）：运行中
+     * 注意 esp_timer_start_once 在定时器运行中会返回 INVALID_STATE：运行中
      * 用 esp_timer_restart 重置到期，未运行（首次/已到期）才用 start_once。 */
-    if (s_idle_timer != NULL) {
-        const uint64_t timeout_us =
-            (uint64_t)(s_idle_timeout_override_ms ? s_idle_timeout_override_ms
-                                                  : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS) *
-            1000;
+    if (s_idle_timer != NULL && s_idle_sleep_timeout_ms > 0) {
+        const uint64_t timeout_us = (uint64_t)s_idle_sleep_timeout_ms * 1000;
         esp_err_t terr = esp_timer_restart(s_idle_timer, timeout_us);
         if (terr == ESP_ERR_INVALID_STATE) {
             terr = esp_timer_start_once(s_idle_timer, timeout_us);
@@ -1264,6 +1258,37 @@ esp_err_t espaperplay_epd_sleep(void) {
     xSemaphoreGive(s_lock);
     return ret;
 }
+
+#if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
+esp_err_t espaperplay_epd_set_idle_sleep_timeout_ms(uint32_t timeout_ms) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_idle_sleep_timeout_ms = timeout_ms;
+
+    /* 立即生效：若定时器在运行（面板空闲计时中），用新值重新武装；0 = 取消。 */
+    if (s_idle_timer != NULL) {
+        if (timeout_ms == 0) {
+            esp_timer_stop(s_idle_timer);
+        } else {
+            esp_err_t terr = esp_timer_restart(s_idle_timer, (uint64_t)timeout_ms * 1000);
+            if (terr == ESP_ERR_INVALID_STATE) {
+                esp_timer_start_once(s_idle_timer, (uint64_t)timeout_ms * 1000);
+            }
+        }
+    }
+    xSemaphoreGive(s_lock);
+
+    ESP_LOGI(TAG, "idle sleep timeout set to %u ms (%s)", (unsigned)timeout_ms,
+             timeout_ms ? "enabled" : "disabled");
+    return ESP_OK;
+}
+
+uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void) { return s_idle_sleep_timeout_ms; }
+#endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
 esp_err_t espaperplay_epd_power_off(void) {
     esp_err_t ret = ESP_OK;

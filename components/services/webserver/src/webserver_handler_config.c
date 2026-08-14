@@ -13,6 +13,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 
+#include "espaperplay_epd.h"
 #include "espaperplay_system.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
@@ -46,6 +47,9 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     cJSON_AddStringToObject(root, "sta_password", cfg->sta_password);
     cJSON_AddStringToObject(root, "ap_ssid", cfg->ap_ssid);
     cJSON_AddStringToObject(root, "ap_password", cfg->ap_password);
+    /* 屏幕空闲自动睡眠超时（秒，0=关闭）。 */
+    cJSON_AddNumberToObject(root, "epd_idle_sleep_timeout_s",
+                            (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
 
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
@@ -81,62 +85,110 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     }
     body[received] = '\0';
 
-    /* 解析字段。 */
+    /* 解析字段。仅应用请求体中*出现*的字段（部分更新）：完整表单 = 全量，
+     * 屏幕设置表单只提交其自身字段。webserver_form_get_field 返回该字段是否出现。 */
     char wifi_mode_str[8] = {0};
     char sta_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = {0};
     char sta_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = {0};
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
-    webserver_form_get_field(body, "wifi_mode", wifi_mode_str, sizeof(wifi_mode_str));
-    webserver_form_get_field(body, "sta_ssid", sta_ssid, sizeof(sta_ssid));
-    webserver_form_get_field(body, "sta_password", sta_password, sizeof(sta_password));
-    webserver_form_get_field(body, "ap_ssid", ap_ssid, sizeof(ap_ssid));
-    webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
-    bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
-    bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
+    char epd_idle_sleep_s[16] = {0}; /* 屏幕空闲自动睡眠超时（秒） */
+    const bool has_wifi_mode = webserver_form_get_field(body, "wifi_mode", wifi_mode_str,
+                                                        sizeof(wifi_mode_str));
+    const bool has_sta_ssid =
+        webserver_form_get_field(body, "sta_ssid", sta_ssid, sizeof(sta_ssid));
+    const bool has_sta_pass =
+        webserver_form_get_field(body, "sta_password", sta_password, sizeof(sta_password));
+    const bool has_ap_ssid = webserver_form_get_field(body, "ap_ssid", ap_ssid, sizeof(ap_ssid));
+    const bool has_ap_pass =
+        webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
+    const bool has_epd_idle = webserver_form_get_field(body, "epd_idle_sleep_timeout_s",
+                                                       epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
+    const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
+    const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     free(body);
 
-    /* 解析工作模式。 */
-    espaperplay_wifi_mode_t mode;
-    if (strcmp(wifi_mode_str, "sta") == 0) {
-        mode = ESPAPERPLAY_WIFI_MODE_STA;
-    } else if (strcmp(wifi_mode_str, "ap") == 0) {
-        mode = ESPAPERPLAY_WIFI_MODE_AP;
-    } else {
-        webserver_send_json_err(req, "无效的 wifi_mode");
-        return ESP_FAIL;
+    const espaperplay_system_config_t *cur = espaperplay_system_get_config();
+    esp_err_t err = ESP_OK;
+
+    /* 工作模式：仅当字段出现时校验并切换（缺席 = 保持当前）。 */
+    espaperplay_wifi_mode_t mode = cur->wifi_mode;
+    if (has_wifi_mode) {
+        if (strcmp(wifi_mode_str, "sta") == 0) {
+            mode = ESPAPERPLAY_WIFI_MODE_STA;
+        } else if (strcmp(wifi_mode_str, "ap") == 0) {
+            mode = ESPAPERPLAY_WIFI_MODE_AP;
+        } else {
+            webserver_send_json_err(req, "无效的 wifi_mode");
+            return ESP_FAIL;
+        }
     }
 
-    const espaperplay_system_config_t *cur = espaperplay_system_get_config();
+    /* 密码语义（字段出现时）：输入非空 → 设置新值；输入为空且勾选"清除" → 置空；
+     * 否则保留当前值。缺失字段 = 保留当前值。 */
+    const char *new_sta_pass = cur->sta_password;
+    const char *new_ap_pass = cur->ap_password;
+    if (has_sta_pass) {
+        new_sta_pass = (sta_password[0] == '\0' && !clear_sta_password) ? cur->sta_password
+                                                                         : sta_password;
+    }
+    if (has_ap_pass) {
+        new_ap_pass = (ap_password[0] == '\0' && !clear_ap_password) ? cur->ap_password
+                                                                      : ap_password;
+    }
 
-    /* 密码语义：输入非空 → 设置新值；输入为空且勾选"清除" → 置空；否则保留当前值。 */
-    const char *new_sta_pass =
-        (sta_password[0] == '\0' && !clear_sta_password) ? cur->sta_password : sta_password;
-    const char *new_ap_pass =
-        (ap_password[0] == '\0' && !clear_ap_password) ? cur->ap_password : ap_password;
-
-    /* 校验：所选模式对应的 SSID 不能为空。 */
-    if (mode == ESPAPERPLAY_WIFI_MODE_STA && sta_ssid[0] == '\0') {
+    /* 校验：出现且为目标模式时，SSID 不能为空。 */
+    if (has_sta_ssid && mode == ESPAPERPLAY_WIFI_MODE_STA && sta_ssid[0] == '\0') {
         webserver_send_json_err(req, "STA SSID 不能为空");
         return ESP_FAIL;
     }
-    if (mode == ESPAPERPLAY_WIFI_MODE_AP && ap_ssid[0] == '\0') {
+    if (has_ap_ssid && mode == ESPAPERPLAY_WIFI_MODE_AP && ap_ssid[0] == '\0') {
         webserver_send_json_err(req, "AP SSID 不能为空");
         return ESP_FAIL;
     }
 
-    /* 依次应用并持久化到 NVS。 */
-    esp_err_t err = ESP_OK;
-    if (mode != cur->wifi_mode) {
+    /* 依次应用并持久化到 NVS（SSID/密码成对应用，缺失的一侧取当前值）。
+     * wifi_changed：WiFi 相关字段确有变化时才需要重启 WiFi——屏幕设置等
+     * 非网络字段的保存不应打断当前连接。 */
+    bool wifi_changed = false;
+    if (err == ESP_OK && has_wifi_mode && mode != cur->wifi_mode) {
         err = espaperplay_system_set_wifi_mode(mode);
+        if (err == ESP_OK) {
+            wifi_changed = true;
+        }
     }
-    if (err == ESP_OK &&
-        (strcmp(sta_ssid, cur->sta_ssid) != 0 || strcmp(new_sta_pass, cur->sta_password) != 0)) {
-        err = espaperplay_system_set_sta_credentials(sta_ssid, new_sta_pass);
+    if (err == ESP_OK && (has_sta_ssid || has_sta_pass) &&
+        (strcmp(has_sta_ssid ? sta_ssid : cur->sta_ssid, cur->sta_ssid) != 0 ||
+         strcmp(new_sta_pass, cur->sta_password) != 0)) {
+        err = espaperplay_system_set_sta_credentials(has_sta_ssid ? sta_ssid : cur->sta_ssid,
+                                                     new_sta_pass);
+        if (err == ESP_OK) {
+            wifi_changed = true;
+        }
     }
-    if (err == ESP_OK &&
-        (strcmp(ap_ssid, cur->ap_ssid) != 0 || strcmp(new_ap_pass, cur->ap_password) != 0)) {
-        err = espaperplay_system_set_ap_credentials(ap_ssid, new_ap_pass);
+    if (err == ESP_OK && (has_ap_ssid || has_ap_pass) &&
+        (strcmp(has_ap_ssid ? ap_ssid : cur->ap_ssid, cur->ap_ssid) != 0 ||
+         strcmp(new_ap_pass, cur->ap_password) != 0)) {
+        err = espaperplay_system_set_ap_credentials(has_ap_ssid ? ap_ssid : cur->ap_ssid,
+                                                    new_ap_pass);
+        if (err == ESP_OK) {
+            wifi_changed = true;
+        }
+    }
+    /* 屏幕空闲自动睡眠超时（秒 -> 毫秒，0=关闭）；字段缺失 = 保持不变。 */
+    if (err == ESP_OK && has_epd_idle) {
+        char *end = NULL;
+        long secs = strtol(epd_idle_sleep_s, &end, 10);
+        if (end == epd_idle_sleep_s || *end != '\0' || secs < 0 || secs > 86400) {
+            webserver_send_json_err(req, "无效的屏幕睡眠超时（0-86400 秒）");
+            return ESP_FAIL;
+        }
+        const uint32_t ms = (uint32_t)secs * 1000;
+        err = espaperplay_system_set_epd_idle_sleep_timeout_ms(ms);
+        if (err == ESP_OK) {
+            /* 立即应用到驱动（不必等重启）。 */
+            err = espaperplay_epd_set_idle_sleep_timeout_ms(ms);
+        }
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save config: %s", esp_err_to_name(err));
@@ -144,18 +196,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 先返回成功响应，确保客户端收到反馈，再延时重启 WiFi。
-     * 切换工作模式会重建网络接口并可能改变 IP，重启会断开当前连接。 */
+    /* 先返回成功响应，确保客户端收到反馈，再延时重启 WiFi（仅 WiFi 字段
+     * 实际变化时；切换工作模式会重建网络接口并可能改变 IP，重启会断开
+     * 当前连接——屏幕设置等非网络字段的保存不会触发）。 */
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddBoolToObject(root, "wifi_restarted", false); /* 实际重启在响应后延时进行 */
+    cJSON_AddBoolToObject(root, "wifi_restarted", wifi_changed);
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
 
-    vTaskDelay(pdMS_TO_TICKS(200));
-    err = espaperplay_wifi_start();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to re-apply wifi config: %s", esp_err_to_name(err));
+    if (wifi_changed) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        err = espaperplay_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to re-apply wifi config: %s", esp_err_to_name(err));
+        }
     }
     return ESP_OK;
 }
@@ -171,6 +226,9 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
         webserver_send_json_err(req, esp_err_to_name(err));
         return ESP_FAIL;
     }
+    /* 恢复默认后同步应用到驱动。 */
+    espaperplay_epd_set_idle_sleep_timeout_ms(
+        espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
 
     /* 先返回成功响应，再延时重启 WiFi（恢复默认可能切回 AP 模式并改变 IP）。 */
     cJSON *root = cJSON_CreateObject();

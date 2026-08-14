@@ -20,6 +20,10 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_STA_PASS "sta_pass"
 #define NVS_KEY_AP_SSID "ap_ssid"
 #define NVS_KEY_AP_PASS "ap_pass"
+#define NVS_KEY_EPD_IDLE_MS "epd_idle_ms"
+
+/** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
+#define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
 
 /* 内存中的配置缓存，初始化为出厂默认值。 */
 static espaperplay_system_config_t s_config = {
@@ -28,6 +32,7 @@ static espaperplay_system_config_t s_config = {
     .sta_password = ESPAPERPLAY_SYSTEM_DEFAULT_STA_PASS,
     .ap_ssid = ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID,
     .ap_password = ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS,
+    .epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS,
 };
 
 static bool s_initialized = false;
@@ -44,6 +49,21 @@ static esp_err_t save_u8_field(const char *key, uint8_t value) {
         return err;
     }
     err = nvs_set_u8(handle, key, value);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t save_u32_field(const char *key, uint32_t value) {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u32(handle, key, value);
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
@@ -105,6 +125,9 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_str(handle, NVS_KEY_AP_PASS, s_config.ap_password);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u32(handle, NVS_KEY_EPD_IDLE_MS, s_config.epd_idle_sleep_timeout_ms);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -144,6 +167,18 @@ static esp_err_t system_load(void) {
                    ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID, &missing);
     load_str_field(handle, NVS_KEY_AP_PASS, s_config.ap_password, sizeof(s_config.ap_password),
                    ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, &missing);
+
+    uint32_t idle_ms = 0;
+    err = nvs_get_u32(handle, NVS_KEY_EPD_IDLE_MS, &idle_ms);
+    if (err == ESP_OK && idle_ms <= ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS) {
+        s_config.epd_idle_sleep_timeout_ms = idle_ms;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_EPD_IDLE_MS, esp_err_to_name(err));
+        }
+        s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
+        missing = true;
+    }
 
     nvs_close(handle);
 
@@ -234,6 +269,14 @@ esp_err_t espaperplay_system_set_ap_credentials(const char *ssid, const char *pa
     return save_str_field(NVS_KEY_AP_PASS, s_config.ap_password);
 }
 
+esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms) {
+    if (timeout_ms > ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config.epd_idle_sleep_timeout_ms = timeout_ms;
+    return save_u32_field(NVS_KEY_EPD_IDLE_MS, timeout_ms);
+}
+
 esp_err_t espaperplay_system_reset_defaults(void) {
     s_config.wifi_mode = ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE;
     strlcpy(s_config.sta_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_STA_SSID, sizeof(s_config.sta_ssid));
@@ -241,5 +284,6 @@ esp_err_t espaperplay_system_reset_defaults(void) {
             sizeof(s_config.sta_password));
     strlcpy(s_config.ap_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID, sizeof(s_config.ap_ssid));
     strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
+    s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
     return system_save_all();
 }
