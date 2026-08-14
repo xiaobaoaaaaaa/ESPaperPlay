@@ -36,12 +36,14 @@ static const char *TAG = "ESPaperPlay_GUI";
 static uint8_t *s_fb_rgb = NULL; /*!< RGB565 主帧缓冲 */
 /* 快照暂存（双槽位：A=优先处理，B=排队）——flush 时把主帧内容冻结进暂存，
  * 之后渲染器可继续修改主帧而不影响已排队帧。 */
-static uint8_t *s_stage_a_bw = NULL;
-static uint8_t *s_stage_b_bw = NULL;
-static uint8_t *s_stage_a_gray4 = NULL;
-static uint8_t *s_stage_b_gray4 = NULL;
+/* 快照暂存（双槽位：A=优先处理，B=排队）——flush 时把主帧内容冻结进暂存，
+ * 之后渲染器可继续修改主帧而不影响已排队帧。 */
+static uint8_t *s_stage_a_bw = NULL;       /*!< 槽 A 的 1bpp 快照 */
+static uint8_t *s_stage_b_bw = NULL;       /*!< 槽 B 的 1bpp 快照 */
+static uint8_t *s_stage_a_gray4 = NULL;    /*!< 槽 A 的 2bpp 快照 */
+static uint8_t *s_stage_b_gray4 = NULL;    /*!< 槽 B 的 2bpp 快照 */
 static espaperplay_gui_color_t s_color = ESPAPERPLAY_GUI_COLOR_BW;
-static espaperplay_gui_converter_t s_converter = ESPAPERPLAY_GUI_CONVERTER_BAYER;
+static espaperplay_gui_converter_t s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
 static espaperplay_gui_gray4_dither_t s_gray4_dither = ESPAPERPLAY_GUI_GRAY4_DITHER_FS;
 static bool s_initialized = false;
 
@@ -56,14 +58,19 @@ static uint16_t s_dirty_y = 0;
 static uint16_t s_dirty_w = 0;
 static uint16_t s_dirty_h = 0;
 
+/* 大面积局刷计数：脏区面积超过全屏阈值时不立即全刷，而是继续局刷并计数；
+ * 连续达到 FULL_FORCE_AFTER 次才强制一次全像素翻转全刷，清除累积残影。 */
+static uint8_t s_area_over_count = 0;
+
 /* 刷新操作槽位 */
 typedef enum { GUI_OP_FRAME = 0, GUI_OP_CLEAR } gui_op_type_t;
 typedef struct {
-    bool ready;                        /*!< 已快照、待 worker 处理 */
-    gui_op_type_t type;                /*!< FRAME=快照帧；CLEAR=深擦除清白 */
-    espaperplay_gui_color_t color;     /*!< 快照时的模式 */
-    uint16_t x, y, w, h;               /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
-    const uint8_t *stage;              /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
+    bool ready;                      /*!< 已快照、待 worker 处理 */
+    gui_op_type_t type;              /*!< FRAME=快照帧；CLEAR=深擦除清白 */
+    espaperplay_gui_color_t color;   /*!< 快照时的模式 */
+    uint16_t x, y, w, h;             /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
+    bool force_full;                 /*!< 强制全像素翻转全刷（清残影） */
+    const uint8_t *stage;            /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
 } gui_op_t;
 static gui_op_t s_op_a; /*!< 槽 A：worker 优先处理 */
 static gui_op_t s_op_b; /*!< 槽 B：排队（两槽都满时新脏区并入 B 重快照） */
@@ -210,30 +217,54 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
 
 /**
  * @brief 把当前脏区按当前模式快照转换进指定暂存（调用方须持锁）。
+ *
+ * BW 全屏策略：脏区面积超过阈值时*不*立即全刷——继续按包围盒局刷并计数，
+ * 连续达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后才强制一次全像素翻转
+ * 全刷（op->force_full），清除局刷累积的残影。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
     op->color = s_color;
-    op->x = s_dirty_x;
-    op->y = s_dirty_y;
-    op->w = s_dirty_w;
-    op->h = s_dirty_h;
     if (s_color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
         gui_convert_gray4(s_fb_rgb, stage_gray4);
         op->type = GUI_OP_FRAME;
         op->stage = stage_gray4;
-    } else if ((uint32_t)s_dirty_w * s_dirty_h >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS) {
-        gui_convert_bw(s_fb_rgb, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
-                       stage_bw);
-        op->type = GUI_OP_FRAME;
-        op->stage = stage_bw;
         op->x = 0;
         op->y = 0;
         op->w = ESPAPERPLAY_DISPLAY_WIDTH;
         op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
+        op->force_full = false;
     } else {
-        gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
+        const uint32_t area = (uint32_t)s_dirty_w * s_dirty_h;
         op->type = GUI_OP_FRAME;
         op->stage = stage_bw;
+        if (area >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS) {
+            /* 大面积：计数，连续达阈值强制全刷清残影（画面闪一下）。 */
+            if (++s_area_over_count >= ESPAPERPLAY_GUI_FULL_FORCE_AFTER) {
+                s_area_over_count = 0;
+                gui_convert_bw(s_fb_rgb, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
+                               ESPAPERPLAY_DISPLAY_HEIGHT, stage_bw);
+                op->force_full = true;
+                op->x = 0;
+                op->y = 0;
+                op->w = ESPAPERPLAY_DISPLAY_WIDTH;
+                op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
+            } else {
+                gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
+                op->force_full = false;
+                op->x = s_dirty_x;
+                op->y = s_dirty_y;
+                op->w = s_dirty_w;
+                op->h = s_dirty_h;
+            }
+        } else {
+            s_area_over_count = 0; /* 小面积刷新打断大面积序列（残影风险低） */
+            gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
+            op->force_full = false;
+            op->x = s_dirty_x;
+            op->y = s_dirty_y;
+            op->w = s_dirty_w;
+            op->h = s_dirty_h;
+        }
     }
 }
 
@@ -243,15 +274,19 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
 static esp_err_t gui_execute_op(const gui_op_t *op) {
     esp_err_t ret;
 
+    /* 数据安全由三缓冲保证：本 op 的 stage 缓冲在快照时已分配为"非 worker
+     * 执行中"的索引，worker 读取期间快照不会再写它（见 gui_pick_stage）。 */
     if (op->type == GUI_OP_CLEAR) {
         ret = (op->color == ESPAPERPLAY_GUI_COLOR_GRAY4)
                   ? espaperplay_epd_refresh(NULL, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_GRAY4)
                   : espaperplay_epd_refresh(NULL, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_FULL);
     } else if (op->color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
         ret = espaperplay_epd_refresh(op->stage, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_GRAY4);
-    } else if ((uint32_t)op->w * op->h >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS) {
-        ret = espaperplay_epd_refresh(op->stage, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_FULL);
+    } else if (op->force_full) {
+        /* 周期性强制全刷：全像素翻转深波形，清除局刷累积残影。 */
+        ret = espaperplay_epd_refresh(op->stage, 0, 0, 0, 0, ESPAPERPLAY_EPD_MODE_FULL_FORCE);
     } else {
+        /* 普通局部刷新（窗口 = 脏区包围盒，差分 N2OCP）。 */
         ret = espaperplay_epd_refresh(op->stage, op->x, op->y, op->w, op->h,
                                       ESPAPERPLAY_EPD_MODE_PARTIAL);
     }
@@ -298,10 +333,15 @@ static void gui_worker_task(void *arg) {
         if (op.type == GUI_OP_CLEAR) {
             ESP_LOGI(TAG, "worker: clear -> %s (%lld ms)", esp_err_to_name(ret),
                      (esp_timer_get_time() - t0) / 1000);
+        } else if (op.force_full) {
+            ESP_LOGI(TAG, "worker: FULL! 800x480 (force) -> %s (%lld ms)", esp_err_to_name(ret),
+                     (esp_timer_get_time() - t0) / 1000);
+        } else if (op.color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
+            ESP_LOGI(TAG, "worker: G4 800x480 -> %s (%lld ms)", esp_err_to_name(ret),
+                     (esp_timer_get_time() - t0) / 1000);
         } else {
-            ESP_LOGI(TAG, "worker: %s %ux%u@(%u,%u) -> %s (%lld ms)",
-                     op.color == ESPAPERPLAY_GUI_COLOR_GRAY4 ? "gray4" : "bw", op.w, op.h, op.x,
-                     op.y, esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
+            ESP_LOGI(TAG, "worker: PART %ux%u@(%u,%u) -> %s (%lld ms)", op.w, op.h, op.x, op.y,
+                     esp_err_to_name(ret), (esp_timer_get_time() - t0) / 1000);
         }
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(ret));
@@ -442,7 +482,7 @@ static void gui_selftest_task(void *arg) {
     gui_test_fill(fb.buffer, 200, 0, 200, 480, 85, 85, 85);
     gui_test_gradient(fb.buffer, 400, 0, 200, 480);
     gui_test_fill(fb.buffer, 600, 0, 200, 480, 255, 255, 255);
-    ret = espaperplay_gui_show_image();
+    ret = espaperplay_gui_show_gray4();
     ESP_LOGI(TAG, "selftest: gray4 full (FS) queued -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -455,7 +495,7 @@ static void gui_selftest_task(void *arg) {
     if (ret != ESP_OK) {
         goto out;
     }
-    ret = espaperplay_gui_show_image();
+    ret = espaperplay_gui_show_gray4();
     ESP_LOGI(TAG, "selftest: gray4 full (Bayer) queued -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -464,10 +504,10 @@ static void gui_selftest_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(1000));
     espaperplay_gui_set_gray4_dither(ESPAPERPLAY_GUI_GRAY4_DITHER_FS);
 
-    /* 8. 模式切换残留：主帧置全白后 show_ui，面板应纯白。 */
+    /* 8. 模式切换残留：主帧置全白后 show_bw，面板应纯白。 */
     memset(fb.buffer, 0xFF, GUI_FB_RGB_BYTES);
-    ret = espaperplay_gui_show_ui();
-    ESP_LOGI(TAG, "selftest: show_ui after gray4 queued -> %s", esp_err_to_name(ret));
+    ret = espaperplay_gui_show_bw();
+    ESP_LOGI(TAG, "selftest: show_bw after gray4 queued -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
     }
@@ -508,7 +548,6 @@ esp_err_t espaperplay_gui_init(void) {
             return ESP_ERR_NO_MEM;
         }
     }
-
     s_fb_rgb = gui_alloc(GUI_FB_RGB_BYTES);
     s_stage_a_bw = gui_alloc(GUI_FB_BW_BYTES);
     s_stage_b_bw = gui_alloc(GUI_FB_BW_BYTES);
@@ -529,7 +568,10 @@ esp_err_t espaperplay_gui_init(void) {
     }
     memset(s_fb_rgb, 0xFF, GUI_FB_RGB_BYTES);
     s_color = ESPAPERPLAY_GUI_COLOR_BW;
-    s_converter = ESPAPERPLAY_GUI_CONVERTER_BAYER;
+    /* 默认阈值转换：LVGL 抗锯齿字体在字形边缘产生中间灰，Bayer 抖动会把
+     * 其点阵化（边缘发糊）；阈值直接切边，文字锐利。照片/图像走 GRAY4
+     * 模式（独立抖动），不受影响；需要 Bayer 时应用可 set_converter 切换。 */
+    s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
     s_gray4_dither = ESPAPERPLAY_GUI_GRAY4_DITHER_FS;
     s_dirty = false;
     s_op_a.ready = false;
@@ -552,11 +594,6 @@ esp_err_t espaperplay_gui_init(void) {
 #endif /* ESPAPERPLAY_GUI_ENABLE_SELFTEST */
 
     return ESP_OK;
-}
-
-esp_err_t espaperplay_gui_start(void) {
-    ESP_LOGW(TAG, "gui_start not implemented yet (LVGL task pending)");
-    return ESP_ERR_NOT_SUPPORTED;
 }
 
 esp_err_t espaperplay_gui_set_color(espaperplay_gui_color_t color) {
@@ -706,7 +743,7 @@ esp_err_t espaperplay_gui_flush(void) {
             s_op_b.ready = false;
         }
     } else {
-        /* 两槽都满（worker 尚未取走）：把新脏区并入 B 并重快照（取最新帧）。 */
+        /* 两槽都满（worker 尚未取走）：把新脏区并入 B（包围盒）重快照（取最新帧）。 */
         const uint16_t x0 = s_op_b.x < s_dirty_x ? s_op_b.x : s_dirty_x;
         const uint16_t y0 = s_op_b.y < s_dirty_y ? s_op_b.y : s_dirty_y;
         const uint16_t x1 = (uint16_t)(s_op_b.x + s_op_b.w) > (uint16_t)(s_dirty_x + s_dirty_w)
@@ -751,7 +788,7 @@ esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms) {
     }
 }
 
-esp_err_t espaperplay_gui_show_ui(void) {
+esp_err_t espaperplay_gui_show_bw(void) {
     esp_err_t ret = espaperplay_gui_set_color(ESPAPERPLAY_GUI_COLOR_BW);
     if (ret != ESP_OK) {
         return ret;
@@ -760,7 +797,7 @@ esp_err_t espaperplay_gui_show_ui(void) {
     return espaperplay_gui_flush();
 }
 
-esp_err_t espaperplay_gui_show_image(void) {
+esp_err_t espaperplay_gui_show_gray4(void) {
     esp_err_t ret = espaperplay_gui_set_color(ESPAPERPLAY_GUI_COLOR_GRAY4);
     if (ret != ESP_OK) {
         return ret;

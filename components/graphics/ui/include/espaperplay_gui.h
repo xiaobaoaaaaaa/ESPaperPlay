@@ -26,8 +26,9 @@ extern "C" {
  *     渲染目标（后续 LVGL 配 LV_COLOR_DEPTH=16 直接画入）；
  *   - flush 时按当前模式把 RGB 快照转换为 e-paper 帧格式（帧内容冻结）：
  *       · 交互模式（BW）：RGB -> 1bpp，脏区转换 + 局部刷新（~370ms），
- *         转换器可选快速阈值或 Bayer 4x4 有序抖动（默认，纯黑/纯白
- *         位精确，零伪影）；
+ *         默认阈值转换（LVGL 抗锯齿字体的中间灰直接切边，文字锐利）；
+ *         Bayer 4x4 有序抖动为可选（纯黑/纯白位精确，适合无抗锯齿的
+ *         位图内容）；
  *       · 高清模式（GRAY4）：RGB -> 2bpp 四灰阶，默认 Floyd–Steinberg
  *         误差扩散抖动（质量最好；Bayer 4x4 为快速选项），整帧转换 +
  *         全屏刷新（~2.5s，仅全屏）；
@@ -35,7 +36,11 @@ extern "C" {
  *     （阻塞只发生在 worker），渲染/调用线程永不被屏幕刷新阻塞；双槽位
  *     允许渲染器连续提交，worker 顺序消费并天然节流。需要同步点时用
  *     espaperplay_gui_wait_idle()；
- *   - 模式切换是页面级操作（espaperplay_gui_show_ui / show_image），
+ *   - 脏区为单包围盒（8 对齐，帧内合并）；全屏策略：脏区面积超过
+ *     阈值（默认 70% 屏）时不立即全刷，继续按包围盒局刷并计数，连续
+ *     达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后强制一次全像素翻转
+ *     全刷，清除局刷累积的残影（GRAY4/CLEAR 恒全屏）；
+ *   - 模式切换是页面级操作（espaperplay_gui_show_bw / show_gray4），
  *     切换后主帧内容不变，只是转换路径不同；驱动保证切换刷新干净
  *     （灰阶->黑白旧平面反相，清除中间灰残留）。
  *
@@ -63,9 +68,11 @@ typedef enum {
  * @brief 1bpp 转换器。
  */
 typedef enum {
-    ESPAPERPLAY_GUI_CONVERTER_THRESHOLD = 0, /*!< 快速阈值（L>=128 白），无抖动，速度快 */
-    ESPAPERPLAY_GUI_CONVERTER_BAYER,         /*!< Bayer 4x4 有序抖动（默认）：中间灰呈点阵，
-                                              纯黑/纯白位精确（0/255 直通，无伪影） */
+    ESPAPERPLAY_GUI_CONVERTER_THRESHOLD = 0, /*!< 阈值（L>=128 白），无抖动，速度快；默认。
+                                              文字锐利（抗锯齿灰边直接切），适合 UI */
+    ESPAPERPLAY_GUI_CONVERTER_BAYER,         /*!< Bayer 4x4 有序抖动：中间灰呈点阵，纯黑/纯白
+                                              位精确（0/255 直通）。抗锯齿字体会被点阵化（边缘
+                                              发糊），适合无灰度的位图内容 */
     ESPAPERPLAY_GUI_CONVERTER_MAX,
 } espaperplay_gui_converter_t;
 
@@ -108,11 +115,22 @@ typedef struct {
 #endif
 
 /**
- * @brief 脏区面积达到该像素数时改用全屏刷新（而非局部）。
+ * @brief 脏区面积达到该像素数时进入"大面积局刷计数"流程。
+ *
+ * 超过该面积（默认 70% 屏幕）不立即全刷：仍按包围盒执行局部刷新，但
+ * 连续达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后，强制一次全像素翻转
+ * 全刷（画面闪黑一下），清除局部刷新累积的残影。
  */
 #ifndef ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS
 #define ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS                                                 \
-    (ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_DISPLAY_HEIGHT / 2)
+    (ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_DISPLAY_HEIGHT * 7 / 10)
+#endif
+
+/**
+ * @brief 连续大面积局刷达到该次数后，强制执行一次全像素翻转全刷清残影。
+ */
+#ifndef ESPAPERPLAY_GUI_FULL_FORCE_AFTER
+#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 5
 #endif
 
 /**
@@ -126,19 +144,10 @@ typedef struct {
 esp_err_t espaperplay_gui_init(void);
 
 /**
- * @brief 启动 GUI 任务。
- *
- * 创建 GUI 渲染 / 事件循环任务（后续阶段为 LVGL 任务），当前未实现。
- *
- * @return 当前返回 ESP_ERR_NOT_SUPPORTED（LVGL 适配阶段实现）。
- */
-esp_err_t espaperplay_gui_start(void);
-
-/**
  * @brief 切换刷新模式（BW 交互 / GRAY4 高清）。
  *
  * 只改变 flush 的转换路径与驱动模式，不触发刷新、不清空主帧。切换后请
- * 重新提交全屏区域并 flush（或直接调用 show_ui / show_image）。
+ * 重新提交全屏区域并 flush（或直接调用 show_bw / show_gray4）。
  *
  * @param color 目标模式。
  *
@@ -151,7 +160,7 @@ esp_err_t espaperplay_gui_set_color(espaperplay_gui_color_t color);
  * @brief 选择 1bpp 转换器（阈值或 Bayer 抖动）。
  *
  * 仅影响 BW 模式的转换；gray4 模式抖动算法由 set_gray4_dither 决定。
- * 默认 BAYER。
+ * 默认 THRESHOLD（UI 文字锐利；图像走 GRAY4 模式，不受影响）。
  *
  * @param converter 转换器。
  *
@@ -184,7 +193,7 @@ esp_err_t espaperplay_gui_get_framebuffer(espaperplay_gui_framebuffer_t *fb);
  * @brief 标记一个已变更区域（脏区）。
  *
  * 区域自动裁剪到屏内、X 方向 8 像素对齐，并与本帧已提交的脏区合并为
- * 包围盒。一帧内可多次调用，flush() 时合并为一次刷新。
+ * 包围盒（一帧内可多次调用，flush() 时合并为一次刷新）。
  *
  * @return 成功返回 ESP_OK；未初始化返回 ESP_ERR_INVALID_STATE；空区域
  *         忽略并返回 ESP_OK。
@@ -218,23 +227,24 @@ esp_err_t espaperplay_gui_flush(void);
 esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms);
 
 /**
- * @brief 切回交互模式并整帧刷新（页面级操作）。
+ * @brief 切换到 BW 模式并整帧刷新（页面级操作，GRAY4 -> BW 转换）。
  *
- * = set_color(BW) + 全屏提交 + flush。主帧当前内容按 BW 转换器输出。
+ * = set_color(BW) + 全屏提交 + flush。主帧当前内容按 BW 转换器输出；
+ * 驱动自动清除灰阶残留（反相翻转）。从 GRAY4 切回交互界面时调用。
  *
  * @return 成功返回 ESP_OK，否则返回相应错误码。
  */
-esp_err_t espaperplay_gui_show_ui(void);
+esp_err_t espaperplay_gui_show_bw(void);
 
 /**
- * @brief 切换为高清模式并整帧刷新（页面级操作，查看大图用）。
+ * @brief 切换到 GRAY4 模式并整帧刷新（页面级操作，BW -> GRAY4 转换）。
  *
  * = set_color(GRAY4) + 全屏提交 + flush。主帧当前内容按四灰阶 + 抖动
  * 转换输出（调用前请先把图片渲染进主帧缓冲）。全屏刷新较慢（~2.5s）。
  *
  * @return 成功返回 ESP_OK，否则返回相应错误码。
  */
-esp_err_t espaperplay_gui_show_image(void);
+esp_err_t espaperplay_gui_show_gray4(void);
 
 /**
  * @brief 清屏为全白并全屏刷新（异步排队）。

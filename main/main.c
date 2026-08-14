@@ -19,7 +19,9 @@
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
+#include "espaperplay_ui.h"
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
 #include "espaperplay_session.h"
@@ -95,6 +97,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_input_init());
     ESP_ERROR_CHECK(espaperplay_power_init());
     ESP_ERROR_CHECK(espaperplay_gui_init());
+    ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
+    espaperplay_ui_test_show();                  /* 局刷压力测试屏（验证异步刷新链路） */
     ESP_ERROR_CHECK(espaperplay_reader_init());
 
     /* 创建任务。 */
