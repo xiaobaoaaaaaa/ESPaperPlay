@@ -52,7 +52,7 @@ ESPaperPlay
     │   ├── wifi/          # WiFi service: AP / STA networking per system config
     │   └── webserver/     # Web console: view status & change settings (esp_https_server)
     ├── graphics/          # Graphics / UI layer
-    │   └── ui/            # GUI abstraction (LVGL to be added)
+    │   └── ui/            # GUI backend (RGB565 framebuffer + mode converters)
     └── applications/      # Application layer
         └── reader/        # Reader core framework (TXT/EPUB/PDF to come)
 ```
@@ -122,6 +122,25 @@ arrives for `ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS` (default 30 s, 0 to
 disable; refresh always re-initializes on wake). A boot self-test
 (`ESPAPERPLAY_EPD_ENABLE_SELFTEST`, off by default) exercises every mode,
 prints timings, clears the panel to white and sleeps.
+
+#### GUI Backend (RGB565 + Mode Converters)
+
+The GUI service (`components/graphics/ui`) provides the rendering backend: a
+single **RGB565 main framebuffer** (750 KB, PSRAM) is the render target (LVGL
+later renders directly into it with `LV_COLOR_DEPTH=16`), and the e-paper's
+1bpp / 2bpp constraints are confined to a conversion stage at flush time:
+
+| Mode | Conversion | Refresh |
+| ---- | ---------- | ------- |
+| Interactive (`BW`) | RGB -> 1bpp: fast threshold or Bayer 4x4 (default; pure black/white bit-exact, no artifacts) | dirty-area partial, ~0.37-0.52 s |
+| High-definition (`GRAY4`) | RGB -> 2bpp: Floyd-Steinberg error diffusion (default) or Bayer 4x4 | full screen, ~2.5 s |
+
+Dirty areas are clipped, 8-pixel aligned (X) and merged into one refresh per
+frame. Page-level switches (`espaperplay_gui_show_ui` / `show_image`) only
+change the conversion path — the framebuffer is never re-rendered — and the
+driver guarantees clean transitions (gray4 -> BW inverts the old plane, so
+residual mid-grays are erased). A self-test (`ESPAPERPLAY_GUI_ENABLE_SELFTEST`,
+off by default) exercises both paths and prints conversion timings.
 
 #### Naming & Logging Conventions
 
@@ -257,7 +276,7 @@ ESPaperPlay
     │   ├── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
     │   └── webserver/     # Web 管理：状态查看与设置修改（esp_https_server）
     ├── graphics/          # 图形 / 界面层
-    │   └── ui/            # GUI 抽象层（未来接入 LVGL）
+    │   └── ui/            # GUI 渲染后端（RGB565 帧缓冲 + 模式转换级）
     └── applications/      # 应用层
         └── reader/        # 阅读器核心框架（未来支持 TXT/EPUB/PDF）
 ```
@@ -323,6 +342,22 @@ graph TD
 `ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS`（默认 30s，0 关闭）无新刷新时
 自动深度睡眠（保底，刷新会自动唤醒）。上电自检
 （`ESPAPERPLAY_EPD_ENABLE_SELFTEST`，默认关闭）可复验各模式并打印耗时。
+
+#### GUI 渲染后端（RGB565 + 模式转换级）
+
+GUI 服务（`components/graphics/ui`）提供渲染后端：单一 **RGB565 主帧缓冲**
+（750KB，PSRAM）作为渲染目标（后续 LVGL 以 `LV_COLOR_DEPTH=16` 直接画入），
+电子纸的 1bpp/2bpp 限制全部收敛到 flush 时的转换级：
+
+| 模式 | 转换 | 刷新 |
+| ---- | ---- | ---- |
+| 交互（`BW`） | RGB->1bpp：快速阈值 或 Bayer 4x4（默认；纯黑/纯白位精确，无伪影） | 脏区局部，~0.37-0.52s |
+| 高清（`GRAY4`） | RGB->2bpp：Floyd-Steinberg 误差扩散（默认）或 Bayer 4x4 | 全屏，~2.5s |
+
+脏区自动裁剪、X 方向 8 像素对齐并合并为一帧一次刷新。页面级切换
+（`espaperplay_gui_show_ui` / `show_image`）只改变转换路径、不重渲染主帧；
+驱动保证切换刷新干净（灰阶->黑白反相旧平面，清除中间灰残留）。自检
+（`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换耗时。
 
 #### 命名与日志规范
 
