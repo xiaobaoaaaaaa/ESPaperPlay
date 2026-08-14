@@ -1180,14 +1180,23 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
 
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
     /* 武装空闲自动睡眠：最后一次刷新后若超时无新刷新，驱动自动深度睡眠
-     * （保底机制）。在锁内递增代数并重启定时器，防止过期回调误睡眠。 */
+     * （保底机制）。在锁内递增代数并重置定时器，防止过期回调误睡眠。
+     * 注意 esp_timer_start_once 在定时器运行中会返回 INVALID_STATE（此前
+     * 每次重新武装静默失败、定时器保留了首次到期时间——已修复）：运行中
+     * 用 esp_timer_restart 重置到期，未运行（首次/已到期）才用 start_once。 */
     if (s_idle_timer != NULL) {
+        const uint64_t timeout_us =
+            (uint64_t)(s_idle_timeout_override_ms ? s_idle_timeout_override_ms
+                                                  : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS) *
+            1000;
+        esp_err_t terr = esp_timer_restart(s_idle_timer, timeout_us);
+        if (terr == ESP_ERR_INVALID_STATE) {
+            terr = esp_timer_start_once(s_idle_timer, timeout_us);
+        }
+        if (terr != ESP_OK) {
+            ESP_LOGW(TAG, "idle timer arm failed: %s", esp_err_to_name(terr));
+        }
         s_idle_gen++;
-        esp_timer_start_once(s_idle_timer,
-                             (uint64_t)(s_idle_timeout_override_ms
-                                            ? s_idle_timeout_override_ms
-                                            : ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS) *
-                                 1000);
     }
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
 
