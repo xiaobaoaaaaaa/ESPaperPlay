@@ -56,8 +56,11 @@ static uint16_t s_dirty_w = 0;
 static uint16_t s_dirty_h = 0;
 
 /* 大面积局刷计数：脏区面积超过全屏阈值时不立即全刷，而是继续局刷并计数；
- * 连续达到 FULL_FORCE_AFTER 次才强制一次全像素翻转全刷，清除累积残影。 */
-static uint8_t s_area_over_count = 0;
+ * 连续达到 s_full_force_after 次才强制一次全像素翻转全刷，清除累积残影。
+ * 计数在 worker 出队执行时递增（按"已执行"而非"已快照"），杜绝连刷。 */
+static uint32_t s_large_partial_count = 0;
+/* 连续大面积局刷后强制全刷的阈值（0=禁用；运行期可经 Web 调整并持久化）。 */
+static uint32_t s_full_force_after = ESPAPERPLAY_GUI_FULL_FORCE_AFTER;
 
 /* 刷新操作槽位状态：
  *   IDLE  = 空闲，可被渲染端快照写入；
@@ -72,6 +75,7 @@ typedef struct {
     gui_op_type_t type;            /*!< FRAME=快照帧；CLEAR=深擦除清白 */
     espaperplay_gui_color_t color; /*!< 快照时的模式 */
     uint16_t x, y, w, h;           /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
+    bool large_area;               /*!< 脏区是否达大面积阈值（BW 计数用） */
     bool force_full;               /*!< 强制全像素翻转全刷（清残影） */
     const uint8_t *stage;          /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
 } gui_op_t;
@@ -221,9 +225,10 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
 /**
  * @brief 把当前脏区按当前模式快照转换进指定暂存（调用方须持锁）。
  *
- * BW 全屏策略：脏区面积超过阈值时*不*立即全刷——继续按包围盒局刷并计数，
- * 连续达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后才强制一次全像素翻转
- * 全刷（op->force_full），清除局刷累积的残影。
+ * BW 全屏策略：脏区面积超过阈值时*不*立即全刷——继续按包围盒局刷。
+ * 是否强制全像素翻转全刷（op->force_full）由"已执行的大面积局刷计数"
+ * s_large_partial_count 决定（该计数在 worker 出队时递增，见
+ * gui_count_executed）；本函数只读计数，不做累加/清零。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
     op->state = GUI_SLOT_READY;
@@ -236,32 +241,27 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->y = 0;
         op->w = ESPAPERPLAY_DISPLAY_WIDTH;
         op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
+        op->large_area = false;
         op->force_full = false;
     } else {
         const uint32_t area = (uint32_t)s_dirty_w * s_dirty_h;
+        const bool large = area >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS;
+        const bool do_force =
+            large && s_full_force_after > 0 && s_large_partial_count >= s_full_force_after;
+
         op->type = GUI_OP_FRAME;
         op->stage = stage_bw;
-        if (area >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS) {
-            /* 大面积：计数，连续达阈值强制全刷清残影（画面闪一下）。 */
-            if (++s_area_over_count >= ESPAPERPLAY_GUI_FULL_FORCE_AFTER) {
-                s_area_over_count = 0;
-                gui_convert_bw(s_fb_rgb, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH,
-                               ESPAPERPLAY_DISPLAY_HEIGHT, stage_bw);
-                op->force_full = true;
-                op->x = 0;
-                op->y = 0;
-                op->w = ESPAPERPLAY_DISPLAY_WIDTH;
-                op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
-            } else {
-                gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
-                op->force_full = false;
-                op->x = s_dirty_x;
-                op->y = s_dirty_y;
-                op->w = s_dirty_w;
-                op->h = s_dirty_h;
-            }
+        op->large_area = large;
+        if (do_force) {
+            /* 连续大面积局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
+            gui_convert_bw(s_fb_rgb, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+                           stage_bw);
+            op->force_full = true;
+            op->x = 0;
+            op->y = 0;
+            op->w = ESPAPERPLAY_DISPLAY_WIDTH;
+            op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
         } else {
-            s_area_over_count = 0; /* 小面积刷新打断大面积序列（残影风险低） */
             gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
             op->force_full = false;
             op->x = s_dirty_x;
@@ -298,6 +298,27 @@ static esp_err_t gui_execute_op(const gui_op_t *op) {
 }
 
 /**
+ * @brief 按"已执行"更新大面积局刷计数（worker 出队 / 同步执行前调用，须持锁）。
+ *
+ * 只有 BW 普通局刷参与计数：大面积 +1、小面积清零；force / clear / gray4
+ * 都是全屏刷新，会建立新基线，计数清零。force 在出队那一刻即清零，因此
+ * force 执行期间渲染端合并进另一槽的帧只会计数，不会再排队下一个 force。
+ */
+static void gui_count_executed(const gui_op_t *op) {
+    if (op->type == GUI_OP_FRAME && op->color == ESPAPERPLAY_GUI_COLOR_BW && !op->force_full) {
+        if (op->large_area && s_full_force_after > 0) {
+            if (s_large_partial_count < s_full_force_after) {
+                s_large_partial_count++;
+            }
+        } else {
+            s_large_partial_count = 0;
+        }
+    } else {
+        s_large_partial_count = 0;
+    }
+}
+
+/**
  * @brief 异步刷新 worker 任务。
  *
  * 阻塞（SPI 传输 + 等 BUSY）只发生在本任务，渲染/调用线程永不被刷新阻塞。
@@ -323,6 +344,7 @@ static void gui_worker_task(void *arg) {
         if (slot != NULL) {
             op = *slot;
             slot->state = GUI_SLOT_BUSY; /* 占用：渲染端不得再写该槽 */
+            gui_count_executed(&op);     /* 按"已执行"计数（force 出队即清零） */
         }
         xSemaphoreGive(s_lock);
         if (slot == NULL) {
@@ -643,6 +665,28 @@ esp_err_t espaperplay_gui_set_gray4_dither(espaperplay_gui_gray4_dither_t dither
     return ESP_OK;
 }
 
+esp_err_t espaperplay_gui_set_full_force_after(uint32_t count) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (count > ESPAPERPLAY_GUI_FULL_FORCE_AFTER_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (count != s_full_force_after) {
+        s_full_force_after = count;
+        s_large_partial_count = 0; /* 阈值变化，重新开始计数 */
+        ESP_LOGI(TAG, "full force after: %u (%s)", (unsigned)count,
+                 count ? "enabled" : "disabled");
+    }
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
+uint32_t espaperplay_gui_get_full_force_after(void) { return s_full_force_after; }
+
 esp_err_t espaperplay_gui_get_framebuffer(espaperplay_gui_framebuffer_t *fb) {
     if (fb == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -772,6 +816,7 @@ esp_err_t espaperplay_gui_flush(void) {
         xTaskNotifyGive(s_worker_task);
     } else {
         /* 退化同步路径：无并发，直接执行并复位槽位。 */
+        gui_count_executed(target);
         ret = gui_execute_op(target);
         target->state = GUI_SLOT_IDLE;
     }
@@ -850,6 +895,7 @@ esp_err_t espaperplay_gui_clear(void) {
     slot->type = GUI_OP_CLEAR;
     slot->color = s_color;
     slot->stage = NULL;
+    slot->large_area = false;
     slot->force_full = false;
     slot->x = slot->y = slot->w = slot->h = 0;
 

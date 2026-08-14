@@ -14,6 +14,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_epd.h"
+#include "espaperplay_gui.h"
 #include "espaperplay_system.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
@@ -50,6 +51,8 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     /* 屏幕空闲自动睡眠超时（秒，0=关闭）。 */
     cJSON_AddNumberToObject(root, "epd_idle_sleep_timeout_s",
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
+    /* 连续大面积局刷后强制全刷阈值（0=禁用，只局刷）。 */
+    cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
 
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
@@ -93,6 +96,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = {0};
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
     char epd_idle_sleep_s[16] = {0}; /* 屏幕空闲自动睡眠超时（秒） */
+    char gui_force_after_s[8] = {0}; /* 连续大面积局刷后强制全刷阈值（0=禁用） */
     const bool has_wifi_mode = webserver_form_get_field(body, "wifi_mode", wifi_mode_str,
                                                         sizeof(wifi_mode_str));
     const bool has_sta_ssid =
@@ -104,6 +108,9 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
     const bool has_epd_idle = webserver_form_get_field(body, "epd_idle_sleep_timeout_s",
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
+    const bool has_gui_force = webserver_form_get_field(body, "gui_full_force_after",
+                                                        gui_force_after_s,
+                                                        sizeof(gui_force_after_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     free(body);
@@ -188,6 +195,20 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         if (err == ESP_OK) {
             /* 立即应用到驱动（不必等重启）。 */
             err = espaperplay_epd_set_idle_sleep_timeout_ms(ms);
+        }
+    }
+    /* 连续大面积局刷后强制全刷阈值（0=禁用，0-255）；字段缺失 = 保持不变。 */
+    if (err == ESP_OK && has_gui_force) {
+        char *end = NULL;
+        long n = strtol(gui_force_after_s, &end, 10);
+        if (end == gui_force_after_s || *end != '\0' || n < 0 || n > 255) {
+            webserver_send_json_err(req, "无效的全刷阈值（0-255，0=禁用）");
+            return ESP_FAIL;
+        }
+        err = espaperplay_system_set_gui_full_force_after((uint32_t)n);
+        if (err == ESP_OK) {
+            /* 立即应用到渲染后端（不必等重启）。 */
+            err = espaperplay_gui_set_full_force_after((uint32_t)n);
         }
     }
     if (err != ESP_OK) {

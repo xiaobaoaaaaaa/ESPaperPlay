@@ -46,6 +46,9 @@ extern "C" {
 /** 出厂默认屏幕空闲自动睡眠超时（毫秒；与 ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 一致，0=关闭）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS 30000
 
+/** 出厂默认"连续大面积局刷 N 次后强制全刷"阈值（0=禁用，只局刷）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER 5
+
 /**
  * @brief WiFi 工作模式。
  */
@@ -67,6 +70,7 @@ typedef struct {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
     uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
+    uint32_t gui_full_force_after;                      /*!< 连续大面积局刷后强制全刷阈值（0=禁用） */
 } espaperplay_system_config_t;
 
 /**
@@ -124,6 +128,14 @@ esp_err_t espaperplay_system_set_ap_credentials(const char *ssid, const char *pa
  *         NVS 写入失败返回错误码。
  */
 esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms);
+
+/**
+ * @brief 设置"连续大面积局刷 N 次后强制全刷"阈值（0=禁用）并持久化。
+ *
+ * @param count 阈值（0..255；0 表示永不强制全刷，只做局部刷新）。
+ * @return 成功返回 ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count);
 
 /**
  * @brief 恢复出厂默认配置并持久化。

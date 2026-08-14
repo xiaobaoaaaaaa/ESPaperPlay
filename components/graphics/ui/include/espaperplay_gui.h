@@ -128,10 +128,17 @@ typedef struct {
 
 /**
  * @brief 连续大面积局刷达到该次数后，强制执行一次全像素翻转全刷清残影。
+ *
+ * 该宏仅作为上电初始默认值；运行期可用
+ * espaperplay_gui_set_full_force_after() 调整（Web 可配置并经 NVS 持久化），
+ * 置 0 表示禁用周期性全刷清残影（永远只用局部刷新）。
  */
 #ifndef ESPAPERPLAY_GUI_FULL_FORCE_AFTER
 #define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 5
 #endif
+
+/** 大面积局刷计数阈值上限（防止不合理配置）。 */
+#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER_MAX 255u
 
 /**
  * @brief 初始化 GUI 子系统（渲染后端）。
@@ -178,6 +185,26 @@ esp_err_t espaperplay_gui_set_converter(espaperplay_gui_converter_t converter);
  * @return 成功返回 ESP_OK；未初始化或参数非法返回相应错误码。
  */
 esp_err_t espaperplay_gui_set_gray4_dither(espaperplay_gui_gray4_dither_t dither);
+
+/**
+ * @brief 设置"连续大面积局刷 N 次后强制全刷清残影"的计数阈值（0 = 禁用）。
+ *
+ * 立即生效：下一次 flush 快照即按新阈值决策。置 0 后永远不再强制全刷
+ * （只做局部刷新）；运行期可经 Web 修改并经 NVS 持久化。
+ *
+ * @param count 阈值（0..255；0 = 禁用）。
+ *
+ * @return 成功返回 ESP_OK；未初始化返回 ESP_ERR_INVALID_STATE；越界返回
+ *         ESP_ERR_INVALID_ARG。
+ */
+esp_err_t espaperplay_gui_set_full_force_after(uint32_t count);
+
+/**
+ * @brief 获取当前"连续大面积局刷后强制全刷"的计数阈值（0 = 禁用）。
+ *
+ * @return 当前阈值。
+ */
+uint32_t espaperplay_gui_get_full_force_after(void);
 
 /**
  * @brief 获取 RGB565 主帧缓冲。

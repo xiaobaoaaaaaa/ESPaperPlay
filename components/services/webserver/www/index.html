@@ -355,6 +355,11 @@
                     <input type="number" name="epd_idle_sleep_timeout_s" min="0" max="86400" step="1"
                         placeholder="30">
                 </div>
+                <div class="field">
+                    <label>连续大面积局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
+                    <input type="number" name="gui_full_force_after" min="0" max="255" step="1"
+                        placeholder="5">
+                </div>
                 <div class="actions">
                     <button type="submit" class="primary">保存</button>
                 </div>
@@ -673,6 +678,8 @@
                 $('input[name=clear_ap_password]').checked = false;
                 $('input[name=epd_idle_sleep_timeout_s]').value = d.epd_idle_sleep_timeout_s != null
                     ? d.epd_idle_sleep_timeout_s : '';
+                $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
+                    ? d.gui_full_force_after : '';
             } catch (e) {
                 /* 服务器暂不可达，忽略。 */
             }

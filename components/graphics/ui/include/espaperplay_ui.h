@@ -33,6 +33,15 @@ void espaperplay_ui_demo_show(void);
  */
 void espaperplay_ui_test_show(void);
 
+/**
+ * @brief 展示 LVGL 自带 benchmark 测试屏。
+ *
+ * 连续多场景高速全屏/局部重绘（动画、文字、图形、图像），制造高频脏区
+ * 提交与排队合并，用于在高压下暴露并验证异步刷新链路（快照合并 + worker
+ * 局刷）的竞态问题。须在 espaperplay_gui_lv_start() 之后调用。
+ */
+void espaperplay_ui_benchmark_show(void);
+
 #ifdef __cplusplus
 }
 #endif
