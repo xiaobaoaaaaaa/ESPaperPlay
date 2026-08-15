@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_display.h"
 #include "espaperplay_gui.h"
 
 static const char *TAG = "ESPaperPlay_GUI";
@@ -23,11 +24,15 @@ static const char *TAG = "ESPaperPlay_GUI";
  * 帧缓冲尺寸
  * ==================================================================== */
 
-#define GUI_FB_PIXELS (ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_DISPLAY_HEIGHT) /* 384000 */
-#define GUI_FB_RGB_BYTES (GUI_FB_PIXELS * 2)                                   /* 750KB */
-#define GUI_FB_BW_BYTES (GUI_FB_PIXELS / 8)                                    /* 48000 */
-#define GUI_FB_GRAY4_BYTES (GUI_FB_PIXELS / 4)                                 /* 96000 */
-#define GUI_STRIDE_RGB (ESPAPERPLAY_DISPLAY_WIDTH * 2)                         /* 1600 */
+/* 显示参数（运行时，来自 espaperplay_display；gui_init 时读取） */
+static uint16_t s_disp_w = 0; /*!< 显示区宽度（像素） */
+static uint16_t s_disp_h = 0; /*!< 显示区高度（像素） */
+static uint32_t s_fb_pixels = 0;      /*!< 全屏像素数 w*h */
+static size_t s_fb_rgb_bytes = 0;     /*!< RGB565 主帧字节数 w*h*2 */
+static size_t s_fb_bw_bytes = 0;      /*!< 1bpp 帧字节数 w*h/8 */
+static size_t s_fb_gray4_bytes = 0;   /*!< 2bpp 帧字节数 w*h/4 */
+static size_t s_stride_rgb = 0;       /*!< 主帧行字节数 w*2 */
+static uint32_t s_full_threshold = 0; /*!< 全屏阈值（70% 像素，运行时） */
 
 /* ====================================================================
  * 内部状态
@@ -110,7 +115,7 @@ static void gui_convert_bw(const uint8_t *fb, uint16_t x, uint16_t y, uint16_t w
     const uint16_t row_out = w / 8;
 
     for (uint16_t r = 0; r < h; r++) {
-        const uint8_t *row = fb + (size_t)(y + r) * GUI_STRIDE_RGB + (size_t)x * 2;
+        const uint8_t *row = fb + (size_t)(y + r) * s_stride_rgb + (size_t)x * 2;
         uint8_t *dst = out + (size_t)r * row_out;
         for (uint16_t c = 0; c < row_out; c++) {
             uint8_t byte = 0;
@@ -151,15 +156,15 @@ static inline uint8_t gui_quantize_gray4(int v) {
 }
 
 static void gui_convert_gray4_bayer(const uint8_t *fb, uint8_t *out) {
-    for (size_t i = 0; i < GUI_FB_PIXELS; i += 4) {
+    for (size_t i = 0; i < s_fb_pixels; i += 4) {
         uint8_t byte = 0;
         for (int k = 0; k < 4; k++) {
             const size_t px = i + k;
             const uint8_t L = gui_luma(fb + px * 2);
             int v = L;
             if (L != 0 && L != 255) {
-                v = L + ((int)gui_bayer_threshold((uint16_t)(px % ESPAPERPLAY_DISPLAY_WIDTH),
-                                                  (uint16_t)(px / ESPAPERPLAY_DISPLAY_WIDTH)) -
+                v = L + ((int)gui_bayer_threshold((uint16_t)(px % s_disp_w),
+                                                  (uint16_t)(px / s_disp_w)) -
                          128) /
                             3;
             }
@@ -169,18 +174,22 @@ static void gui_convert_gray4_bayer(const uint8_t *fb, uint8_t *out) {
     }
 }
 
-static void gui_convert_gray4_fs(const uint8_t *fb, uint8_t *out) {
-    static int16_t s_err[2][ESPAPERPLAY_DISPLAY_WIDTH + 2];
-    int16_t (*cur)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[0];
-    int16_t (*nxt)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = &s_err[1];
+/* Floyd-Steinberg 误差缓冲（动态，gui_init 按分辨率分配：2 行 x (w+2)）。 */
+static int16_t *s_fs_err = NULL;
 
-    memset(s_err, 0, sizeof(s_err));
-    for (uint16_t y = 0; y < ESPAPERPLAY_DISPLAY_HEIGHT; y++) {
-        const uint8_t *row = fb + (size_t)y * GUI_STRIDE_RGB;
+static void gui_convert_gray4_fs(const uint8_t *fb, uint8_t *out) {
+    /* 布局：[row] 行内 x 偏移 +1（左右各留 1 列）。 */
+    const size_t stride = (size_t)s_disp_w + 2;
+    int16_t *cur = s_fs_err;
+    int16_t *nxt = s_fs_err + stride;
+
+    memset(s_fs_err, 0, stride * 2 * sizeof(int16_t));
+    for (uint16_t y = 0; y < s_disp_h; y++) {
+        const uint8_t *row = fb + (size_t)y * s_stride_rgb;
         int16_t right = 0;
         uint8_t byte = 0;
-        for (uint16_t x = 0; x < ESPAPERPLAY_DISPLAY_WIDTH; x++) {
-            int v = (int)gui_luma(row + (size_t)x * 2) + right + (*cur)[x];
+        for (uint16_t x = 0; x < s_disp_w; x++) {
+            int v = (int)gui_luma(row + (size_t)x * 2) + right + cur[x + 1];
             if (v < 0) {
                 v = 0;
             } else if (v > 255) {
@@ -189,24 +198,24 @@ static void gui_convert_gray4_fs(const uint8_t *fb, uint8_t *out) {
             const uint8_t q = gui_quantize_gray4(v);
             const int level = (int)(3 - q) * 85;
             const int16_t e = (int16_t)(v - level);
-            (*cur)[x] = 0;
+            cur[x + 1] = 0;
             right = (int16_t)((e * 7) >> 4);
             if (x > 0) {
-                (*nxt)[x - 1] = (int16_t)((*nxt)[x - 1] + ((e * 3) >> 4));
+                nxt[x] = (int16_t)(nxt[x] + ((e * 3) >> 4));
             }
-            (*nxt)[x] = (int16_t)((*nxt)[x] + ((e * 5) >> 4));
-            (*nxt)[x + 1] = (int16_t)((*nxt)[x + 1] + ((e * 1) >> 4));
+            nxt[x + 1] = (int16_t)(nxt[x + 1] + ((e * 5) >> 4));
+            nxt[x + 2] = (int16_t)(nxt[x + 2] + ((e * 1) >> 4));
 
             byte |= (uint8_t)(q << (6 - 2 * (x & 3)));
             if ((x & 3) == 3) {
-                out[(size_t)y * (ESPAPERPLAY_DISPLAY_WIDTH / 4) + (x >> 2)] = byte;
+                out[(size_t)y * (s_disp_w / 4) + (x >> 2)] = byte;
                 byte = 0;
             }
         }
-        int16_t (*tmp)[ESPAPERPLAY_DISPLAY_WIDTH + 2] = cur;
+        int16_t *tmp = cur;
         cur = nxt;
         nxt = tmp;
-        memset(*nxt, 0, sizeof(*nxt));
+        memset(nxt, 0, stride * sizeof(int16_t));
     }
 }
 
@@ -239,13 +248,13 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->stage = stage_gray4;
         op->x = 0;
         op->y = 0;
-        op->w = ESPAPERPLAY_DISPLAY_WIDTH;
-        op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
+        op->w = s_disp_w;
+        op->h = s_disp_h;
         op->large_area = false;
         op->force_full = false;
     } else {
         const uint32_t area = (uint32_t)s_dirty_w * s_dirty_h;
-        const bool large = area >= ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS;
+        const bool large = area >= s_full_threshold;
         const bool do_force =
             large && s_full_force_after > 0 && s_large_partial_count >= s_full_force_after;
 
@@ -254,13 +263,13 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->large_area = large;
         if (do_force) {
             /* 连续大面积局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
-            gui_convert_bw(s_fb_rgb, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h,
                            stage_bw);
             op->force_full = true;
             op->x = 0;
             op->y = 0;
-            op->w = ESPAPERPLAY_DISPLAY_WIDTH;
-            op->h = ESPAPERPLAY_DISPLAY_HEIGHT;
+            op->w = s_disp_w;
+            op->h = s_disp_h;
         } else {
             gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
             op->force_full = false;
@@ -386,7 +395,7 @@ static void gui_worker_task(void *arg) {
 static void gui_test_pixel(uint8_t *fb, uint16_t x, uint16_t y, uint8_t r, uint8_t g, uint8_t b) {
     const uint16_t p =
         (uint16_t)(((uint16_t)(r >> 3) << 11) | ((uint16_t)(g >> 2) << 5) | (b >> 3));
-    uint8_t *px = fb + (size_t)y * GUI_STRIDE_RGB + (size_t)x * 2;
+    uint8_t *px = fb + (size_t)y * s_stride_rgb + (size_t)x * 2;
     px[0] = (uint8_t)(p & 0xFF);
     px[1] = (uint8_t)(p >> 8);
 }
@@ -480,12 +489,12 @@ static void gui_selftest_task(void *arg) {
     {
         int64_t t0;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
                        s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw bayer full convert -> %lld ms", (esp_timer_get_time() - t0) / 1000);
         s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT,
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
                        s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw threshold full convert -> %lld ms",
                  (esp_timer_get_time() - t0) / 1000);
@@ -530,7 +539,7 @@ static void gui_selftest_task(void *arg) {
     espaperplay_gui_set_gray4_dither(ESPAPERPLAY_GUI_GRAY4_DITHER_FS);
 
     /* 8. 模式切换残留：主帧置全白后 show_bw，面板应纯白。 */
-    memset(fb.buffer, 0xFF, GUI_FB_RGB_BYTES);
+    memset(fb.buffer, 0xFF, s_fb_rgb_bytes);
     ret = espaperplay_gui_show_bw();
     ESP_LOGI(TAG, "selftest: show_bw after gray4 queued -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
@@ -567,31 +576,43 @@ esp_err_t espaperplay_gui_init(void) {
         ESP_LOGW(TAG, "already initialized");
         return ESP_OK;
     }
+    /* 分辨率来自运行时显示参数（espaperplay_display），支持不同面板/横竖屏。 */
+    s_disp_w = espaperplay_display_width();
+    s_disp_h = espaperplay_display_height();
+    s_fb_pixels = (uint32_t)s_disp_w * s_disp_h;
+    s_fb_rgb_bytes = (size_t)s_fb_pixels * 2;
+    s_fb_bw_bytes = s_fb_pixels / 8;
+    s_fb_gray4_bytes = s_fb_pixels / 4;
+    s_stride_rgb = (size_t)s_disp_w * 2;
+    s_full_threshold = (uint32_t)s_fb_pixels * ESPAPERPLAY_GUI_FULL_AREA_RATIO / 100;
     if (s_lock == NULL) {
         s_lock = xSemaphoreCreateMutex();
         if (s_lock == NULL) {
             return ESP_ERR_NO_MEM;
         }
     }
-    s_fb_rgb = gui_alloc(GUI_FB_RGB_BYTES);
-    s_stage_a_bw = gui_alloc(GUI_FB_BW_BYTES);
-    s_stage_b_bw = gui_alloc(GUI_FB_BW_BYTES);
-    s_stage_a_gray4 = gui_alloc(GUI_FB_GRAY4_BYTES);
-    s_stage_b_gray4 = gui_alloc(GUI_FB_GRAY4_BYTES);
-    if (s_fb_rgb == NULL || s_stage_a_bw == NULL || s_stage_b_bw == NULL ||
+    s_fs_err = (int16_t *)gui_alloc((size_t)(s_disp_w + 2) * 2 * sizeof(int16_t));
+    s_fb_rgb = gui_alloc(s_fb_rgb_bytes);
+    s_stage_a_bw = gui_alloc(s_fb_bw_bytes);
+    s_stage_b_bw = gui_alloc(s_fb_bw_bytes);
+    s_stage_a_gray4 = gui_alloc(s_fb_gray4_bytes);
+    s_stage_b_gray4 = gui_alloc(s_fb_gray4_bytes);
+    if (s_fs_err == NULL || s_fb_rgb == NULL || s_stage_a_bw == NULL || s_stage_b_bw == NULL ||
         s_stage_a_gray4 == NULL || s_stage_b_gray4 == NULL) {
-        ESP_LOGE(TAG, "alloc failed (rgb=%u bw=%u+%u gray4=%u+%u)", (unsigned)GUI_FB_RGB_BYTES,
-                 (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_GRAY4_BYTES,
-                 (unsigned)GUI_FB_GRAY4_BYTES);
+        ESP_LOGE(TAG, "alloc failed (rgb=%u bw=%u+%u gray4=%u+%u)", (unsigned)s_fb_rgb_bytes,
+                 (unsigned)s_fb_bw_bytes, (unsigned)s_fb_bw_bytes, (unsigned)s_fb_gray4_bytes,
+                 (unsigned)s_fb_gray4_bytes);
+        heap_caps_free(s_fs_err);
         heap_caps_free(s_fb_rgb);
         heap_caps_free(s_stage_a_bw);
         heap_caps_free(s_stage_b_bw);
         heap_caps_free(s_stage_a_gray4);
         heap_caps_free(s_stage_b_gray4);
+        s_fs_err = NULL;
         s_fb_rgb = s_stage_a_bw = s_stage_b_bw = s_stage_a_gray4 = s_stage_b_gray4 = NULL;
         return ESP_ERR_NO_MEM;
     }
-    memset(s_fb_rgb, 0xFF, GUI_FB_RGB_BYTES);
+    memset(s_fb_rgb, 0xFF, s_fb_rgb_bytes);
     s_color = ESPAPERPLAY_GUI_COLOR_BW;
     /* 默认阈值转换：LVGL 抗锯齿字体在字形边缘产生中间灰，Bayer 抖动会把
      * 其点阵化（边缘发糊）；阈值直接切边，文字锐利。照片/图像走 GRAY4
@@ -610,7 +631,7 @@ esp_err_t espaperplay_gui_init(void) {
     }
 
     ESP_LOGI(TAG, "GUI backend ready: rgb %uB + 2x bw %uB + 2x gray4 %uB (%s)",
-             (unsigned)GUI_FB_RGB_BYTES, (unsigned)GUI_FB_BW_BYTES, (unsigned)GUI_FB_GRAY4_BYTES,
+             (unsigned)s_fb_rgb_bytes, (unsigned)s_fb_bw_bytes, (unsigned)s_fb_gray4_bytes,
              s_worker_task != NULL ? "async worker" : "sync fallback");
 
 #if ESPAPERPLAY_GUI_ENABLE_SELFTEST
@@ -694,9 +715,9 @@ esp_err_t espaperplay_gui_get_framebuffer(espaperplay_gui_framebuffer_t *fb) {
         return ESP_ERR_INVALID_STATE;
     }
     fb->buffer = s_fb_rgb;
-    fb->width = ESPAPERPLAY_DISPLAY_WIDTH;
-    fb->height = ESPAPERPLAY_DISPLAY_HEIGHT;
-    fb->stride = GUI_STRIDE_RGB;
+    fb->width = s_disp_w;
+    fb->height = s_disp_h;
+    fb->stride = s_stride_rgb;
     fb->color = s_color;
     return ESP_OK;
 }
@@ -710,19 +731,19 @@ esp_err_t espaperplay_gui_submit_area(uint16_t x, uint16_t y, uint16_t width, ui
     if (width == 0 || height == 0) {
         return ESP_OK;
     }
-    if (x >= ESPAPERPLAY_DISPLAY_WIDTH || y >= ESPAPERPLAY_DISPLAY_HEIGHT) {
+    if (x >= s_disp_w || y >= s_disp_h) {
         return ESP_OK;
     }
-    if ((uint32_t)x + width > ESPAPERPLAY_DISPLAY_WIDTH) {
-        width = ESPAPERPLAY_DISPLAY_WIDTH - x;
+    if ((uint32_t)x + width > s_disp_w) {
+        width = s_disp_w - x;
     }
-    if ((uint32_t)y + height > ESPAPERPLAY_DISPLAY_HEIGHT) {
-        height = ESPAPERPLAY_DISPLAY_HEIGHT - y;
+    if ((uint32_t)y + height > s_disp_h) {
+        height = s_disp_h - y;
     }
     xa = x & (uint16_t)~7u;
     x_end = (uint16_t)((x + width + 7) & ~7u);
-    if (x_end > ESPAPERPLAY_DISPLAY_WIDTH) {
-        x_end = ESPAPERPLAY_DISPLAY_WIDTH;
+    if (x_end > s_disp_w) {
+        x_end = s_disp_w;
     }
     wa = x_end - xa;
 
@@ -854,7 +875,7 @@ esp_err_t espaperplay_gui_show_bw(void) {
     if (ret != ESP_OK) {
         return ret;
     }
-    espaperplay_gui_submit_area(0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT);
+    espaperplay_gui_submit_area(0, 0, s_disp_w, s_disp_h);
     return espaperplay_gui_flush();
 }
 
@@ -863,7 +884,7 @@ esp_err_t espaperplay_gui_show_gray4(void) {
     if (ret != ESP_OK) {
         return ret;
     }
-    espaperplay_gui_submit_area(0, 0, ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT);
+    espaperplay_gui_submit_area(0, 0, s_disp_w, s_disp_h);
     return espaperplay_gui_flush();
 }
 
@@ -871,7 +892,7 @@ esp_err_t espaperplay_gui_clear(void) {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-    memset(s_fb_rgb, 0xFF, GUI_FB_RGB_BYTES);
+    memset(s_fb_rgb, 0xFF, s_fb_rgb_bytes);
     if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }

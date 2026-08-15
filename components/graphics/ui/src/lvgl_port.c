@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_display.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 
@@ -167,19 +168,21 @@ esp_err_t espaperplay_gui_lv_start(void) {
         return ESP_ERR_NO_MEM;
     }
 
-    s_lv_disp = lv_display_create(ESPAPERPLAY_DISPLAY_WIDTH, ESPAPERPLAY_DISPLAY_HEIGHT);
+    const uint16_t disp_w = espaperplay_display_width();
+    const uint16_t disp_h = espaperplay_display_height();
+    s_lv_disp = lv_display_create(disp_w, disp_h);
     if (s_lv_disp == NULL) {
         ESP_LOGE(TAG, "lv_display_create failed");
         return ESP_ERR_NO_MEM;
     }
-    s_lv_buf = espaperplay_lvgl_alloc((size_t)ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_LVGL_BUF_ROWS * 2);
+    s_lv_buf = espaperplay_lvgl_alloc((size_t)disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2);
     if (s_lv_buf == NULL) {
         ESP_LOGE(TAG, "LVGL draw buffer alloc failed (%u bytes)",
-                 (unsigned)(ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
+                 (unsigned)(disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
         return ESP_ERR_NO_MEM;
     }
     lv_display_set_buffers(s_lv_disp, s_lv_buf, NULL,
-                           (uint32_t)ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_LVGL_BUF_ROWS * 2,
+                           (uint32_t)disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(s_lv_disp, espaperplay_lvgl_flush_cb);
     /* 背景由屏幕对象样式控制（UI 页面负责设置；主帧初始也为全白）。 */
@@ -188,8 +191,8 @@ esp_err_t espaperplay_gui_lv_start(void) {
         ESP_LOGE(TAG, "LVGL task create failed");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "LVGL %d.%d.%d started (draw buf %uB, partial mode)",
-             LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
-             (unsigned)(ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
+    ESP_LOGI(TAG, "LVGL %d.%d.%d started (%ux%u, draw buf %uB, partial mode)",
+             LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH, disp_w, disp_h,
+             (unsigned)(disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
     return ESP_OK;
 }

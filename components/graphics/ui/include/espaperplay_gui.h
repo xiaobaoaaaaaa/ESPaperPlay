@@ -22,7 +22,7 @@ extern "C" {
  * @brief GUI 抽象层（RGB565 主帧 + 模式化转换级）。
  *
  * 渲染后端架构：
- *   - 单一 RGB565 主帧缓冲（800x480，750KB，PSRAM）：LVGL / 阅读器统一
+ *   - 单一 RGB565 主帧缓冲（分辨率来自 espaperplay_display，默认 800x480，
  *     渲染目标（后续 LVGL 配 LV_COLOR_DEPTH=16 直接画入）；
  *   - flush 时按当前模式把 RGB 快照转换为 e-paper 帧格式（帧内容冻结）：
  *       · 交互模式（BW）：RGB -> 1bpp，脏区转换 + 局部刷新（~370ms），
@@ -115,15 +115,14 @@ typedef struct {
 #endif
 
 /**
- * @brief 脏区面积达到该像素数时进入"大面积局刷计数"流程。
+ * @brief 大面积局刷计数流程的面积阈值（占屏幕像素百分比，默认 70）。
  *
  * 超过该面积（默认 70% 屏幕）不立即全刷：仍按包围盒执行局部刷新，但
  * 连续达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后，强制一次全像素翻转
  * 全刷（画面闪黑一下），清除局部刷新累积的残影。
  */
-#ifndef ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS
-#define ESPAPERPLAY_GUI_FULL_AREA_THRESHOLD_PIXELS                                                 \
-    (ESPAPERPLAY_DISPLAY_WIDTH * ESPAPERPLAY_DISPLAY_HEIGHT * 7 / 10)
+#ifndef ESPAPERPLAY_GUI_FULL_AREA_RATIO
+#define ESPAPERPLAY_GUI_FULL_AREA_RATIO 70
 #endif
 
 /**
