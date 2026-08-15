@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=5.0'
+  # 官方按键驱动（GPIO / ADC / 矩阵键盘），v4.2.0
+  espressif/button: "^4.2.0"
