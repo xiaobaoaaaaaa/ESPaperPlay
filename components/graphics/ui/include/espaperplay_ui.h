@@ -42,6 +42,53 @@ void espaperplay_ui_test_show(void);
  */
 void espaperplay_ui_benchmark_show(void);
 
+/**
+ * @brief 展示主界面（最基础原型：标题 + 运行时间 + 状态行 + 占位提示）。
+ *
+ * 等价于 espaperplay_ui_page_push(&espaperplay_ui_page_home)。
+ */
+void espaperplay_ui_home_show(void);
+
+/**
+ * @brief 页面描述（进入/退出钩子，均在 LVGL 线程内执行）。
+ *
+ * enter：构建页面内容到当前屏幕（屏幕已由页面栈清空），并创建页面级
+ *       资源（定时器等）；exit：释放页面级资源（删除定时器等），可为 NULL。
+ */
+typedef struct {
+    void (*enter)(void); /*!< 进入页面：构建内容（LVGL 线程内） */
+    void (*exit)(void);  /*!< 退出页面：清理资源（LVGL 线程内，可 NULL） */
+} espaperplay_ui_page_t;
+
+#define ESPAPERPLAY_UI_PAGE_MAX 8 /*!< 页面栈最大深度 */
+
+/**
+ * @brief 压入并进入一个页面（栈管理）。
+ *
+ * 先调用当前页 exit 清理，再清空屏幕并调用新页 enter 构建。全部在
+ * LVGL 线程内执行（内部经 espaperplay_gui_lv_call 投递，同步等待完成）。
+ *
+ * @param page 页面描述（enter 必须非 NULL；调用方须保持有效直到返回）。
+ *
+ * @return ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；栈满返回 ESP_ERR_NO_MEM。
+ */
+esp_err_t espaperplay_ui_page_push(const espaperplay_ui_page_t *page);
+
+/**
+ * @brief 退出当前页并重建上一页（根页面不可弹出）。
+ *
+ * @return ESP_OK；栈中无页面可弹（已是根）返回 ESP_ERR_NOT_FOUND。
+ */
+esp_err_t espaperplay_ui_page_pop(void);
+
+/**
+ * @brief 当前页面栈深度（1 = 仅根页面）。
+ */
+uint8_t espaperplay_ui_page_depth(void);
+
+/** 主界面页面实例（screen_home.c）。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_home;
+
 #ifdef __cplusplus
 }
 #endif
