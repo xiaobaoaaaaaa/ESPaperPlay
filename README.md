@@ -224,6 +224,15 @@ any IP / timezone; only the `nettime` app wires them together. Requires
 `CONFIG_LWIP_SNTP_MAX_SERVERS=3` (multi-server NTP), both preset in
 `sdkconfig.defaults`.
 
+**Query caching** — to avoid repeated API calls, both query services cache
+results in RAM: `netip` keeps a single entry (the device's own public IP) and
+`geoip` keeps the 4 most recent IPs (FIFO eviction). Default TTL is 1 hour;
+hits are served without any network request, and caches are only refreshed
+after expiry or an explicit `espaperplay_netip_cache_clear()` /
+`espaperplay_geoip_cache_clear()`. Adjust with
+`espaperplay_netip_set_cache_ttl_ms()` / `espaperplay_geoip_set_cache_ttl_ms()`
+(0 disables caching).
+
 #### Naming & Logging Conventions
 
 - All public APIs use the `espaperplay_<module>_<action>()` prefix;
@@ -515,6 +524,14 @@ I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），�
 应用负责编排串联。依赖 `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y`（HTTPS）与
 `CONFIG_LWIP_SNTP_MAX_SERVERS=3`（多服务器 NTP），两者已写入
 `sdkconfig.defaults`。
+
+**查询缓存** —— 为避免重复请求，两个查询服务均把结果缓存在内存中：
+`netip` 缓存单条（设备自身公网 IP），`geoip` 缓存最近查询的 4 个 IP
+（满时淘汰最旧）。默认有效期 1 小时，命中时直接返回缓存、不发网络请求，
+仅过期或调用 `espaperplay_netip_cache_clear()` /
+`espaperplay_geoip_cache_clear()` 后强制重新查询；有效期可通过
+`espaperplay_netip_set_cache_ttl_ms()` / `espaperplay_geoip_set_cache_ttl_ms()`
+调整（设为 0 禁用缓存）。
 
 #### 命名与日志规范
 
