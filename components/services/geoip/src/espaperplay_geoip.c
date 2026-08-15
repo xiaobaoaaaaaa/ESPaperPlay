@@ -4,13 +4,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "cJSON.h"
 
@@ -20,6 +24,75 @@ static const char *TAG = "ESPaperPlay_GEOIP";
 
 /** UAPI「IP 查询」接口地址。 */
 #define ESPAPERPLAY_GEOIP_API_URL "https://uapis.cn/api/v1/network/ipinfo"
+
+/* ------------------------------------------------------------------ */
+/* 结果缓存（TTL 内存缓存，按 IP 区分，避免重复请求）                     */
+/* ------------------------------------------------------------------ */
+
+/** 缓存条目：一个 IP 对应一份地理位置信息。 */
+typedef struct {
+    char ip[ESPAPERPLAY_GEOIP_IP_MAX_LEN]; /*!< 查询的 IP */
+    espaperplay_geoip_info_t info;         /*!< 缓存的地理位置信息 */
+    uint64_t ts_ms;                        /*!< 缓存写入时间戳（esp_timer，毫秒） */
+    bool valid;                            /*!< 是否已有有效缓存 */
+} geoip_cache_entry_t;
+
+static geoip_cache_entry_t s_cache[ESPAPERPLAY_GEOIP_CACHE_ENTRIES];          /*!< 查询结果缓存 */
+static uint32_t s_cache_ttl_ms = ESPAPERPLAY_GEOIP_CACHE_TTL_MS;              /*!< 缓存有效期（毫秒），0 表示禁用 */
+static portMUX_TYPE s_cache_lock = portMUX_INITIALIZER_UNLOCKED;              /*!< 缓存访问锁 */
+
+/** 当前时间（毫秒，esp_timer）。 */
+static uint64_t geoip_now_ms(void) {
+    return (uint64_t)(esp_timer_get_time() / 1000);
+}
+
+/** 按 IP 查找未过期缓存；命中时输出信息并返回 true（调用方需持有锁）。 */
+static bool geoip_cache_lookup_locked(const char *ip, espaperplay_geoip_info_t *info) {
+    if (s_cache_ttl_ms == 0) {
+        return false; /* 缓存被禁用 */
+    }
+    for (int i = 0; i < ESPAPERPLAY_GEOIP_CACHE_ENTRIES; i++) {
+        if (s_cache[i].valid && strcmp(s_cache[i].ip, ip) == 0 &&
+            geoip_now_ms() - s_cache[i].ts_ms < s_cache_ttl_ms) {
+            *info = s_cache[i].info;
+            return true;
+        }
+    }
+    return false;
+}
+
+/** 写入缓存：覆盖同 IP 条目，否则用空槽，满时淘汰最旧条目（调用方需持有锁）。 */
+static void geoip_cache_store_locked(const char *ip, const espaperplay_geoip_info_t *info) {
+    if (s_cache_ttl_ms == 0) {
+        return; /* 缓存被禁用 */
+    }
+
+    int slot = -1;
+    uint64_t oldest_ts = UINT64_MAX;
+    for (int i = 0; i < ESPAPERPLAY_GEOIP_CACHE_ENTRIES; i++) {
+        if (s_cache[i].valid && strcmp(s_cache[i].ip, ip) == 0) {
+            slot = i; /* 同 IP：直接覆盖 */
+            break;
+        }
+        if (!s_cache[i].valid) {
+            slot = i; /* 空槽 */
+            break;
+        }
+        if (s_cache[i].ts_ms < oldest_ts) {
+            oldest_ts = s_cache[i].ts_ms;
+            slot = i; /* 最旧条目（FIFO 淘汰备选） */
+        }
+    }
+    if (slot < 0) {
+        return; /* 理论不可达 */
+    }
+
+    strlcpy(s_cache[slot].ip, ip, sizeof(s_cache[slot].ip));
+    s_cache[slot].info = *info;
+    s_cache[slot].ts_ms = geoip_now_ms();
+    s_cache[slot].valid = true;
+    ESP_LOGD(TAG, "cached \"%s\" for %u ms", ip, s_cache_ttl_ms);
+}
 
 /* ------------------------------------------------------------------ */
 /* HTTPS GET 辅助（本组件自包含，不与其他服务共享）                        */
@@ -165,6 +238,15 @@ esp_err_t espaperplay_geoip_query(const char *ip, espaperplay_geoip_info_t *info
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* 缓存命中：TTL 内直接返回，不发网络请求。 */
+    portENTER_CRITICAL(&s_cache_lock);
+    bool hit = geoip_cache_lookup_locked(ip, info);
+    portEXIT_CRITICAL(&s_cache_lock);
+    if (hit) {
+        ESP_LOGD(TAG, "cache hit: %s", ip);
+        return ESP_OK;
+    }
+
     memset(info, 0, sizeof(*info));
 
     /* 优先商业级查询：返回更完整的地理信息（含时区 time_zone）。 */
@@ -192,5 +274,26 @@ esp_err_t espaperplay_geoip_query(const char *ip, espaperplay_geoip_info_t *info
 
     ESP_LOGI(TAG, "ip=%s region=\"%s\" isp=\"%s\" asn=%s tz=\"%s\" (%.4f, %.4f)", info->ip,
              info->region, info->isp, info->asn, info->time_zone, info->latitude, info->longitude);
+
+    /* 查询成功才更新缓存；失败时保留旧缓存。 */
+    portENTER_CRITICAL(&s_cache_lock);
+    geoip_cache_store_locked(ip, info);
+    portEXIT_CRITICAL(&s_cache_lock);
     return ESP_OK;
+}
+
+void espaperplay_geoip_set_cache_ttl_ms(uint32_t ttl_ms) {
+    portENTER_CRITICAL(&s_cache_lock);
+    s_cache_ttl_ms = ttl_ms;
+    portEXIT_CRITICAL(&s_cache_lock);
+    ESP_LOGI(TAG, "cache ttl set to %u ms (%s)", ttl_ms, ttl_ms == 0 ? "disabled" : "enabled");
+}
+
+void espaperplay_geoip_cache_clear(void) {
+    portENTER_CRITICAL(&s_cache_lock);
+    for (int i = 0; i < ESPAPERPLAY_GEOIP_CACHE_ENTRIES; i++) {
+        s_cache[i].valid = false;
+    }
+    portEXIT_CRITICAL(&s_cache_lock);
+    ESP_LOGI(TAG, "cache cleared");
 }
