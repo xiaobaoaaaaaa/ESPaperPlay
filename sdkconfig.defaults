@@ -38,3 +38,6 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 # LVGL 自带 benchmark（压力测试屏：多场景高速重绘暴露局刷竞态）
 CONFIG_LV_BUILD_DEMOS=y
 CONFIG_LV_USE_DEMO_BENCHMARK=y
+# LVGL 内存用 C 标准库 malloc（走 ESP-IDF heap，大块分配自动落 8MB PSRAM）；
+# 不用内置 TLSF 池（仅 64KB，触发 benchmark 的 #warning 且被 -Werror 当错误）
+CONFIG_LV_USE_CLIB_MALLOC=y
