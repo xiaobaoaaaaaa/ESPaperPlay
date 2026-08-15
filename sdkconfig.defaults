@@ -45,3 +45,5 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 # 网络时间（IP 定位 + NTP）：HTTPS 客户端使用 ESP-IDF 内置 CA 证书包校验
 # uapis.cn / NTP 域名证书（netip / geoip 服务依赖）
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# 网络时间：允许同时配置多个 NTP 服务器（clock 服务默认 3 个：阿里云 / cn.pool / pool）
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
