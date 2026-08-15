@@ -147,6 +147,49 @@ the old plane, so residual mid-grays are erased). A self-test
 (`ESPAPERPLAY_GUI_ENABLE_SELFTEST`, off by default) exercises both paths and
 prints conversion and worker timings.
 
+#### Input: Physical Keys & Event Queues
+
+The input service (`components/services/input`) aggregates all human input
+sources (physical keys, touch to come) into a unified event stream consumed
+through `espaperplay_input_get_event()`.
+
+**Physical key** — the on-board **BOOT button** (GPIO0, active low, internal
+pull-up) is driven by the official
+[`espressif/button`](https://components.espressif.com/components/espressif/button)
+component (v4.2.0, managed dependency). Raw driver events are normalized into
+`espaperplay_input_key_action_t`: PRESS_DOWN / PRESS_UP / SINGLE_CLICK /
+DOUBLE_CLICK / LONG_PRESS_START / LONG_PRESS_HOLD / LONG_PRESS_UP (with press
+duration). `LONG_PRESS_HOLD` is throttled to one event per 500 ms — the driver
+default fires every 20 ms, which would flood the event pipeline and make
+`LONG_PRESS_UP` get dropped.
+
+**Dual queues (key / touch isolated)** — internally two physical queues are
+merged by a FreeRTOS Queue Set:
+
+| Queue | Depth | Policy |
+| ----- | ----- | ------ |
+| Key | 16 | `xQueueSendToFront` + evict-oldest when full — key events are never lost |
+| Touch (reserved) | 32 | evict-oldest (keep-newest) when full — queue always holds the latest touch state |
+
+`espaperplay_input_get_event()` polls the key queue first (lowest key latency),
+then blocks on the Queue Set for either queue. Touch will be interrupt-driven
+(GT911 INT wakes a task — I2C cannot run in an ISR — which reads coordinates and
+posts them to the touch queue), so high-rate touch traffic can never crowd out
+key events.
+
+**GUI key dispatch** — a dispatcher task (`espaperplay_ui_key_input_start()`)
+blocks on the input queue and forwards every key event into the LVGL thread,
+where the page stack routes it to the top page's optional `on_key` hook
+(extended `espaperplay_ui_page_t`). Navigation decisions belong to pages:
+
+- Home: single click → push the **Test page**;
+- Test page (partial-refresh stress test + live key-event display): long-press
+  release → pop back to home.
+
+A boot self-test (`ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST`, off by default) injects
+synthetic key events through the real input queue and asserts the page-stack
+response (1→2→1→2), printing `key selftest PASS/FAIL`.
+
 #### Naming & Logging Conventions
 
 - All public APIs use the `espaperplay_<module>_<action>()` prefix;
@@ -224,6 +267,7 @@ GitHub Actions runs `idf.py build` automatically in `.github/workflows/build.yml
 - [ ] **Phase 3**: Low-power power management (sleep / wake-up / power domains)
 - [ ] **Phase 4**: SD card + FATFS file system
 - [ ] **Phase 5**: LVGL UI framework
+  - [x] LVGL render backend + page-stack navigation + physical key input
 - [ ] **Phase 6**: Reader (TXT → EPUB → PDF)
 - [ ] **Phase 7**: Networking & IoT features (optional)
   - [x] Web management console (HTTPS): esp_https_server status & settings
@@ -368,6 +412,43 @@ flush() 只把脏区快照转换后排队，真实刷新由内部 worker 任务�
 （`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换与
 worker 刷新耗时。
 
+#### 输入：物理按键与事件队列
+
+输入服务（`components/services/input`）把人机输入源（物理按键、未来触摸）
+聚合为统一事件流，通过 `espaperplay_input_get_event()` 消费。
+
+**物理按键** —— 板载 **BOOT 键**（GPIO0，按下低电平，内部上拉）由官方
+[`espressif/button`](https://components.espressif.com/components/espressif/button)
+组件（v4.2.0，组件管理器依赖）驱动，原始事件归一化为
+`espaperplay_input_key_action_t`：PRESS_DOWN / PRESS_UP / SINGLE_CLICK /
+DOUBLE_CLICK / LONG_PRESS_START / LONG_PRESS_HOLD / LONG_PRESS_UP（含按压
+时长）。`LONG_PRESS_HOLD` 节流为每 500ms 一个——驱动默认每 20ms 触发一次，
+会洪泛事件管道并导致 LONG_PRESS_UP 漏检。
+
+**双队列（按键 / 触摸隔离）** —— 内部为两个物理队列，经 FreeRTOS Queue Set
+合并消费：
+
+| 队列 | 深度 | 满时策略 |
+| ---- | ---- | -------- |
+| 按键 | 16 | 队首投递 + 挤掉最旧——按键事件永不丢失 |
+| 触摸（预留） | 32 | 丢旧保新——队列永远保留最新触摸状态 |
+
+`espaperplay_input_get_event()` 优先非阻塞查按键队列（按键延迟最低），再
+阻塞等待 Queue Set 中任一队列。触摸将采用中断驱动（GT911 INT 唤醒任务——
+I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），高频触摸流量不会
+挤占按键队列。
+
+**GUI 按键分发** —— 分发任务（`espaperplay_ui_key_input_start()`）阻塞读取
+输入队列，把每个按键事件投递到 LVGL 线程，由页面栈转发给栈顶页面的可选
+`on_key` 钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面：
+
+- 主页：单击 → 进入**测试页**；
+- 测试页（局刷压力测试 + 按键事件实时显示）：长按松开 → 返回主页。
+
+上电自检（`ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST`，默认关闭）通过真实输入队列
+注入合成按键事件，断言页面栈响应（1→2→1→2），输出
+`key selftest PASS/FAIL`。
+
 #### 命名与日志规范
 
 - 所有公开 API 统一使用 `espaperplay_<模块>_<动作>()` 前缀；
@@ -446,6 +527,7 @@ GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
 - [ ] **Phase 3**：低功耗电源管理（sleep / 唤醒 / 电源域）
 - [ ] **Phase 4**：SD 卡 + FATFS 文件系统
 - [ ] **Phase 5**：LVGL 界面框架
+  - [x] LVGL 渲染后端 + 页面栈导航 + 物理按键输入
 - [ ] **Phase 6**：阅读器（TXT → EPUB → PDF）
 - [ ] **Phase 7**：网络与物联网功能（可选）
   - [x] Web 管理控制台（HTTPS）：esp_https_server 状态查看与设置
