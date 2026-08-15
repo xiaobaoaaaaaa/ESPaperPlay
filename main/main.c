@@ -21,6 +21,7 @@
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
+#include "espaperplay_nettime.h"
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
 #include "espaperplay_session.h"
@@ -84,6 +85,9 @@ void app_main(void) {
 
     /* Web 管理服务：查看系统状态、修改系统设置（监听所有网络接口）。 */
     ESP_ERROR_CHECK(espaperplay_webserver_start());
+
+    /* 网络时间：STA 联网后自动执行「公网 IP → 地理位置 → 时区 → NTP 同步」。 */
+    ESP_ERROR_CHECK(espaperplay_nettime_start());
 
     /* 外设模块。 */
     ESP_ERROR_CHECK(espaperplay_storage_mount());
