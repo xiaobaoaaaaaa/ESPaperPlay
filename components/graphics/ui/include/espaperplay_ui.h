@@ -10,6 +10,10 @@
 extern "C" {
 #endif
 
+#include "esp_err.h"
+
+#include "espaperplay_input.h"
+
 /**
  * @file espaperplay_ui.h
  * @brief UI 页面层：构建 LVGL widget 树。
@@ -20,27 +24,17 @@ extern "C" {
  */
 
 /**
- * @brief 展示最小就绪演示屏：白底 + 居中标签。
- */
-void espaperplay_ui_demo_show(void);
-
-/**
- * @brief 展示局部刷新压力测试屏。
+ * @brief 按键输入自检（验收用，默认关闭）。
  *
- * 多区域以不同节奏变化（200ms 小数字快刷 / 进度条 / 2s 大黑块位移触发
- * 大面积刷新），配合 worker 日志验证：异步刷新不阻塞 LVGL（状态行实测
- * 周期稳定）、脏区只刷小窗（worker 日志区域尺寸变化）。
+ * 使能后 espaperplay_ui_key_input_start() 会额外创建自检任务：注入合成
+ * 按键事件（与真实按键走同一条 input 队列 / 分发路径），验证
+ * "input 队列 -> GUI 读取 -> 页面响应"整条链路：单击进入测试页
+ * （页面栈深度 1 -> 2），长按松开返回（2 -> 1），往返后再进入（1 -> 2），
+ * 结果以日志输出（PASS / FAIL）。
  */
-void espaperplay_ui_test_show(void);
-
-/**
- * @brief 展示 LVGL 自带 benchmark 测试屏。
- *
- * 连续多场景高速全屏/局部重绘（动画、文字、图形、图像），制造高频脏区
- * 提交与排队合并，用于在高压下暴露并验证异步刷新链路（快照合并 + worker
- * 局刷）的竞态问题。须在 espaperplay_gui_lv_start() 之后调用。
- */
-void espaperplay_ui_benchmark_show(void);
+#ifndef ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
+#define ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST 0
+#endif
 
 /**
  * @brief 展示主界面（最基础原型：标题 + 运行时间 + 状态行 + 占位提示）。
@@ -50,20 +44,23 @@ void espaperplay_ui_benchmark_show(void);
 void espaperplay_ui_home_show(void);
 
 /**
- * @brief 页面描述（进入/退出钩子，均在 LVGL 线程内执行）。
+ * @brief 页面描述（进入/退出/按键钩子，均在 LVGL 线程内执行）。
  *
  * enter：构建页面内容到当前屏幕（屏幕已由页面栈清空），并创建页面级
- *       资源（定时器等）；exit：释放页面级资源（删除定时器等），可为 NULL。
+ *       资源（定时器等）；exit：释放页面级资源（删除定时器等），可为 NULL；
+ * on_key：页面级按键处理（按键分发任务把按键事件转发给栈顶页面的该钩子，
+ *       页面据此更新自身内容或发起导航），可为 NULL。
  */
 typedef struct {
     void (*enter)(void); /*!< 进入页面：构建内容（LVGL 线程内） */
     void (*exit)(void);  /*!< 退出页面：清理资源（LVGL 线程内，可 NULL） */
+    void (*on_key)(const espaperplay_input_event_t *event); /*!< 按键事件（LVGL 线程内，可 NULL） */
 } espaperplay_ui_page_t;
 
 #define ESPAPERPLAY_UI_PAGE_MAX 8 /*!< 页面栈最大深度 */
 
 /**
- * @brief 压入并进入一个页面（栈管理）。
+ * @brief 压入并进入一个页面（栈管理，跨线程安全）。
  *
  * 先调用当前页 exit 清理，再清空屏幕并调用新页 enter 构建。全部在
  * LVGL 线程内执行（内部经 espaperplay_gui_lv_call 投递，同步等待完成）。
@@ -75,11 +72,54 @@ typedef struct {
 esp_err_t espaperplay_ui_page_push(const espaperplay_ui_page_t *page);
 
 /**
- * @brief 退出当前页并重建上一页（根页面不可弹出）。
+ * @brief 退出当前页并重建上一页（根页面不可弹出，跨线程安全）。
  *
  * @return ESP_OK；栈中无页面可弹（已是根）返回 ESP_ERR_NOT_FOUND。
  */
 esp_err_t espaperplay_ui_page_pop(void);
+
+/**
+ * @brief 压入并进入一个页面（LVGL 线程内直接切换，不做跨线程投递）。
+ *
+ * 供页面钩子 / 按键分发等已在 LVGL 线程内的代码使用：若再调用
+ * espaperplay_ui_page_push() 会经 gui_lv_call 投递并阻塞等待自身，死锁。
+ *
+ * @param page 页面描述（enter 必须非 NULL）。
+ *
+ * @return ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；栈满返回 ESP_ERR_NO_MEM。
+ */
+esp_err_t espaperplay_ui_page_push_lv(const espaperplay_ui_page_t *page);
+
+/**
+ * @brief 退出当前页并重建上一页（LVGL 线程内直接切换，不做跨线程投递）。
+ *
+ * @return ESP_OK；栈中无页面可弹（已是根）返回 ESP_ERR_NOT_FOUND。
+ */
+esp_err_t espaperplay_ui_page_pop_lv(void);
+
+/**
+ * @brief 把按键事件转发给栈顶页面的 on_key 钩子（须在 LVGL 线程内调用）。
+ *
+ * 由按键分发任务调用；栈为空或无钩子时为空操作。
+ *
+ * @param event 按键事件。
+ */
+void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event);
+
+/**
+ * @brief 启动按键分发任务（输入队列 -> LVGL 线程 -> 栈顶页面 on_key）。
+ *
+ * 任务阻塞在 espaperplay_input_get_event() 上，收到按键事件后经
+ * espaperplay_gui_lv_call 投递到 LVGL 线程，由
+ * espaperplay_ui_page_handle_key_lv() 转发给当前页面处理（导航/刷新内容）。
+ * 须在 espaperplay_input_init()、espaperplay_gui_lv_start() 之后调用。
+ *
+ * ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST=1 时，任务启动后先执行按键链路自检
+ * （注入合成事件并断言页面栈响应），结果以日志输出。
+ *
+ * @return ESP_OK；任务创建失败返回 ESP_ERR_NO_MEM。
+ */
+esp_err_t espaperplay_ui_key_input_start(void);
 
 /**
  * @brief 当前页面栈深度（1 = 仅根页面）。
@@ -88,6 +128,9 @@ uint8_t espaperplay_ui_page_depth(void);
 
 /** 主界面页面实例（screen_home.c）。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
+
+/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键事件显示，长按返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 
 #ifdef __cplusplus
 }

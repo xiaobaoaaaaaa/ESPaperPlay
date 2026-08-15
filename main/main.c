@@ -101,6 +101,7 @@ void app_main(void) {
     espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
     ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
     ESP_ERROR_CHECK(espaperplay_ui_page_push(&espaperplay_ui_page_home)); /* 主界面入栈 */
+    ESP_ERROR_CHECK(espaperplay_ui_key_input_start()); /* 按键分发：input 队列 -> GUI 页面 */
     ESP_ERROR_CHECK(espaperplay_reader_init());
 
     /* 创建任务。 */
