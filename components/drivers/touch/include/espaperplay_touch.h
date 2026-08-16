@@ -102,6 +102,18 @@ esp_err_t espaperplay_touch_register_event_cb(espaperplay_touch_event_cb_t cb);
 esp_err_t espaperplay_touch_read(espaperplay_touch_point_t *points, uint8_t max_points,
                                  uint8_t *count);
 
+/**
+ * @brief 打印触摸控制器诊断信息（调试用）。
+ *
+ * 读取并打印：INT 引脚电平、缓冲状态寄存器 0x814E（只读不消费，
+ * 不影响正常读取路径）与配置刷新标志 0x8100。用于区分「芯片未扫描
+ * 报点」（0x814E 一直无数据）与「芯片在报点但 INT 线异常」（0x814E
+ * 有数据但 INT 电平无变化）。
+ *
+ * @return 成功返回 ESP_OK；驱动未初始化返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_touch_diag(void);
+
 #ifdef __cplusplus
 }
 #endif
