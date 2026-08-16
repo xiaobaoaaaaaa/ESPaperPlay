@@ -22,10 +22,13 @@ static const char *TAG = "ESPaperPlay_UI";
  * 数据流：GT911 驱动 -> input 触摸队列 -> 输入分发任务 -> 本模块共享
  * 状态（任意线程写入，临界区保护）-> LVGL read_cb（LVGL 线程周期读取）。
  *
- * 坐标：触摸驱动上报面板物理坐标（800x480）；LVGL 控件位于逻辑坐标系
- * （test 页双击旋转后逻辑分辨率变为 480x800）。read_cb 与页面均通过
- * espaperplay_ui_touch_map_to_lv() 换算，该映射与 lvgl_port.c flush
- * 回调的旋转映射互为逆变换，旋转后触摸仍与显示内容对齐。
+ * 坐标约定（与 LVGL 官方旋转方案一致）：
+ *   - 触摸驱动上报面板物理坐标（800x480），read_cb 原样上报；
+ *   - LVGL 内核 indev_pointer_proc 会按显示旋转自动调用
+ *     lv_display_rotate_point() 换算为逻辑坐标，因此 read_cb 严禁再
+ *     手动换算（否则双重旋转，控件命中错位）；
+ *   - 页面直接绘制轨迹等场景通过 espaperplay_ui_touch_map_to_lv()
+ *     复用同一个 LVGL 旋转约定。
  */
 
 /** 丢帧兜底：超过该时间没有新触摸帧（含释放帧）则自动置释放。 */
@@ -44,41 +47,21 @@ static ui_touch_state_t s_state = {0};
 static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static lv_indev_t *s_indev = NULL;
 
-/** 面板物理坐标 -> LVGL 逻辑坐标（LVGL 线程内，使用默认显示）。 */
-static void ui_touch_map_inner(uint16_t x, uint16_t y, lv_point_t *out) {
-    lv_display_t *disp = lv_display_get_default();
-    const lv_display_rotation_t rotation = lv_display_get_rotation(disp);
-    const int32_t lw = lv_display_get_horizontal_resolution(disp); /* 逻辑宽 */
-    const int32_t lh = lv_display_get_vertical_resolution(disp);   /* 逻辑高 */
-
-    switch (rotation) {
-    case LV_DISPLAY_ROTATION_90: /* 物理 (x, y) -> 逻辑 (y, lh-1-x) */
-        out->x = (int32_t)y;
-        out->y = lh - 1 - (int32_t)x;
-        break;
-    case LV_DISPLAY_ROTATION_180: /* 物理 (x, y) -> 逻辑 (lw-1-x, lh-1-y) */
-        out->x = lw - 1 - (int32_t)x;
-        out->y = lh - 1 - (int32_t)y;
-        break;
-    case LV_DISPLAY_ROTATION_270: /* 物理 (x, y) -> 逻辑 (lw-1-y, x) */
-        out->x = lw - 1 - (int32_t)y;
-        out->y = (int32_t)x;
-        break;
-    case LV_DISPLAY_ROTATION_0:
-    default:
-        out->x = (int32_t)x;
-        out->y = (int32_t)y;
-        break;
-    }
+/** 面板物理坐标 -> LVGL 逻辑坐标：复用 LVGL 内核对 indev 坐标的旋转约定。 */
+void espaperplay_ui_touch_map_to_lv(uint16_t x, uint16_t y, lv_point_t *out) {
+    out->x = (int32_t)x;
+    out->y = (int32_t)y;
+    lv_display_rotate_point(lv_display_get_default(), out);
 }
 
 /**
- * @brief LVGL 指针 read_cb：返回当前按压状态与逻辑坐标。
+ * @brief LVGL 指针 read_cb：返回当前按压状态与面板物理坐标。
  *
  * LVGL 以 read_timer 周期（LV_DEF_REFR_PERIOD）调用；按下期间持续返回
- * PRESSED 才能产生点击/按压语义。释放帧到达时 update() 立即置释放；
- * 若释放帧被遗漏（中断沿丢失等），超过 UI_TOUCH_AUTO_RELEASE_MS 无新
- * 帧则兜底自动释放。
+ * PRESSED 才能产生点击/按压语义。坐标必须为面板物理坐标：LVGL 内核
+ * （indev_pointer_proc）会按显示旋转自动换算为逻辑坐标。释放帧到达时
+ * update() 立即置释放；若释放帧被遗漏（中断沿丢失等），超过
+ * UI_TOUCH_AUTO_RELEASE_MS 无新帧则兜底自动释放。
  */
 static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     (void)indev;
@@ -100,7 +83,8 @@ static void ui_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
 
     if (pressed) {
         data->state = LV_INDEV_STATE_PRESSED;
-        ui_touch_map_inner(x, y, &data->point);
+        data->point.x = (int32_t)x;
+        data->point.y = (int32_t)y;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
@@ -133,8 +117,4 @@ void espaperplay_ui_touch_update(const espaperplay_input_event_t *event) {
         s_state.ts_ms = lv_tick_get();
     }
     portEXIT_CRITICAL(&s_state_lock);
-}
-
-void espaperplay_ui_touch_map_to_lv(uint16_t x, uint16_t y, lv_point_t *out) {
-    ui_touch_map_inner(x, y, out);
 }

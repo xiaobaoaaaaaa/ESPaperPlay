@@ -331,15 +331,18 @@ static void test_on_key(const espaperplay_input_event_t *event) {
     lv_label_set_text_fmt(s_key_count_label, "keys: %u", (unsigned)s_key_count);
 
     if (event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_DOUBLE_CLICK) {
-        /* 双击：屏幕顺时针旋转 90 度（0 -> 90 -> 180 -> 270 -> 0 循环）。
-         * LVGL 只交换逻辑分辨率（如 800x480 -> 480x800）并整屏失效重绘，
-         * 像素旋转由移植层 flush 回调（lvgl_port.c）完成。 */
+        /* 双击：屏幕内容顺时针旋转 90 度（0 -> 90 -> 180 -> 270 -> 0 循环）。
+         * 实测以 LV_DISPLAY_ROTATION_90 步进时内容为顺时针（LVGL 语义：
+         * 模拟"设备顺时针转"，故内容相对面板逆时针）；实际旋转由移植层
+         * flush 回调（lv_display_rotate_area + lv_draw_sw_rotate）完成，
+         * indev/页面坐标由 LVGL 内核按同一约定旋转，渲染、控件命中与
+         * 轨迹绘制三处坐标完全一致。 */
         lv_display_t *disp = lv_display_get_default();
         if (disp != NULL) {
             const lv_display_rotation_t next =
                 (lv_display_rotation_t)((lv_display_get_rotation(disp) + 1) % 4);
             lv_display_set_rotation(disp, next);
-            ESP_LOGI(TAG, "test: double click -> rotate cw %d deg", (int)next * 90);
+            ESP_LOGI(TAG, "test: double click -> rotate content 90 cw (rot %d)", (int)next);
         }
     }
 

@@ -37,6 +37,14 @@ static const char *TAG = "ESPaperPlay_LVGL";
  *     周期末触发一次异步刷新（worker 执行真实面板刷新，本任务不阻塞）；
  *   - lv_timer_handler 渲染任务循环。
  * UI 页面（widget 树）不在此文件，见 src/screens/（espaperplay_ui.h）。
+ *
+ * 屏幕旋转按 LVGL 官方方案在 flush 回调内完成（《Rotation | LVGL Open》
+ * 文档）：lv_display_set_rotation 只交换逻辑分辨率，实际旋转在 flush 内
+ * 逐像素直接写入主帧（无额外旋转暂存），映射公式与 LVGL 内核的 indev
+ * 坐标旋转（lv_display_rotate_point）互为逆变换，物理脏区由
+ * lv_display_rotate_area() 换算。indev 坐标由 LVGL 内核自动旋转
+ * （indev_pointer_proc 调用 lv_display_rotate_point），因此 read_cb 必须
+ * 上报面板物理坐标，不得再手动换算。
  */
 
 #define ESPAPERPLAY_LVGL_BUF_ROWS 60 /* LVGL 绘制暂存行数（1/8 屏），渲染按带分块 */
@@ -74,81 +82,65 @@ static uint8_t *espaperplay_lvgl_alloc(size_t bytes) {
  * （异步排队，worker 执行真实面板刷新——LVGL 任务不被屏幕刷新阻塞）。
  * 立即 flush_ready 放行，无需等待 e-paper 更新完成。
  *
- * 屏幕旋转（lv_display_set_rotation，test 页双击触发）：本移植层未启用
- * LVGL 矩阵旋转（PARTIAL 渲染模式不支持），lv_display_set_rotation 只交换
- * 逻辑分辨率（如 800x480 -> 480x800）并整屏失效，flush 回调收到的仍是
- * 「逻辑坐标 + 未旋转像素」；此处把该区域旋转拷贝进物理主帧（分辨率与
- * EPD 面板一致，800x480）并提交物理坐标脏区，EPD 驱动无需感知旋转。
+ * 屏幕旋转（lv_display_set_rotation，test 页双击触发）：逐像素直接旋入
+ * 主帧，无需额外旋转暂存。像素映射采用 LVGL 内核的 indev 坐标旋转约定
+ * （lv_display_rotate_point 的逆变换：ROT_90 = 设备顺时针 90 度），与
+ * 内核自动旋转触摸坐标的公式、物理脏区换算（lv_display_rotate_area）
+ * 完全一致——渲染、控件命中、页面轨迹三处坐标统一。
  */
 static void espaperplay_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
-    const uint16_t x = (uint16_t)area->x1;
-    const uint16_t y = (uint16_t)area->y1;
     const uint16_t w = (uint16_t)(area->x2 - area->x1 + 1);
     const uint16_t h = (uint16_t)(area->y2 - area->y1 + 1);
 
     const lv_display_rotation_t rotation = lv_display_get_rotation(disp);
     if (rotation == LV_DISPLAY_ROTATION_0) {
         /* LVGL RGB565（LV_COLOR_16_SWAP=0，小端）与主帧格式一致，逐行拷贝。 */
+        const uint16_t x = (uint16_t)area->x1;
+        const uint16_t y = (uint16_t)area->y1;
         for (uint16_t row = 0; row < h; row++) {
             memcpy(s_lv_fb.buffer + (size_t)(y + row) * s_lv_fb.stride + (size_t)x * 2,
                    px_map + (size_t)row * w * 2, (size_t)w * 2);
         }
         espaperplay_gui_submit_area(x, y, w, h);
     } else {
-        /* 旋转拷贝：逻辑像素 (lx, ly) = (x + col, y + row) 映射到物理主帧
-         * （W x H = 800x480）坐标。90° 顺时针 = 顺时针旋转屏幕 90 度
-         * （逻辑顶部 -> 物理右缘）；180 / 270 为后续继续双击的累积状态。 */
-        const int32_t lw = lv_display_get_horizontal_resolution(disp);
-        const int32_t lh = lv_display_get_vertical_resolution(disp);
+        /* 逻辑脏区 -> 物理脏区（与 LVGL 内核 indev 旋转共用同一约定）。 */
+        lv_area_t rotated_area = *area;
+        lv_display_rotate_area(disp, &rotated_area);
+
+        /* 逐像素旋转写入主帧：逻辑 (lx, ly) -> 物理 (px, py)，公式为
+         * lv_display_rotate_point 的逆变换（hor/ver 为面板物理分辨率）。 */
+        const int32_t hor = lv_display_get_original_horizontal_resolution(disp);
+        const int32_t ver = lv_display_get_original_vertical_resolution(disp);
         const uint16_t *src = (const uint16_t *)px_map;
         uint16_t *dst = (uint16_t *)s_lv_fb.buffer;
         const uint32_t dst_stride_px = s_lv_fb.stride / 2;
 
         for (uint16_t row = 0; row < h; row++) {
             for (uint16_t col = 0; col < w; col++) {
-                const uint16_t px = src[(size_t)row * w + col];
-                int32_t dx, dy;
+                const int32_t lx = area->x1 + col;
+                const int32_t ly = area->y1 + row;
+                int32_t px, py;
                 switch (rotation) {
-                case LV_DISPLAY_ROTATION_90: /* 顺时针 90°：(lx, ly) -> (lh-1-ly, lx) */
-                    dx = lh - 1 - (y + row);
-                    dy = x + col;
+                case LV_DISPLAY_ROTATION_90: /* 设备顺时针 90° */
+                    px = ly;
+                    py = ver - 1 - lx;
                     break;
-                case LV_DISPLAY_ROTATION_180: /* 180°：(lx, ly) -> (lw-1-lx, lh-1-ly) */
-                    dx = lw - 1 - (x + col);
-                    dy = lh - 1 - (y + row);
+                case LV_DISPLAY_ROTATION_180:
+                    px = hor - 1 - lx;
+                    py = ver - 1 - ly;
                     break;
-                default: /* LV_DISPLAY_ROTATION_270（逆时针 90°）：(lx, ly) -> (ly, lw-1-lx) */
-                    dx = y + row;
-                    dy = lw - 1 - (x + col);
+                default: /* LV_DISPLAY_ROTATION_270（设备逆时针 90°） */
+                    px = hor - 1 - ly;
+                    py = lx;
                     break;
                 }
-                dst[(size_t)dy * dst_stride_px + dx] = px;
+                dst[(size_t)py * dst_stride_px + px] = src[(size_t)row * w + col];
             }
         }
 
-        /* 物理坐标脏区：旋转后区域的包围盒（宽高互换，位置按映射公式换算）。 */
-        uint16_t sx, sy, sw, sh;
-        switch (rotation) {
-        case LV_DISPLAY_ROTATION_90:
-            sx = (uint16_t)(lh - y - h);
-            sy = x;
-            sw = h;
-            sh = w;
-            break;
-        case LV_DISPLAY_ROTATION_180:
-            sx = (uint16_t)(lw - x - w);
-            sy = (uint16_t)(lh - y - h);
-            sw = w;
-            sh = h;
-            break;
-        default: /* LV_DISPLAY_ROTATION_270 */
-            sx = y;
-            sy = (uint16_t)(lw - x - w);
-            sw = h;
-            sh = w;
-            break;
-        }
-        espaperplay_gui_submit_area(sx, sy, sw, sh);
+        espaperplay_gui_submit_area((uint16_t)rotated_area.x1, (uint16_t)rotated_area.y1,
+                                    (uint16_t)lv_area_get_width(&rotated_area),
+                                    (uint16_t)lv_area_get_height(&rotated_area));
     }
 
     if (lv_display_flush_is_last(disp)) {

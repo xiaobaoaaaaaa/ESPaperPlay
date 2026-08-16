@@ -27,11 +27,13 @@ extern "C" {
  *     注册 read_cb（由 LVGL 周期调用读取按压状态与坐标）；
  *   - espaperplay_ui_touch_update() 由输入分发任务调用（任意线程，
  *     内部临界区保护），把最新触摸帧写入共享状态；
- *   - read_cb 把面板物理坐标换算为 LVGL 逻辑坐标（感知屏幕旋转，
- *     与 lvgl_port.c flush 回调的旋转映射互为逆变换）。
+ *   - read_cb 上报**面板物理坐标**：LVGL 内核（indev_pointer_proc）会
+ *     按显示旋转自动调用 lv_display_rotate_point() 换算为逻辑坐标，
+ *     read_cb 严禁再手动换算（否则双重旋转导致控件命中错位）。
  *
  * 这样 LVGL 的按钮/滑块等控件即可响应触摸；页面级触摸展示
- * （坐标/点数等）仍走页面 on_touch 钩子（见 espaperplay_ui.h）。
+ * （坐标/点数等）仍走页面 on_touch 钩子（见 espaperplay_ui.h），页面
+ * 直接绘制时用 espaperplay_ui_touch_map_to_lv() 复用同一旋转约定。
  */
 
 /**
@@ -55,10 +57,11 @@ esp_err_t espaperplay_ui_touch_init(void);
 void espaperplay_ui_touch_update(const espaperplay_input_event_t *event);
 
 /**
- * @brief 把面板物理坐标换算为 LVGL 逻辑坐标（感知屏幕旋转，LVGL 线程内调用）。
+ * @brief 把面板物理坐标换算为 LVGL 逻辑坐标（LVGL 线程内调用）。
  *
- * 与 lvgl_port.c flush 回调中的旋转映射互为逆变换：逻辑坐标是
- * lv_display_get_rotation() 交换分辨率后的坐标系，控件定位使用该坐标。
+ * 直接复用 LVGL 内核的 indev 坐标旋转（lv_display_rotate_point），与
+ * flush 回调使用的 lv_display_rotate_area 属同一旋转约定，供页面把
+ * 触摸事件坐标绘制到逻辑坐标系（如测试页轨迹画板）。
  *
  * @param[in]  x   面板物理 X（0..物理宽-1）。
  * @param[in]  y   面板物理 Y（0..物理高-1）。
