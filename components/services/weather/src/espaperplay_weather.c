@@ -16,8 +16,10 @@
 #include "freertos/task.h"
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 
 #include "cJSON.h"
@@ -385,11 +387,16 @@ static void weather_log_body_preview(const char *body, size_t len) {
     ESP_LOGW(TAG, "response body preview (%u bytes): \"%s\"", (unsigned)len, buf);
 }
 
+/** 瞬时连接失败的最大重试次数（网络抖动 / LWIP 连接池暂满时自愈重试）。 */
+#define WEATHER_HTTP_MAX_RETRIES 2
+
 /**
  * @brief 发起一次携带 API Key 的 HTTPS GET 请求并返回完整响应体。
  *
  * 使用 ESP-IDF 内置 CA 证书包（esp_crt_bundle）校验服务器证书；API Key
- * 通过 X-QW-Api-Key 请求头传递。
+ * 通过 X-QW-Api-Key 请求头传递。瞬时连接失败（connect 被拒 / 连接被对端
+ * 关闭 / 超时）自动重试 WEATHER_HTTP_MAX_RETRIES 次（退避 300/600ms），
+ * 用于自愈 LWIP 连接池暂满（TIME_WAIT 堆积）等场景。
  *
  * @param url     请求地址（非空）。
  * @param api_key API Key（非空）。
@@ -400,65 +407,83 @@ static void weather_log_body_preview(const char *body, size_t len) {
  */
 static esp_err_t weather_http_get(const char *url, const char *api_key, size_t max_len,
                                   char **out_body) {
-    weather_resp_t resp = {0};
-    resp.max = max_len;
+    for (int attempt = 0;; attempt++) {
+        weather_resp_t resp = {0};
+        resp.max = max_len;
 
-    esp_http_client_config_t cfg = {
-        .url = url,
-        .method = HTTP_METHOD_GET,
-        .timeout_ms = ESPAPERPLAY_WEATHER_HTTP_TIMEOUT_MS,
-        .disable_auto_redirect = true,
-        .event_handler = weather_http_event_handler,
-        .user_data = &resp,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
+        esp_http_client_config_t cfg = {
+            .url = url,
+            .method = HTTP_METHOD_GET,
+            .timeout_ms = ESPAPERPLAY_WEATHER_HTTP_TIMEOUT_MS,
+            .disable_auto_redirect = true,
+            .event_handler = weather_http_event_handler,
+            .user_data = &resp,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+        };
 
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client == NULL) {
-        ESP_LOGE(TAG, "failed to init http client");
-        return ESP_ERR_NO_MEM;
-    }
-    esp_http_client_set_header(client, "X-QW-Api-Key", api_key);
-    /* 明确要求不压缩：esp_http_client 不解压 gzip，防止服务端按
-     * Accept-Encoding 返回压缩体导致 JSON 解析失败。 */
-    esp_http_client_set_header(client, "Accept-Encoding", "identity");
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        if (client == NULL) {
+            ESP_LOGE(TAG, "failed to init http client");
+            return ESP_ERR_NO_MEM;
+        }
+        esp_http_client_set_header(client, "X-QW-Api-Key", api_key);
+        /* 明确要求不压缩：esp_http_client 不解压 gzip，防止服务端按
+         * Accept-Encoding 返回压缩体导致 JSON 解析失败。 */
+        esp_http_client_set_header(client, "Accept-Encoding", "identity");
 
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
+        esp_err_t err = esp_http_client_perform(client);
+        int status = esp_http_client_get_status_code(client);
+        esp_http_client_cleanup(client);
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "http request failed: %s", esp_err_to_name(err));
-        free(resp.data);
-        return err;
-    }
-    if (status != 200) {
-        ESP_LOGE(TAG, "unexpected http status: %d", status);
-        free(resp.data);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-    if (resp.data == NULL || resp.len == 0) {
-        ESP_LOGE(TAG, "empty response body");
-        free(resp.data);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
+        /* 瞬时连接失败：重试（最多 WEATHER_HTTP_MAX_RETRIES 次，指数退避）。 */
+        const bool transient = (err == ESP_ERR_HTTP_CONNECT || err == ESP_ERR_HTTP_CONNECTION_CLOSED ||
+                                err == ESP_ERR_TIMEOUT);
+        if (transient && attempt < WEATHER_HTTP_MAX_RETRIES) {
+            ESP_LOGW(TAG, "http request failed (%s), retrying %d/%d",
+                     esp_err_to_name(err), attempt + 1, WEATHER_HTTP_MAX_RETRIES);
+            vTaskDelay(pdMS_TO_TICKS(300u << attempt));
+            free(resp.data);
+            continue;
+        }
 
-    /* 和风天气 API 默认 gzip 压缩：检测魔数并解压（esp_http_client 不自动解压）。 */
-    if (resp.len >= 2 && (uint8_t)resp.data[0] == WEATHER_GZIP_MAGIC_1 &&
-        (uint8_t)resp.data[1] == WEATHER_GZIP_MAGIC_2) {
-        ESP_LOGD(TAG, "response is gzip (%u bytes), inflating", (unsigned)resp.len);
-        size_t plain_len = 0;
-        char *plain = weather_inflate(resp.data, resp.len, max_len, &plain_len);
-        free(resp.data);
-        if (plain == NULL) {
+        if (err != ESP_OK) {
+            /* 输出内存诊断：区分内部 RAM 不足（TLS 缓冲分配失败）与网络问题。 */
+            ESP_LOGE(TAG,
+                     "http request failed: %s (heap internal free=%u largest=%u, total free=%u)",
+                     esp_err_to_name(err), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                     (unsigned)esp_get_free_heap_size());
+            free(resp.data);
+            return err;
+        }
+        if (status != 200) {
+            ESP_LOGE(TAG, "unexpected http status: %d", status);
+            free(resp.data);
             return ESP_ERR_INVALID_RESPONSE;
         }
-        resp.data = plain;
-        resp.len = plain_len;
-    }
+        if (resp.data == NULL || resp.len == 0) {
+            ESP_LOGE(TAG, "empty response body");
+            free(resp.data);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
 
-    *out_body = resp.data;
-    return ESP_OK;
+        /* 和风天气 API 默认 gzip 压缩：检测魔数并解压（esp_http_client 不自动解压）。 */
+        if (resp.len >= 2 && (uint8_t)resp.data[0] == WEATHER_GZIP_MAGIC_1 &&
+            (uint8_t)resp.data[1] == WEATHER_GZIP_MAGIC_2) {
+            ESP_LOGD(TAG, "response is gzip (%u bytes), inflating", (unsigned)resp.len);
+            size_t plain_len = 0;
+            char *plain = weather_inflate(resp.data, resp.len, max_len, &plain_len);
+            free(resp.data);
+            if (plain == NULL) {
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+            resp.data = plain;
+            resp.len = plain_len;
+        }
+
+        *out_body = resp.data;
+        return ESP_OK;
+    }
 }
 
 /* ------------------------------------------------------------------ */

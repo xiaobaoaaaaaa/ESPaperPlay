@@ -45,3 +45,10 @@ CONFIG_LV_USE_CLIB_MALLOC=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 # 网络时间：允许同时配置多个 NTP 服务器（clock 服务默认 3 个：阿里云 / cn.pool / pool）
 CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# LWIP 连接资源：天气服务每次请求都新建 TLS 连接，关闭后进入 TIME_WAIT
+# 暂占 PCB / 套接字（默认 MAX_SOCKETS=10、MAX_ACTIVE_TCP=16 在 Web 轮询 +
+# 快速连续刷新时会耗尽导致 connect 失败，表现为偶发 ESP_ERR_HTTP_CONNECT），
+# 适当放大池容量（内存开销仅数 KB）。
+CONFIG_LWIP_MAX_SOCKETS=20
+CONFIG_LWIP_MAX_ACTIVE_TCP=32
