@@ -24,7 +24,7 @@ dependencies:
       type: service
     version: 1.7.19~2
   espressif/cmake_utilities:
-    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
+    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
     - name: idf
       require: private
@@ -32,7 +32,53 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.1
+    version: 0.5.3
+  espressif/esp_lv_fs:
+    component_hash: 66896007884b817df34c964f9a114fff538ee2674e99fee7159162498b93f94b
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: espressif/esp_mmap_assets
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.2'
+    - name: idf
+      require: private
+      version: '>=4.4'
+    - name: lvgl/lvgl
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=8,<10'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.1
+  espressif/esp_mmap_assets:
+    component_hash: 91d785326b03db15e2f7f1314d8c976d38f21aa5759b570dcbbc89bcf247fd27
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
+  espressif/freetype:
+    component_hash: 381eab0d52cbfadbdde4e7a80c1196a0a22b1a0bde4830b1201b1ae6e0fd8c90
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.14.3
   espressif/zlib:
     component_hash: 64ea2fd6754c5a05951f1ddb312ac835cd782e68cb5bd9dfcd1c3a107c8fbfbc
     dependencies:
@@ -57,9 +103,12 @@ dependencies:
 direct_dependencies:
 - espressif/button
 - espressif/cjson
+- espressif/esp_lv_fs
+- espressif/esp_mmap_assets
+- espressif/freetype
 - espressif/zlib
 - idf
 - lvgl/lvgl
-manifest_hash: 2615794902201eba9b93e17c21f243ef0bbaa424b1c0cd9a1b62db6415d4e81c
+manifest_hash: 2b8ca72225dcfcc73a794d5bd62cca9e79c19dbbbc22bc903d79cb7b46790e3c
 target: esp32s3
 version: 2.0.0

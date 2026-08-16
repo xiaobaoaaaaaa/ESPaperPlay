@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h" /* xTaskCreateWithCaps（PSRAM 任务栈） */
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -26,6 +27,25 @@
 #include "lvgl.h"
 
 static const char *TAG = "ESPaperPlay_LVGL";
+
+/** LVGL 日志回调：默认不注册则 LVGL 内部警告/错误全部静默
+ * （如 FreeType 的 FT_ERROR_MSG 错误详情），接入 ESP-IDF 日志便于排查。 */
+static void espaperplay_lvgl_log_cb(lv_log_level_t level, const char *buf) {
+    switch (level) {
+    case LV_LOG_LEVEL_ERROR:
+        ESP_LOGE(TAG, "LVGL: %s", buf);
+        break;
+    case LV_LOG_LEVEL_WARN:
+        ESP_LOGW(TAG, "LVGL: %s", buf);
+        break;
+    case LV_LOG_LEVEL_INFO:
+        ESP_LOGI(TAG, "LVGL: %s", buf);
+        break;
+    default:
+        ESP_LOGD(TAG, "LVGL: %s", buf);
+        break;
+    }
+}
 
 /* ====================================================================
  * LVGL 移植层：把 LVGL 渲染桥接到渲染后端（espaperplay_gui）
@@ -216,6 +236,8 @@ esp_err_t espaperplay_gui_lv_start(void) {
     }
 
     lv_init();
+    /* LVGL 日志接入 ESP-IDF 日志（否则 LVGL/FreeType 内部错误不可见）。 */
+    lv_log_register_print_cb(espaperplay_lvgl_log_cb);
     /* LVGL 不自动获取系统时钟：必须注册 tick 源（esp_timer），否则 lv_tick_get()
      * 恒为 0，定时器全部"立即到期"且行为异常（曾导致空转触发任务看门狗）。 */
     lv_tick_set_cb(espaperplay_lvgl_tick_ms);
@@ -250,7 +272,14 @@ esp_err_t espaperplay_gui_lv_start(void) {
      * 队列 -> 分发任务 -> indev 状态，见 lvgl_touch.c）。 */
     ESP_RETURN_ON_ERROR(espaperplay_ui_touch_init(), TAG, "touch pointer indev init failed");
 
-    if (xTaskCreate(espaperplay_lvgl_task, "gui_lvgl", 8192, NULL, 5, NULL) != pdPASS) {
+    /* 渲染任务栈：LVGL 单线程渲染模式（LV_OS_NONE）下，FreeType 字形栅格化
+     * （smooth 渲染器）在本任务栈上执行，8KB 会栈溢出（曾实测 gui_lvgl 溢出），
+     * 需 >=32KB（与 LVGL 对 draw 线程的官方要求一致）。
+     * 栈放 PSRAM：32KB 内部 RAM 分配会失败（WiFi/Web 已占大量内部堆），
+     * PSRAM 栈是官方支持做法（esp_lvgl_adapter 的 LVGL_THREAD_STACK_IN_PSRAM）。 */
+    static TaskHandle_t s_lvgl_task = NULL;
+    if (xTaskCreateWithCaps(espaperplay_lvgl_task, "gui_lvgl", 32768, NULL, 5,
+                            &s_lvgl_task, MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "LVGL task create failed");
         return ESP_ERR_NO_MEM;
     }

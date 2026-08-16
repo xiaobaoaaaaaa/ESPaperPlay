@@ -55,6 +55,7 @@ ESPaperPlay
     │   ├── wifi/          # WiFi service: AP / STA networking per system config
     │   └── webserver/     # Web console: view status & change settings (esp_https_server)
     ├── graphics/          # Graphics / UI layer
+    │   ├── fonts/         # Read-only font assets: fonts partition mmap + LVGL drive 'A:'
     │   └── ui/            # GUI backend (RGB565 framebuffer + mode converters)
     └── applications/      # Application layer
         ├── nettime/       # Net time app: public IP → geolocation → timezone → NTP
@@ -67,6 +68,7 @@ ESPaperPlay
 graph TD
     main[main] --> reader[reader]
     main --> ui[ui]
+    main --> fonts[fonts]
     main --> input[input]
     main --> power[power]
     main --> storage[storage]
@@ -150,6 +152,85 @@ re-rendered — and the driver guarantees clean transitions (gray4 -> BW inverts
 the old plane, so residual mid-grays are erased). A self-test
 (`ESPAPERPLAY_GUI_ENABLE_SELFTEST`, off by default) exercises both paths and
 prints conversion and worker timings.
+
+#### Read-Only Font Assets (fonts Partition)
+
+The fonts service (`components/graphics/fonts`) ships TrueType fonts as
+read-only flash assets:
+
+- `assets/fonts/` holds the font files. `NotoSansSC_Regular.ttf` (2.2 MB) is a
+  subset of Noto Sans SC covering GB2312 level-1+2 (6763 common CJK glyphs),
+  ASCII and common CJK punctuation; regenerate with
+  `tools/fonttools-venv/bin/python tools/prepare_font.py` (downloads the
+  variable font once into `tools/font_src/`, gitignored).
+- At build time `spiffs_create_partition_assets` (from `esp_mmap_assets`)
+  packs the directory into a SPIFFS image for the `fonts` partition (8 MB,
+  subtype `spiffs`, see `partitions.csv`) and generates
+  `mmap_generate_fonts.h` (file index + checksum) into the component build
+  dir. `idf.py flash` flashes the partition image automatically.
+- At runtime `espaperplay_fonts_init()` (called after LVGL starts) maps the
+  partition with `esp_mmap_assets` — font bytes stay in flash, **zero RAM
+  copies** — and registers it as LVGL filesystem drive `A:` via `esp_lv_fs`.
+  Fonts are then opened as LVGL paths, e.g. `A:NotoSansSC_Regular.ttf`
+  (`espaperplay_fonts_get_path()` builds the path).
+
+Note: only file names with `[A-Za-z0-9_]` are allowed — hyphens break the
+generated C enum (`MMAP_FONTS_*`); also keep names **shorter than
+`CONFIG_MMAP_FILE_NAME_LENGTH` (default 16, set to 32 here)** — an over-long
+name is silently truncated at build time (Warn only), and the runtime
+`strcmp` lookup then fails so the font cannot be opened (symptom:
+`lv_freetype_font_create` returns NULL with no useful FT error).
+
+#### FreeType Font Rendering
+
+Rendering is built on the **LVGL 9.5 FreeType wrapper** (`src/libs/freetype/`,
+wrapper only) plus the external
+[`espressif/freetype`](https://components.espressif.com/components/espressif/freetype)
+component (the real libfreetype 2.14.3, registry dependency):
+
+- Kconfig (`sdkconfig.defaults`): `CONFIG_LV_USE_FREETYPE=y`,
+  `CONFIG_LV_FREETYPE_USE_LVGL_PORT=y` (FreeType uses LVGL memory/FS),
+  `CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256` (glyph cache count),
+  `CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768` (glyph rasterization runs on the
+  LVGL draw thread; `lv_conf_internal.h` enforces >=32KB at compile time).
+- **Link hook** (`components/graphics/fonts/CMakeLists.txt`): when
+  `LV_USE_FREETYPE` is on, the lvgl component compiles `src/libs/freetype/*.c`
+  which needs the freetype headers and macros, but espressif/freetype is not
+  linked into lvgl automatically — the fonts component runs
+  `target_link_libraries(lvgl__lvgl PUBLIC idf::espressif__freetype)` and adds
+  the global compile definitions `FT_ERR_PREFIX=FT_Err_` /
+  `FT_CONFIG_OPTION_ERROR_STRINGS` / `FT2_BUILD_LIBRARY` (same approach as the
+  official esp_lvgl_adapter).
+- **LVGL filesystem port (critical)**: `LV_FREETYPE_USE_LVGL_PORT` works by
+  LVGL's `lv_ftsystem.c` providing strong symbols with the same names as
+  freetype's own `ftsystem.c` (`FT_Stream_Open` / `FT_New_Memory` /
+  `FT_Done_Memory`, implemented over `lv_fs_open` / `lv_malloc`), overriding
+  the ANSI fopen implementation at link time. If freetype's `ftsystem.c` is
+  not removed from the freetype target, the linker pulls the ANSI version
+  first and the LVGL version becomes dead code, so `fopen("A:xxx.ttf")` fails
+  at runtime — the fonts component CMake removes `ftsystem.c` from the
+  freetype target and compiles `lv_ftsystem.c` instead (this is what actually
+  makes `LV_FREETYPE_USE_LVGL_PORT` take effect; symptom:
+  `lv_freetype_font_create` returns NULL with a `FT_New_Face` error log).
+- The FreeType engine is initialized automatically by `lv_init()` — no manual
+  init call needed.
+- **Renderer thread stack**: FreeType glyph rasterization (smooth renderer)
+  needs a large stack. This project renders single-threaded
+  (`LV_OS_NONE`, no LVGL draw thread), so rasterization runs inside the
+  `gui_lvgl` task, whose stack was raised from 8KB to **32KB in PSRAM**
+  (`lvgl_port.c`, via `xTaskCreateWithCaps(MALLOC_CAP_SPIRAM)`) — at 8KB,
+  rendering a FreeType font on the test screen triggers
+  `stack overflow in task gui_lvgl`, and a 32KB internal-RAM stack fails with
+  `ESP_ERR_NO_MEM` (WiFi/Web eat the internal heap); note that
+  `CONFIG_LV_DRAW_THREAD_STACK_SIZE` has no effect under `LV_OS_NONE`.
+- Load API: `espaperplay_fonts_load("NotoSansSC_Regular.ttf", 24, STYLE)` →
+  `lv_font_t *` (wraps `lv_freetype_font_create()`, bitmap render mode, small
+  4-entry cache keyed by file/size/style), ready for
+  `lv_obj_set_style_text_font()`.
+- Verification: the UI test screen (`screen_test.c`) renders its title with the
+  FreeType font — Chinese glyphs displaying correctly proves the
+  mmap-partition → LVGL FS drive → FreeType rasterization chain end to end.
+- Size: full libfreetype costs ~+400KB flash (app 2.1MB / 4MB partition, 50% free).
 
 #### Input: Physical Keys & Event Queues
 
@@ -365,6 +446,11 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+`idf.py flash` flashes the app **and** the `fonts` partition image (built from
+`assets/fonts/`, see "Read-Only Font Assets"). For day-to-day iteration use
+**`idf.py app-flash`** (app only, no font partition) — run a full `flash` only
+after the first clone or whenever `assets/fonts/` changes.
+
 On a fresh clone, `sdkconfig.defaults` (16MB Flash / 8MB PSRAM) is applied automatically; adjust via `idf.py menuconfig` if needed. The defaults enable `-O2` compilation and CPU dynamic frequency scaling (DFS: up to 240 MHz when busy, 80 MHz when idle) to balance performance and power.
 
 #### CI
@@ -442,6 +528,7 @@ ESPaperPlay
     │   ├── wifi/          # WiFi 服务：按系统配置启动 AP / STA 网络
     │   └── webserver/     # Web 管理：状态查看与设置修改（esp_https_server）
     ├── graphics/          # 图形 / 界面层
+    │   ├── fonts/         # 只读字体资产：fonts 分区映射 + LVGL 盘符 A:
     │   └── ui/            # GUI 渲染后端（RGB565 帧缓冲 + 模式转换级）
     └── applications/      # 应用层
         ├── nettime/       # 网络时间应用：公网 IP → 地理位置 → 时区 → NTP
@@ -454,6 +541,7 @@ ESPaperPlay
 graph TD
     main[main] --> reader[reader]
     main --> ui[ui]
+    main --> fonts[fonts]
     main --> input[input]
     main --> power[power]
     main --> storage[storage]
@@ -529,6 +617,72 @@ flush() 只把脏区快照转换后排队，真实刷新由内部 worker 任务�
 驱动保证切换刷新干净（灰阶->黑白反相旧平面，清除中间灰残留）。自检
 （`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换与
 worker 刷新耗时。
+
+#### 只读字体资产（fonts 分区）
+
+字体服务（`components/graphics/fonts`）把 TrueType 字体作为只读 flash 资产发布：
+
+- `assets/fonts/` 存放字体文件。`NotoSansSC_Regular.ttf`（2.2MB）是 Noto Sans SC
+  的子集，覆盖 GB2312 一二级（6763 个常用汉字）+ ASCII + 常用中文标点；
+  重新生成：`tools/fonttools-venv/bin/python tools/prepare_font.py`
+  （变量字体源文件下载到 `tools/font_src/`，已 gitignore）。
+- 构建期由 `spiffs_create_partition_assets`（来自 `esp_mmap_assets` 组件）把目录
+  打包为 `fonts` 分区（8MB，`spiffs` 子类型，见 `partitions.csv`）的 SPIFFS 镜像，
+  并生成 `mmap_generate_fonts.h`（文件索引 + 校验和）到组件构建目录；
+  `idf.py flash` 会自动烧写该分区镜像。
+- 运行期 `espaperplay_fonts_init()`（在 LVGL 启动后调用）用 `esp_mmap_assets`
+  映射分区——字体字节留在 flash，**零 RAM 拷贝**——并经 `esp_lv_fs` 注册为
+  LVGL 文件系统盘符 `A:`。之后以 LVGL 路径打开字体，如
+  `A:NotoSansSC_Regular.ttf`（`espaperplay_fonts_get_path()` 可组装路径）。
+
+注意：字体文件名只允许 `[A-Za-z0-9_]`——连字符会破坏生成的 C 枚举名
+（`MMAP_FONTS_*`）；且**长度不得超过 `CONFIG_MMAP_FILE_NAME_LENGTH`（默认 16，
+本项目已设 32）**——超长文件名构建期仅打 Warn 并静默截断，运行时
+`strcmp` 匹配失败导致字体打不开（症状：`lv_freetype_font_create` 返回 NULL，
+且 LVGL 日志无 `FT_Stream_Open` 错误以外的线索）。
+
+#### FreeType 字体渲染
+
+字体渲染基于 **LVGL 9.5 FreeType 封装**（`src/libs/freetype/`，仅封装层）+ 外部
+[`espressif/freetype`](https://components.espressif.com/components/espressif/freetype)
+组件（真正的 libfreetype 2.14.3，registry 依赖）：
+
+- Kconfig（`sdkconfig.defaults`）：`CONFIG_LV_USE_FREETYPE=y`、
+  `CONFIG_LV_FREETYPE_USE_LVGL_PORT=y`（FreeType 走 LVGL 内存/文件系统）、
+  `CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256`（字形缓存数）、
+  `CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768`（字形栅格化在 LVGL draw 线程执行，
+  `lv_conf_internal.h` 编译期强制 >=32KB）。
+- **链接钩子**（`components/graphics/fonts/CMakeLists.txt`）：lvgl 组件编译
+  `src/libs/freetype/*.c` 时需要 freetype 头文件与宏，但 espressif/freetype
+  不会自动链接进 lvgl——由 fonts 组件执行
+  `target_link_libraries(lvgl__lvgl PUBLIC idf::espressif__freetype)` 并追加
+  `FT_ERR_PREFIX=FT_Err_` / `FT_CONFIG_OPTION_ERROR_STRINGS` / `FT2_BUILD_LIBRARY`
+  全局编译定义（与官方 esp_lvgl_adapter 的做法一致）。
+- **LVGL 文件系统移植（关键）**：`LV_FREETYPE_USE_LVGL_PORT` 的机制是 LVGL 的
+  `lv_ftsystem.c` 提供与 freetype 自带 `ftsystem.c` 同名的强符号
+  `FT_Stream_Open` / `FT_New_Memory` / `FT_Done_Memory`（内部走 `lv_fs_open` /
+  `lv_malloc`），链接时覆盖 ANSI fopen 实现。若不清除 freetype 目标中的
+  `ftsystem.c`，链接器先拉入 ANSI 版、LVGL 版成为死代码，运行时
+  `fopen("A:xxx.ttf")` 必然失败——fonts 组件的 CMake 会从 freetype 目标剔除
+  `ftsystem.c` 并编入 `lv_ftsystem.c`（即 `LV_FREETYPE_USE_LVGL_PORT` 生效的
+  真正开关；症状：`lv_freetype_font_create` 返回 NULL，日志
+  `FT_New_Face ... error`）。
+- FreeType 引擎由 `lv_init()` 自动初始化（无需手动调用）。
+- **渲染线程栈**：FreeType 字形栅格化（smooth 渲染器）消耗大栈。本项目是
+  LVGL 单线程渲染模式（`LV_OS_NONE`，无独立 draw 线程），渲染发生在
+  `gui_lvgl` 任务内，其栈已从 8KB 提升到 **32KB 且放在 PSRAM**
+  （`lvgl_port.c` 用 `xTaskCreateWithCaps(MALLOC_CAP_SPIRAM)`）——8KB 时渲染
+  FreeType 字体会触发 `stack overflow in task gui_lvgl`，32KB 放内部 RAM 又会
+  `xTaskCreate` 返回 `ESP_ERR_NO_MEM`（WiFi/Web 占用内部堆）；
+  （注意 `CONFIG_LV_DRAW_THREAD_STACK_SIZE` 在 `LV_OS_NONE` 下不生效）。
+- 加载 API：`espaperplay_fonts_load("NotoSansSC_Regular.ttf", 24, STYLE)` →
+  `lv_font_t *`（内部走 `lv_freetype_font_create()`，位图渲染模式，按
+  文件名/字号/样式做 4 项小型缓存），可直接
+  `lv_obj_set_style_text_font()` 使用。
+- 验证：UI 测试页（`screen_test.c`）标题用 FreeType 字体渲染
+  「UI Test · FreeType 字体渲染正常」——中文正常显示即证明
+  mmap 分区 → LVGL FS 盘符 → FreeType 栅格化链路可用。
+- 体积：libfreetype 全量链接约 +400KB flash（app 2.1MB / 4MB 分区，余 50%）。
 
 #### 输入：物理按键与事件队列
 
@@ -718,6 +872,11 @@ idf.py build
 # 4. 烧录并查看日志
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
+
+`idf.py flash` 会同时烧录 app **和** `fonts` 字体分区镜像（由
+`assets/fonts/` 构建，见"只读字体资产"）。日常迭代建议用
+**`idf.py app-flash`**（只烧 app，不烧字体分区）；首次克隆或
+`assets/fonts/` 内容变更后再执行完整 `flash`。
 
 首次克隆时，`sdkconfig.defaults`（Flash 16MB / PSRAM 8MB）会自动生效；
 如需调整请使用 `idf.py menuconfig`。默认配置已启用 `-O2` 编译优化与 CPU

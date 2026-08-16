@@ -19,6 +19,7 @@
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
+#include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
@@ -113,6 +114,8 @@ void app_main(void) {
     /* 应用"连续大面积局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
     espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
     ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
+    /* 字体资产：映射 fonts 分区并注册 LVGL 盘符（需在 LVGL 初始化之后）。 */
+    ESP_ERROR_CHECK(espaperplay_fonts_init());
     ESP_ERROR_CHECK(espaperplay_ui_page_push(&espaperplay_ui_page_home)); /* 主界面入栈 */
     ESP_ERROR_CHECK(espaperplay_ui_key_input_start()); /* 按键分发：input 队列 -> GUI 页面 */
     ESP_ERROR_CHECK(espaperplay_reader_init());

@@ -36,8 +36,22 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # LVGL 字体
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+# LVGL FreeType 字体引擎：TTF/OTF 矢量字体渲染（配合 fonts 分区资产，
+# 见 components/graphics/fonts）。LV_FREETYPE_USE_LVGL_PORT 让 FreeType
+# 走 LVGL 的内存分配与文件系统（盘符 A: 由 esp_lv_fs 注册）。
+CONFIG_LV_USE_FREETYPE=y
+CONFIG_LV_FREETYPE_USE_LVGL_PORT=y
+CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256
+# FreeType 字形栅格化在 LVGL draw 线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768
 # LVGL 内存用 C 标准库 malloc（走 ESP-IDF heap，大块分配自动落 8MB PSRAM）；
 # 不用内置 TLSF 池（仅 64KB，触发 benchmark 的 #warning 且被 -Werror 当错误）
+# LVGL 日志接入 ESP-IDF（默认关闭：LVGL/FreeType 内部错误全部静默，排查困难）
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+# esp_mmap_assets 文件名缓冲长度（默认 16 会截断 NotoSansSC_Regular.ttf 这类
+# 长文件名，导致运行时 strcmp 匹配失败、字体打不开；32 为 Kconfig 上限）
+CONFIG_MMAP_FILE_NAME_LENGTH=32
 CONFIG_LV_USE_CLIB_MALLOC=y
 
 # 网络时间（IP 定位 + NTP）：HTTPS 客户端使用 ESP-IDF 内置 CA 证书包校验

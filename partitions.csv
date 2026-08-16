@@ -1,6 +1,8 @@
 # ESPaperPlay partition table (16MB flash)
 # APP 分区扩至 4MB：为 LVGL / 阅读器（EPUB/PDF/图片解码）预留空间
+# fonts 分区 8MB：只读字体资产（构建期 SPIFFS 镜像，运行时 MMU 映射，见 components/graphics/fonts）
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x400000,
+fonts,    data, spiffs,  ,        0x800000,

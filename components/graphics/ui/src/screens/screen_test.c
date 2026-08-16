@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
+#include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_ui.h"
 #include "espaperplay_ui_touch.h"
@@ -195,7 +196,16 @@ static void test_enter(void) {
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
 
     lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "UI Test");
+    /* FreeType 矢量字体渲染验证：标题使用 fonts 分区的 Noto Sans SC 子集，
+     * 中文正常显示即证明「mmap 分区 -> LVGL FS 盘符 -> FreeType 栅格化」链路可用。 */
+    lv_font_t *ft_font = espaperplay_fonts_load("NotoSansSC_Regular.ttf", 24,
+                                                ESPAPERPLAY_FONT_STYLE_NORMAL);
+    if (ft_font != NULL) {
+        lv_obj_set_style_text_font(title, ft_font, 0);
+        lv_label_set_text(title, "UI Test · FreeType 字体渲染正常");
+    } else {
+        lv_label_set_text(title, "UI Test (freetype font load failed)");
+    }
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
     lv_obj_set_width(title, lv_pct(100));
     lv_obj_set_pos(title, 0, lv_pct(3));
