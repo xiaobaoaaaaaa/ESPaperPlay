@@ -104,3 +104,6 @@ tools/font_src/
 tools/fonttools-venv/
 __pycache__/
 *.pyc
+
+# Icon preparation: downloaded SVG/PNG sources (regenerable)
+tools/icon_src/

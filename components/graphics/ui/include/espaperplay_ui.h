@@ -155,6 +155,9 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 /** 天气页页面实例（screen_weather.c）：展示和风天气快照（实时 / 3 日预报 / 空气 / 天文 / 降水 / 预警），单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_weather;
 
+/** 阅读器页页面实例（screen_reader.c）：占位页（FreeType 中文标题 + 即将推出提示），单击返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_reader;
+
 #ifdef __cplusplus
 }
 #endif

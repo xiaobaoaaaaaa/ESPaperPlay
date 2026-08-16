@@ -256,6 +256,10 @@ esp_err_t espaperplay_gui_lv_start(void) {
         ESP_LOGE(TAG, "lv_display_create failed");
         return ESP_ERR_NO_MEM;
     }
+    /* 开机默认竖屏：设备顺时针旋转 90°（逻辑分辨率 480x800）。
+     * 旋转的像素/脏区/触摸换算全部由 flush 回调与 LVGL 内核处理
+     * （见本文件头部注释），此处只需设置初始方向。 */
+    lv_display_set_rotation(s_lv_disp, LV_DISPLAY_ROTATION_90);
     s_lv_buf = espaperplay_lvgl_alloc((size_t)disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2);
     if (s_lv_buf == NULL) {
         ESP_LOGE(TAG, "LVGL draw buffer alloc failed (%u bytes)",

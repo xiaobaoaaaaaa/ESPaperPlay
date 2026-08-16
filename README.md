@@ -153,6 +153,21 @@ the old plane, so residual mid-grays are erased). A self-test
 (`ESPAPERPLAY_GUI_ENABLE_SELFTEST`, off by default) exercises both paths and
 prints conversion and worker timings.
 
+Screen orientation defaults to **portrait (panel rotated 90° clockwise,
+logical 480x800)**: rotation is applied pixel-wise inside the LVGL flush
+callback (`lv_display_set_rotation` semantics — logical dirty areas are
+mapped to physical ones via `lv_display_rotate_area`, touch coordinates are
+rotated by the LVGL core), so the rest of the stack stays panel-native.
+The test screen's double-click cycles through all four orientations; home
+screen layout adapts to the current logical resolution (landscape: 3 app
+cards in a row; portrait: 2+1 grid).
+
+Launcher app icons are LVGL A8 bitmaps generated from
+[Iconify](https://icon-sets.iconify.design/) SVGs (mdi set) by
+`tools/fonttools-venv/bin/python tools/prepare_icons.py` (downloads the SVG,
+rasterizes with ImageMagick, emits `components/graphics/ui/src/icons_data.c`
++ `include/icons_data.h`); cards render icon + FreeType label below.
+
 #### Read-Only Font Assets (fonts Partition)
 
 The fonts service (`components/graphics/fonts`) ships TrueType fonts as
@@ -617,6 +632,18 @@ flush() 只把脏区快照转换后排队，真实刷新由内部 worker 任务�
 驱动保证切换刷新干净（灰阶->黑白反相旧平面，清除中间灰残留）。自检
 （`ESPAPERPLAY_GUI_ENABLE_SELFTEST`，默认关闭）覆盖两条路径并打印转换与
 worker 刷新耗时。
+
+屏幕朝向**默认竖屏**（面板顺时针旋转 90°，逻辑分辨率 480x800）：旋转在
+LVGL flush 回调内逐像素完成（语义与 `lv_display_set_rotation` 一致——逻辑
+脏区经 `lv_display_rotate_area` 映射为物理脏区，触摸坐标由 LVGL 内核旋转），
+其余软件栈保持面板原生方向。测试页双击可循环四种朝向；主界面布局按当前
+逻辑分辨率自适应（横屏 3 卡一行 / 竖屏 2+1 网格）。
+
+桌面应用图标为 LVGL A8 位图，由
+[Iconify](https://icon-sets.iconify.design/)（mdi 图标集）的 SVG 生成：
+`tools/fonttools-venv/bin/python tools/prepare_icons.py`（下载 SVG →
+ImageMagick 栅格化 → 输出 `components/graphics/ui/src/icons_data.c` +
+`include/icons_data.h`）；卡片渲染为「图标 + FreeType 中文名」。
 
 #### 只读字体资产（fonts 分区）
 
