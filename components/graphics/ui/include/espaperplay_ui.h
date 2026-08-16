@@ -44,17 +44,22 @@ extern "C" {
 void espaperplay_ui_home_show(void);
 
 /**
- * @brief 页面描述（进入/退出/按键钩子，均在 LVGL 线程内执行）。
+ * @brief 页面描述（进入/退出/按键/触摸钩子，均在 LVGL 线程内执行）。
  *
- * enter：构建页面内容到当前屏幕（屏幕已由页面栈清空），并创建页面级
- *       资源（定时器等）；exit：释放页面级资源（删除定时器等），可为 NULL；
- * on_key：页面级按键处理（按键分发任务把按键事件转发给栈顶页面的该钩子，
- *       页面据此更新自身内容或发起导航），可为 NULL。
+ * 按键与触摸事件均经输入分发任务转发（见 espaperplay_ui_key_input_start）：
+ *   - enter：构建页面内容到当前屏幕（屏幕已由页面栈清空），并创建页面级
+ *     资源（定时器等）；exit：释放页面级资源（删除定时器等），可为 NULL；
+ *   - on_key：页面级按键处理（按键分发任务把按键事件转发给栈顶页面的该
+ *     钩子，页面据此更新自身内容或发起导航），可为 NULL；
+ *   - on_touch：页面级触摸处理（触摸事件经输入分发任务按 ~30ms 窗口批量
+ *     投递后逐条转发给栈顶页面的该钩子，页面据此展示触摸轨迹/坐标；
+ *     LVGL 控件点击不依赖本钩子，由触摸指针 indev 直接驱动），可为 NULL。
  */
 typedef struct {
     void (*enter)(void); /*!< 进入页面：构建内容（LVGL 线程内） */
     void (*exit)(void);  /*!< 退出页面：清理资源（LVGL 线程内，可 NULL） */
-    void (*on_key)(const espaperplay_input_event_t *event); /*!< 按键事件（LVGL 线程内，可 NULL） */
+    void (*on_key)(const espaperplay_input_event_t *event);   /*!< 按键事件（LVGL 线程内，可 NULL） */
+    void (*on_touch)(const espaperplay_input_event_t *event); /*!< 触摸事件（LVGL 线程内，可 NULL） */
 } espaperplay_ui_page_t;
 
 #define ESPAPERPLAY_UI_PAGE_MAX 8 /*!< 页面栈最大深度 */
@@ -107,11 +112,26 @@ esp_err_t espaperplay_ui_page_pop_lv(void);
 void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event);
 
 /**
- * @brief 启动按键分发任务（输入队列 -> LVGL 线程 -> 栈顶页面 on_key）。
+ * @brief 把触摸事件转发给栈顶页面的 on_touch 钩子（须在 LVGL 线程内调用）。
  *
- * 任务阻塞在 espaperplay_input_get_event() 上，收到按键事件后经
- * espaperplay_gui_lv_call 投递到 LVGL 线程，由
- * espaperplay_ui_page_handle_key_lv() 转发给当前页面处理（导航/刷新内容）。
+ * 由输入分发任务调用（触摸事件按 ~30ms/32 点批量投递，批内逐条转发，
+ * 保留全部中间坐标点）；栈为空或无钩子时为空操作。
+ *
+ * @param event 触摸事件。
+ */
+void espaperplay_ui_page_handle_touch_lv(const espaperplay_input_event_t *event);
+
+/**
+ * @brief 启动输入分发任务（input 队列 -> LVGL 线程 -> 页面钩子 / 触摸指针）。
+ *
+ * 任务阻塞在 espaperplay_input_get_event() 上（按键与触摸事件走同一条
+ * 合并队列）：
+ *   - 按键事件经 espaperplay_gui_lv_call 投递到 LVGL 线程，由
+ *     espaperplay_ui_page_handle_key_lv() 转发给当前页面 on_key（导航 /
+ *     刷新内容）；
+ *   - 触摸事件直接更新 LVGL 指针 indev 状态（espaperplay_ui_touch_update，
+ *     任意线程安全），并按 ~30ms 窗口批量投递、逐条转发给当前页面
+ *     on_touch（轨迹绘制需要全部中间坐标点）。
  * 须在 espaperplay_input_init()、espaperplay_gui_lv_start() 之后调用。
  *
  * ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST=1 时，任务启动后先执行按键链路自检
@@ -129,7 +149,7 @@ uint8_t espaperplay_ui_page_depth(void);
 /** 主界面页面实例（screen_home.c）。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
 
-/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键事件显示，双击旋转屏幕，长按返回。 */
+/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键/触摸事件显示 + 可点击返回按钮，双击旋转屏幕，长按返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 
 #ifdef __cplusplus

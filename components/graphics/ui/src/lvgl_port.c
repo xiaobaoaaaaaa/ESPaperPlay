@@ -12,6 +12,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -20,6 +21,7 @@
 #include "espaperplay_display.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
+#include "espaperplay_ui_touch.h"
 
 #include "lvgl.h"
 
@@ -251,6 +253,10 @@ esp_err_t espaperplay_gui_lv_start(void) {
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(s_lv_disp, espaperplay_lvgl_flush_cb);
     /* 背景由屏幕对象样式控制（UI 页面负责设置；主帧初始也为全白）。 */
+
+    /* 触摸指针 indev：LVGL 控件点击/按压由该输入设备驱动（GT911 -> input
+     * 队列 -> 分发任务 -> indev 状态，见 lvgl_touch.c）。 */
+    ESP_RETURN_ON_ERROR(espaperplay_ui_touch_init(), TAG, "touch pointer indev init failed");
 
     if (xTaskCreate(espaperplay_lvgl_task, "gui_lvgl", 8192, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "LVGL task create failed");

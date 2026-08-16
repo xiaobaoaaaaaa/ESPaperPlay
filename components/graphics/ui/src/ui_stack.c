@@ -112,4 +112,14 @@ void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event) {
     }
 }
 
+void espaperplay_ui_page_handle_touch_lv(const espaperplay_input_event_t *event) {
+    if (event == NULL || s_depth == 0) {
+        return;
+    }
+    const espaperplay_ui_page_t *top = &s_stack[s_depth - 1];
+    if (top->on_touch != NULL) {
+        top->on_touch(event);
+    }
+}
+
 uint8_t espaperplay_ui_page_depth(void) { return s_depth; }

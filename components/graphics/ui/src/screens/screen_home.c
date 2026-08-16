@@ -132,7 +132,8 @@ static void home_on_key(const espaperplay_input_event_t *event) {
 }
 
 /** 主界面页面实例（页面栈用）。 */
-const espaperplay_ui_page_t espaperplay_ui_page_home = {home_enter, home_exit, home_on_key};
+const espaperplay_ui_page_t espaperplay_ui_page_home = {home_enter, home_exit, home_on_key,
+                                                        NULL};
 
 /** 展示主界面（最基础原型）。须在 espaperplay_gui_lv_start() 之后调用。 */
 void espaperplay_ui_home_show(void) {

@@ -173,22 +173,34 @@ merged by a FreeRTOS Queue Set:
 | Queue | Depth | Policy |
 | ----- | ----- | ------ |
 | Key | 16 | `xQueueSendToFront` + evict-oldest when full — key events are never lost |
-| Touch (reserved) | 32 | evict-oldest (keep-newest) when full — queue always holds the latest touch state |
+| Touch | 32 | `xQueueSend` drop-newest when full — intermediate points for trajectory drawing are preserved |
 
 `espaperplay_input_get_event()` polls the key queue first (lowest key latency),
-then blocks on the Queue Set for either queue. Touch will be interrupt-driven
+then blocks on the Queue Set for either queue. Touch is interrupt-driven
 (GT911 INT wakes a task — I2C cannot run in an ISR — which reads coordinates and
 posts them to the touch queue), so high-rate touch traffic can never crowd out
-key events.
+key events. Evicting via a direct `xQueueReceive` on a set-member queue is
+forbidden: it leaks stale notifications into the set container and eventually
+trips the FreeRTOS `prvNotifyQueueSetContainer` assert — the Queue Set is sized
+with slack and the touch queue drops incoming events instead of evicting.
 
-**GUI key dispatch** — a dispatcher task (`espaperplay_ui_key_input_start()`)
-blocks on the input queue and forwards every key event into the LVGL thread,
-where the page stack routes it to the top page's optional `on_key` hook
-(extended `espaperplay_ui_page_t`). Navigation decisions belong to pages:
+**GUI input dispatch** — a dispatcher task (`espaperplay_ui_key_input_start()`)
+blocks on the input queue and routes events:
+
+- **Keys** are forwarded one-by-one into the LVGL thread, where the page stack
+  routes them to the top page's optional `on_key` hook (extended
+  `espaperplay_ui_page_t`). Navigation decisions belong to pages.
+- **Touch** updates the LVGL pointer indev state directly (critical-section
+  guarded, no LVGL round-trip), so all LVGL widgets respond to touch. Events
+  are also batched per ~30 ms window and forwarded to the top page's optional
+  `on_touch` hook — every intermediate coordinate survives for trajectory
+  drawing.
 
 - Home: single click → push the **Test page**;
-- Test page (partial-refresh stress test + live key-event display): long-press
-  release → pop back to home.
+- Test page (partial-refresh stress test + live key/touch display): a touch
+  pad draws finger trajectories as connected polylines (8 strokes × 512
+  points, `clear` button empties the pad, `back` button pops the page through
+  the LVGL pointer indev); long-press release → pop back to home.
 
 A boot self-test (`ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST`, off by default) injects
 synthetic key events through the real input queue and asserts the page-stack
@@ -480,19 +492,28 @@ DOUBLE_CLICK / LONG_PRESS_START / LONG_PRESS_HOLD / LONG_PRESS_UP（含按压
 | 队列 | 深度 | 满时策略 |
 | ---- | ---- | -------- |
 | 按键 | 16 | 队首投递 + 挤掉最旧——按键事件永不丢失 |
-| 触摸（预留） | 32 | 丢旧保新——队列永远保留最新触摸状态 |
+| 触摸 | 32 | `xQueueSend` 满时丢新——保留中间点供轨迹绘制 |
 
 `espaperplay_input_get_event()` 优先非阻塞查按键队列（按键延迟最低），再
-阻塞等待 Queue Set 中任一队列。触摸将采用中断驱动（GT911 INT 唤醒任务——
+阻塞等待 Queue Set 中任一队列。触摸采用中断驱动（GT911 INT 唤醒任务——
 I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），高频触摸流量不会
-挤占按键队列。
+挤占按键队列。禁止对 Queue Set 成员队列直接 `xQueueReceive` 挤旧：会在
+容器中留下陈旧通知，最终触发 FreeRTOS `prvNotifyQueueSetContainer`
+断言崩溃——Queue Set 容器带余量创建，触摸队列满时改为丢弃新事件。
 
-**GUI 按键分发** —— 分发任务（`espaperplay_ui_key_input_start()`）阻塞读取
-输入队列，把每个按键事件投递到 LVGL 线程，由页面栈转发给栈顶页面的可选
-`on_key` 钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面：
+**GUI 输入分发** —— 分发任务（`espaperplay_ui_key_input_start()`）阻塞读取
+输入队列，按键 / 触摸分路处理：
+
+- **按键**：逐个投递到 LVGL 线程，由页面栈转发给栈顶页面的可选 `on_key`
+  钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面；
+- **触摸**：直接更新 LVGL 指针 indev 状态（临界区保护、无 LVGL 往返延迟），
+  所有 LVGL 控件均响应触摸；事件同时按 ~30ms 窗口批量投递、逐条转发给
+  栈顶页面的可选 `on_touch` 钩子——全部中间坐标保留，供轨迹绘制。
 
 - 主页：单击 → 进入**测试页**；
-- 测试页（局刷压力测试 + 按键事件实时显示）：长按松开 → 返回主页。
+- 测试页（局刷压力测试 + 按键/触摸实时显示）：触摸画板把手指轨迹画成
+  连续折线（8 笔 × 512 点，`clear` 按钮清空画板，`back` 按钮经 LVGL 指针
+  indev 点击返回）；长按松开 → 返回主页。
 
 上电自检（`ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST`，默认关闭）通过真实输入队列
 注入合成按键事件，断言页面栈响应（1→2→1→2），输出

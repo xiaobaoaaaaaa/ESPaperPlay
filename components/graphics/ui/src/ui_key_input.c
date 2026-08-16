@@ -8,25 +8,37 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_ui_touch.h"
 
 static const char *TAG = "ESPaperPlay_UI";
 
 #define ESPAPERPLAY_UI_KEY_INPUT_TASK_STACK_SIZE 4096
 #define ESPAPERPLAY_UI_KEY_INPUT_TASK_PRIORITY 4
 
+/** 触摸批量投递：窗口（毫秒）内累积的事件一并转发到 LVGL 线程。 */
+#define UI_TOUCH_BATCH_WINDOW_MS 30
+/** 触摸批量投递：单批最大事件数（触发立即转发，防止窗口内超量）。 */
+#define UI_TOUCH_BATCH_MAX_EVENTS 32
+
 /* ====================================================================
- * 按键分发：input 事件队列 -> LVGL 线程 -> 栈顶页面 on_key
+ * 输入分发：input 事件队列 -> LVGL 线程 -> 页面钩子 / 触摸指针
  * ====================================================================
  *
- * 按键分发任务阻塞在 espaperplay_input_get_event() 上（BOOT 键等真实
- * 事件与自检注入的合成事件走同一条队列，读取路径完全一致）；收到事件后
- * 经 espaperplay_gui_lv_call 投递到 LVGL 线程执行（LVGL 非线程安全，
- * 页面导航 / 控件更新必须串行在 LVGL 线程内），最终由页面栈转发给
- * 栈顶页面的 on_key 钩子——导航决策属于页面自身。
+ * 输入分发任务阻塞在 espaperplay_input_get_event() 上（按键、触摸事件
+ * 走同一条合并队列）。分发策略：
+ *   - 按键：事件型（低速率），每次经 espaperplay_gui_lv_call 投递到
+ *     LVGL 线程，由页面栈转发给栈顶页面 on_key（导航/刷新内容）；
+ *   - 触摸：高频状态型（GT911 上报可达 ~100 帧/秒）。指针 indev 状态
+ *     直接在本任务逐事件更新（espaperplay_ui_touch_update，临界区保护，
+ *     无 LVGL 往返延迟）；页面级展示（轨迹绘制需要每个中间点）按
+ *     UI_TOUCH_BATCH_WINDOW_MS 窗口批量投递一次 gui_lv_call，批内事件
+ *     逐条转发给页面 on_touch——既保留全部中间坐标，又摊薄跨线程开销
+ *     （批内点在同一 LVGL 周期渲染，脏区自然合并为一次 e-paper 刷新）。
  */
 
 /** LVGL 线程内执行：把按键事件转发给栈顶页面（arg 指向任务栈上的事件副本）。 */
@@ -36,10 +48,21 @@ static void ui_key_dispatch_cb(void *arg) {
     ESP_LOGI(TAG, "key event: id=%u action=%s press=%u ms", event->key_id,
              espaperplay_input_key_action_str(event->key_action), event->key_press_time_ms);
 
-    if (event->type == ESPAPERPLAY_INPUT_EVENT_KEY) {
-        espaperplay_ui_page_handle_key_lv(event);
+    espaperplay_ui_page_handle_key_lv(event);
+}
+
+/** 触摸批量投递描述（分发任务栈上的事件数组 + 数量）。 */
+typedef struct {
+    const espaperplay_input_event_t *events; /*!< 本批事件数组 */
+    uint16_t count;                          /*!< 本批事件数 */
+} ui_touch_batch_t;
+
+/** LVGL 线程内执行：把批量触摸事件逐条转发给栈顶页面（on_touch）。 */
+static void ui_touch_batch_dispatch_cb(void *arg) {
+    const ui_touch_batch_t *batch = (const ui_touch_batch_t *)arg;
+    for (uint16_t i = 0; i < batch->count; i++) {
+        espaperplay_ui_page_handle_touch_lv(&batch->events[i]);
     }
-    /* TOUCH 事件：触摸驱动接入后在此转发（LVGL 指针输入），当前阶段忽略。 */
 }
 
 #if ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
@@ -139,10 +162,16 @@ static void ui_key_selftest_task(void *arg) {
 }
 #endif /* ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST */
 
-/** 按键分发任务：阻塞读取输入队列，事件投递到 LVGL 线程处理。 */
+/** 按键分发任务：阻塞读取输入队列，按键/触摸事件分路处理。 */
 static void ui_key_input_task(void *arg) {
     (void)arg;
     ESP_LOGI(TAG, "key input task started");
+
+    /* 触摸批量投递缓冲（本任务独占；gui_lv_call 阻塞等待执行完成，
+     * 批数组在回调执行期间保持有效）。 */
+    espaperplay_input_event_t touch_batch[UI_TOUCH_BATCH_MAX_EVENTS];
+    uint16_t touch_batch_count = 0;
+    uint32_t touch_batch_start_ms = 0;
 
     for (;;) {
         espaperplay_input_event_t event;
@@ -152,10 +181,38 @@ static void ui_key_input_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-        /* 高频 LONG_PRESS_HOLD 已在 input 层节流（500ms 一个），此处统一
-         * 同步投递：gui_lv_call 的完成信号是全局单标志（单调用方语义），
-         * 不可跳过等待，否则 HOLD 的完成信号会污染后续事件（如
-         * LONG_PRESS_UP）的完成同步。 */
+
+        if (event.type == ESPAPERPLAY_INPUT_EVENT_TOUCH) {
+            /* 指针 indev 状态：逐事件直接更新（临界区保护），无 LVGL
+             * 往返延迟。 */
+            espaperplay_ui_touch_update(&event);
+
+            /* 页面展示：窗口内累积批量投递（保留全部中间点）；释放事件
+             * 必须立即转发（笔画收尾）。gui_lv_call 的完成信号是全局单
+             * 标志（单调用方语义），不可跳过等待，否则本次完成信号会
+             * 污染后续事件的完成同步。 */
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (touch_batch_count == 0) {
+                touch_batch_start_ms = now_ms;
+            }
+            touch_batch[touch_batch_count++] = event;
+
+            const bool batch_full = touch_batch_count >= UI_TOUCH_BATCH_MAX_EVENTS;
+            const bool window_elapsed = now_ms - touch_batch_start_ms >= UI_TOUCH_BATCH_WINDOW_MS;
+            if (batch_full || window_elapsed || event.touch_pressed == 0) {
+                ui_touch_batch_t batch = {touch_batch, touch_batch_count};
+                const esp_err_t call_err =
+                    espaperplay_gui_lv_call(ui_touch_batch_dispatch_cb, &batch, 1000);
+                if (call_err != ESP_OK) {
+                    ESP_LOGW(TAG, "dispatch touch batch to LVGL failed: %s",
+                             esp_err_to_name(call_err));
+                }
+                touch_batch_count = 0;
+            }
+            continue;
+        }
+
+        /* 按键事件：同步投递到 LVGL 线程处理。 */
         const esp_err_t call_err = espaperplay_gui_lv_call(ui_key_dispatch_cb, &event, 1000);
         if (call_err != ESP_OK) {
             ESP_LOGW(TAG, "dispatch key event to LVGL failed: %s", esp_err_to_name(call_err));
@@ -177,6 +234,6 @@ esp_err_t espaperplay_ui_key_input_start(void) {
         return ESP_ERR_NO_MEM;
     }
 #endif
-    ESP_LOGI(TAG, "key input dispatcher started");
+    ESP_LOGI(TAG, "input dispatcher started (key -> page on_key, touch -> indev + page on_touch)");
     return ESP_OK;
 }

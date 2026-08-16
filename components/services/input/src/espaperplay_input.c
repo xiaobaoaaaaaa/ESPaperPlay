@@ -24,15 +24,26 @@ static const char *TAG = "ESPaperPlay_INPUT";
  *
  *   - 按键队列（16 深）：稀疏、事件型（单击/双击/长按等语义动作），
  *     投递到队首（xQueueSendToFront），满时挤掉最旧，按键永不丢失；
- *   - 触摸队列（32 深）：高频、状态型（中断触发读取的坐标流），满时
- *     丢旧保新（挤掉最旧坐标，队列永远保留最新触摸状态），触摸洪泛
- *     不会挤占按键队列。
+ *   - 触摸队列（32 深）：高频、状态型（中断触发读取的坐标流，轨迹绘制
+ *     需要中间点，不能只留最新一帧）。满时丢弃新事件——注意不能用
+ *     xQueueReceive 挤旧：成员队列被直接读出时其 Queue Set 容器通知不
+ *     会同步移除，陈旧通知会撑爆容器触发 FreeRTOS assert 崩溃。
  *
- * 两个队列互不干扰：长按 HOLD 节流（500ms）后按键速率 ~2/秒，触摸
- * 即使 300 事件/秒也只会触发触摸队列自身的丢旧保新。
+ * 两个队列互不干扰：长按 HOLD 节流（500ms）后按键速率 ~2/秒。
  */
 #define ESPAPERPLAY_INPUT_KEY_QUEUE_LEN 16   /*!< 按键事件队列长度（条） */
 #define ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN 32 /*!< 触摸事件队列长度（条） */
+
+/**
+ * Queue Set 容器余量（条）。
+ *
+ * Queue Set 容器容量必须大于成员队列深度之和：恰好相等时，两队列同时
+ * 装满的边界条件下，下一次成员队列投递会触发 FreeRTOS assert
+ * （prvNotifyQueueSetContainer 崩溃）。余量同时吸收按键"挤旧"（直接
+ * xQueueReceive 成员队列）在容器中留下的陈旧通知——成员队列被直接
+ * 读出时其容器通知不会同步移除，需要余量 + 消费时自然清空。
+ */
+#define ESPAPERPLAY_INPUT_QUEUE_SET_SLACK 16
 
 /**
  * LONG_PRESS_HOLD 事件的最小投递间隔（毫秒）。
@@ -49,6 +60,8 @@ static QueueHandle_t s_touch_queue;  /*!< 触摸事件队列 */
 static QueueSetHandle_t s_queue_set; /*!< 双队列合并等待（容量 = 两队列深度之和） */
 static button_handle_t s_boot_button;
 static uint32_t s_last_hold_ms = 0; /*!< 上次投递 HOLD 的时刻（esp_timer 毫秒） */
+
+static uint16_t s_touch_seq = 0; /*!< 触摸帧序号（每帧递增，同帧各点共享） */
 
 /**
  * @brief 将按键动作投递到按键队列。
@@ -84,6 +97,43 @@ static void input_post_key_event(uint8_t key_id, espaperplay_input_key_action_t 
         } else {
             ESP_LOGW(TAG, "key event queue full, key event dropped");
         }
+    }
+}
+
+/**
+ * @brief GT911 帧回调：把触摸帧归一化为输入事件投递到触摸队列。
+ *
+ * 由 touch 驱动的读取任务上下文调用（非 ISR）：按下帧每个触摸点投递
+ * 一个事件（touch_seq 相同的点属于同一帧，touch_points 记录本帧点数），
+ * 释放帧（count == 0）投递一个 touch_pressed = 0 的事件。队列满时由
+ * espaperplay_input_post_event() 丢旧保新，触摸洪泛不阻塞读取任务。
+ *
+ * @param points 当前帧触摸点数组（count == 0 时无效）。
+ * @param count  当前帧触摸点数量（0 = 全部手指抬起）。
+ */
+static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_t count) {
+    const uint16_t seq = ++s_touch_seq;
+
+    if (count == 0) {
+        const espaperplay_input_event_t event = {
+            .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
+            .touch_pressed = 0,
+            .touch_points = 0,
+            .touch_seq = seq,
+        };
+        (void)espaperplay_input_post_event(&event);
+        return;
+    }
+
+    for (uint8_t i = 0; i < count; i++) {
+        const espaperplay_input_event_t event = {
+            .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
+            .point = points[i],
+            .touch_pressed = 1,
+            .touch_points = count,
+            .touch_seq = seq,
+        };
+        (void)espaperplay_input_post_event(&event);
     }
 }
 
@@ -159,8 +209,9 @@ esp_err_t espaperplay_input_init(void) {
     s_key_queue = xQueueCreate(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN, sizeof(espaperplay_input_event_t));
     s_touch_queue =
         xQueueCreate(ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN, sizeof(espaperplay_input_event_t));
-    s_queue_set =
-        xQueueCreateSet(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN + ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN);
+    s_queue_set = xQueueCreateSet(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN +
+                                  ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN +
+                                  ESPAPERPLAY_INPUT_QUEUE_SET_SLACK);
     if (s_key_queue == NULL || s_touch_queue == NULL || s_queue_set == NULL) {
         ESP_LOGE(TAG, "failed to create input queues / queue set");
         if (s_key_queue != NULL) {
@@ -177,6 +228,14 @@ esp_err_t espaperplay_input_init(void) {
     }
     xQueueAddToSet(s_key_queue, s_queue_set);
     xQueueAddToSet(s_touch_queue, s_queue_set);
+
+    /* 触摸源接入：GT911 帧回调 -> 触摸队列（须在 espaperplay_touch_init()
+     * 之后调用本函数）。touch 驱动未就绪时仅告警，按键输入不受影响。 */
+    const esp_err_t touch_cb_ret = espaperplay_touch_register_event_cb(input_touch_event_cb);
+    if (touch_cb_ret != ESP_OK) {
+        ESP_LOGW(TAG, "register touch event callback failed (%s), touch queue inactive",
+                 esp_err_to_name(touch_cb_ret));
+    }
 
     /* BOOT 按键：GPIO0，按下为低电平，使能内部上拉（disable_pull = false）。
      * enable_power_save 暂不开启：电源组件（浅睡眠唤醒）接入后再启用。 */
@@ -288,13 +347,16 @@ esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event) {
             }
         }
     } else {
-        /* 触摸：满时丢旧保新——队列永远保留最新触摸状态。 */
+        /* 触摸：普通投递；满时丢弃新事件（轨迹中间点，短暂过载只丢最新，
+         * 顺序不乱）。严禁 xQueueReceive 挤旧——成员队列被直接读出时其
+         * Queue Set 容器通知不会同步移除，陈旧通知会撑满容器并触发
+         * FreeRTOS assert 崩溃（prvNotifyQueueSetContainer）。 */
+        static uint32_t s_touch_drop_log_ms = 0;
         if (xQueueSend(s_touch_queue, event, 0) != pdTRUE) {
-            espaperplay_input_event_t dropped;
-            if (xQueueReceive(s_touch_queue, &dropped, 0) == pdTRUE) {
-                (void)xQueueSend(s_touch_queue, event, 0);
-            } else {
-                ESP_LOGW(TAG, "touch event queue full, injected touch event dropped");
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - s_touch_drop_log_ms >= 1000) {
+                s_touch_drop_log_ms = now_ms;
+                ESP_LOGW(TAG, "touch queue full, dropping newest touch event");
             }
         }
     }

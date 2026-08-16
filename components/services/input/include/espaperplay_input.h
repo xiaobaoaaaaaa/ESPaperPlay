@@ -28,8 +28,9 @@ extern "C" {
  * 消费）：
  *   - 按键队列：稀疏、事件型（单击/双击/长按等语义动作），队首投递 +
  *     满时挤最旧，按键永不丢失；
- *   - 触摸队列：高频、状态型（GT911 中断唤醒读取的坐标流），满时
- *     丢旧保新（保留最新触摸状态），触摸洪泛不挤占按键队列。
+ *   - 触摸队列：高频、状态型（GT911 中断唤醒读取的坐标流，轨迹绘制
+ *     需要中间点），满时丢弃新事件（顺序不乱、Queue Set 通知计数一致），
+ *     触摸洪泛不挤占按键队列。
  * 触摸中断接入方式：GT911 的 I2C 读取不能在 ISR 内执行，由中断唤醒
  * 触摸任务，任务内读取坐标后经 espaperplay_input_post_event() 投递到
  * 触摸队列。
@@ -69,6 +70,9 @@ typedef enum {
 typedef struct {
     espaperplay_input_event_type_t type;       /*!< 事件来源类型 */
     espaperplay_touch_point_t point;           /*!< 触摸数据（type == TOUCH 时有效） */
+    uint8_t touch_pressed; /*!< 触摸是否按下（type == TOUCH 时有效；0 表示全部手指抬起） */
+    uint8_t touch_points;  /*!< 本帧触摸点总数（type == TOUCH 时有效；释放帧为 0） */
+    uint16_t touch_seq;    /*!< 触摸帧序号（同一帧内的各点共享，用于识别帧边界） */
     uint8_t key_id;                            /*!< 按键标识（type == KEY 时有效） */
     espaperplay_input_key_action_t key_action; /*!< 按键动作（type == KEY 时有效） */
     uint16_t key_press_time_ms;                /*!< 本次按压持续时间（type == KEY 时有效） */
