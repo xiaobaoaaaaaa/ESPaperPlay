@@ -52,3 +52,12 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=3
 # 适当放大池容量（内存开销仅数 KB）。
 CONFIG_LWIP_MAX_SOCKETS=20
 CONFIG_LWIP_MAX_ACTIVE_TCP=32
+
+# 内部 RAM 保护：TLS 的 16KB SSL 收发缓冲若按默认阈值 16384 强制落在内部
+# RAM，长时间运行后内部堆碎片化（最大连续块 <16KB）会直接导致握手失败
+# （create_ssl_handle failed）。阈值降至 8192 后 16KB 级缓冲自动回落到
+# 8MB PSRAM（仅缓存映射访问，性能影响可忽略），内部 RAM 只保留小块分配。
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
+# mbedtls 动态缓冲：握手完成后释放 16KB×2 大缓冲（Web 管理页 keep-alive
+# 长连接不再长期占用内部 RAM / PSRAM）。
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

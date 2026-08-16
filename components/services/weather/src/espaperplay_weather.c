@@ -260,15 +260,16 @@ static uint64_t weather_now_ms(void) {
 /* HTTP 层                                                              */
 /* ------------------------------------------------------------------ */
 
-/** 响应累积缓冲。 */
+/** 响应累积缓冲（data 由调用方按 max 一次性分配，避免 realloc 增长
+ *  在内部 RAM 制造碎片；>=8KB 的大缓冲随 SPIRAM_MALLOC_ALWAYSINTERNAL
+ *  阈值自动落入 PSRAM）。 */
 typedef struct {
-    char *data; /*!< 已接收的响应体（NUL 结尾） */
+    char *data; /*!< 响应体缓冲（NUL 结尾） */
     size_t len; /*!< 已接收字节数（不含结尾 NUL） */
-    size_t cap; /*!< 已分配容量 */
-    size_t max; /*!< 允许的最大字节数 */
+    size_t max; /*!< 缓冲容量（= 允许的最大字节数） */
 } weather_resp_t;
 
-/** esp_http_client 事件回调：把响应体分块累积进缓冲。 */
+/** esp_http_client 事件回调：把响应体分块累积进预分配的缓冲。 */
 static esp_err_t weather_http_event_handler(esp_http_client_event_t *evt) {
     weather_resp_t *resp = (weather_resp_t *)evt->user_data;
     if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
@@ -276,18 +277,6 @@ static esp_err_t weather_http_event_handler(esp_http_client_event_t *evt) {
         if (need > resp->max) {
             ESP_LOGW(TAG, "response too large (%u bytes), aborting", (unsigned)need);
             return ESP_FAIL;
-        }
-        if (need > resp->cap) {
-            size_t new_cap = resp->cap ? resp->cap : 512;
-            while (new_cap < need) {
-                new_cap *= 2;
-            }
-            char *new_data = realloc(resp->data, new_cap);
-            if (new_data == NULL) {
-                return ESP_FAIL;
-            }
-            resp->data = new_data;
-            resp->cap = new_cap;
         }
         memcpy(resp->data + resp->len, evt->data, evt->data_len);
         resp->len += evt->data_len;
@@ -408,8 +397,15 @@ static void weather_log_body_preview(const char *body, size_t len) {
 static esp_err_t weather_http_get(const char *url, const char *api_key, size_t max_len,
                                   char **out_body) {
     for (int attempt = 0;; attempt++) {
+        /* 响应缓冲按上限一次性分配（大缓冲落 PSRAM，不做 realloc 增长）。 */
         weather_resp_t resp = {0};
         resp.max = max_len;
+        resp.data = malloc(max_len + 1);
+        if (resp.data == NULL) {
+            ESP_LOGE(TAG, "failed to allocate response buffer (%u bytes)", (unsigned)max_len);
+            return ESP_ERR_NO_MEM;
+        }
+        resp.data[0] = '\0';
 
         esp_http_client_config_t cfg = {
             .url = url,
@@ -424,6 +420,7 @@ static esp_err_t weather_http_get(const char *url, const char *api_key, size_t m
         esp_http_client_handle_t client = esp_http_client_init(&cfg);
         if (client == NULL) {
             ESP_LOGE(TAG, "failed to init http client");
+            free(resp.data);
             return ESP_ERR_NO_MEM;
         }
         esp_http_client_set_header(client, "X-QW-Api-Key", api_key);
