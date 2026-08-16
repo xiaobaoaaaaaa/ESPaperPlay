@@ -75,8 +75,19 @@ extern "C" {
 #define ESPAPERPLAY_PIN_TOUCH_RST 2 /*!< GT911 复位（输出） */
 #define ESPAPERPLAY_PIN_TOUCH_PWR 1 /*!< 触摸电源轨使能 */
 
-/** GT911 I2C 设备地址（7 位）。 */
-#define ESPAPERPLAY_GT911_I2C_ADDR 0x14
+/**
+ * GT911 I2C 设备地址（7 位）。
+ *
+ * GT911 支持两个从机地址，由复位释放瞬间 INT 引脚的电平锁存决定
+ * （《GT911 Datasheet》Rev.10 第 6.1 节）：
+ *   - 复位释放时 INT 为低电平 → 0xBA/0xBB（7 位 0x5D）；
+ *   - 复位释放时 INT 为高电平 → 0x28/0x29（7 位 0x14）。
+ *
+ * 厂商 STM32 demo（S-GDEY075T7-FP-GT911Touch20230713）在复位期间把 INT
+ * 拉低并访问 0xBA/0xBB，本工程沿用该时序，默认地址为 0x5D。touch 驱动
+ * 初始化时若 0x5D 探测失败，会按 INT 高电平复位时序自动回退探测 0x14。
+ */
+#define ESPAPERPLAY_GT911_I2C_ADDR 0x5D
 
 /** 触摸控制器默认 I2C 时钟频率，单位 Hz。 */
 #define ESPAPERPLAY_TOUCH_I2C_CLK_HZ 400000
