@@ -4,6 +4,7 @@ idf_component_register(
          "src/lvgl_touch.c"
          "src/screens/screen_home.c"
          "src/icons_data.c"
+         "src/qweather_icons.c"
          "src/screens/screen_reader.c"
          "src/screens/screen_test.c"
          "src/screens/screen_weather.c"

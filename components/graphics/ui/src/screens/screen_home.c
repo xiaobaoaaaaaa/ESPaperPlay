@@ -19,7 +19,8 @@
 #include "espaperplay_ui_touch.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
-#include "icons_data.h" /* 应用图标（Iconify -> LVGL A8 位图，生成文件） */
+#include "icons_data.h"       /* 应用图标（Iconify -> LVGL A8 位图，生成文件） */
+#include "qweather_icons.h"   /* 和风天气图标（QWeather-Icons -> LVGL A8，生成文件） */
 
 #include "lvgl.h"
 
@@ -102,6 +103,7 @@ static lv_obj_t *s_clock_m = NULL;       /*!< 页 0 时钟：分（大字） */
 static lv_obj_t *s_week_label = NULL;    /*!< 页 0 时钟：星期（英文缩写） */
 static lv_obj_t *s_date_label = NULL;    /*!< 页 0 时钟：日期（M/D） */
 static lv_obj_t *s_app_cards[HOME_APP_CNT]; /*!< 应用卡片（命中检测用） */
+static lv_obj_t *s_app_icons[HOME_APP_CNT]; /*!< 应用卡片图标（动态换源用） */
 static lv_obj_t *s_clock_big = NULL;     /*!< 页 1：大时钟 */
 static lv_obj_t *s_info_date = NULL;     /*!< 页 1：日期 */
 static lv_obj_t *s_info_weather = NULL;  /*!< 页 1：天气摘要 */
@@ -236,6 +238,7 @@ static lv_obj_t *home_app_card_create(lv_obj_t *parent, const home_app_t *app, i
     lv_obj_t *icon = lv_image_create(frame);
     lv_image_set_src(icon, app->icon);
     lv_obj_center(icon);
+    s_app_icons[idx] = icon;
 
     /* 文字：图标框下方悬浮（无边框背景） */
     lv_obj_t *name = lv_label_create(card);
@@ -419,11 +422,12 @@ static void home_refresh(void) {
     }
     lv_label_set_text(s_info_date, buf);
 
-    /* 页 1 天气摘要（快照较大，缓冲在 PSRAM） */
+    /* 页 1 天气摘要（快照较大，缓冲在 PSRAM）+ 天气应用图标（实时天气图标） */
     if (s_weather_snap == NULL) {
         s_weather_snap = heap_caps_malloc(sizeof(*s_weather_snap),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
+    const lv_image_dsc_t *qw_icon = NULL;
     if (s_weather_snap != NULL &&
         espaperplay_weather_get_snapshot(s_weather_snap) == ESP_OK &&
         s_weather_snap->valid) {
@@ -432,9 +436,18 @@ static void home_refresh(void) {
                  s_weather_snap->location_name, s_weather_snap->now.text,
                  s_weather_snap->now.temp, s_weather_snap->now.humidity);
         lv_label_set_text(s_info_weather, wbuf);
+
+        /* 天气应用图标 = 和风实时天气图标（未收录的代码回退 mdi 图标） */
+        qw_icon = qweather_icon_get(s_weather_snap->now.icon);
     } else {
         snprintf(buf, sizeof(buf), "天气：未配置或不可用（Web 页面设置）");
         lv_label_set_text(s_info_weather, buf);
+    }
+    if (s_app_icons[0] != NULL) {
+        const lv_image_dsc_t *target = (qw_icon != NULL) ? qw_icon : s_apps[0].icon;
+        if (lv_image_get_src(s_app_icons[0]) != (const void *)target) {
+            lv_image_set_src(s_app_icons[0], target);
+        }
     }
 
     /* 页 1 版本 / 堆 / 操作提示 */

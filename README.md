@@ -168,6 +168,16 @@ Launcher app icons are LVGL A8 bitmaps generated from
 rasterizes with ImageMagick, emits `components/graphics/ui/src/icons_data.c`
 + `include/icons_data.h`); cards render icon + FreeType label below.
 
+Weather support includes the official **QWeather icon set**
+([icons.qweather.com](https://icons.qweather.com/), package
+`QWeather-Icons-1.8.0/`, MIT): `tools/fonttools-venv/bin/python
+tools/prepare_qweather_icons.py` converts the API icon codes (day/night,
+rain/snow/fog variants) into LVGL A8 bitmaps
+(`components/graphics/ui/src/qweather_icons.c`, lookup
+`qweather_icon_get(code)`). The weather app icon on the home screen shows the
+**live weather icon** from the latest snapshot (falls back to the mdi icon
+when weather is unavailable or the code is unknown).
+
 #### Read-Only Font Assets (fonts Partition)
 
 The fonts service (`components/graphics/fonts`) ships TrueType fonts as
@@ -644,6 +654,14 @@ LVGL flush 回调内逐像素完成（语义与 `lv_display_set_rotation` 一致
 `tools/fonttools-venv/bin/python tools/prepare_icons.py`（下载 SVG →
 ImageMagick 栅格化 → 输出 `components/graphics/ui/src/icons_data.c` +
 `include/icons_data.h`）；卡片渲染为「图标 + FreeType 中文名」。
+
+天气功能支持官方**和风天气图标集**
+（[icons.qweather.com](https://icons.qweather.com/)，图标包
+`QWeather-Icons-1.8.0/`，MIT 许可）：`tools/fonttools-venv/bin/python
+tools/prepare_qweather_icons.py` 把 API 图标代码（昼夜、雨/雪/雾各类）
+转为 LVGL A8 位图（`components/graphics/ui/src/qweather_icons.c`，查找函数
+`qweather_icon_get(code)`）。主界面「天气」应用图标显示**实时天气图标**
+（取自最新快照，天气不可用或代码未收录时回退 mdi 图标）。
 
 #### 只读字体资产（fonts 分区）
 
