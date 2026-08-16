@@ -30,6 +30,7 @@
 #include "espaperplay_system.h"
 #include "espaperplay_touch.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_weather.h"
 #include "espaperplay_webserver.h"
 #include "espaperplay_wifi.h"
 
@@ -91,6 +92,11 @@ void app_main(void) {
 
     /* 网络时间：STA 联网后自动执行「公网 IP → 地理位置 → 时区 → NTP 同步」。 */
     ESP_ERROR_CHECK(espaperplay_nettime_start());
+
+    /* 天气：STA 联网后按周期拉取和风天气全部数据（实时 / 预报 / 分钟降水 /
+     * 预警 / 指数 / 空气质量 / 天文）到内存快照，供屏幕与 Web 展示使用。
+     * API Key 与位置通过 Web 管理页配置（NVS 持久化）。 */
+    ESP_ERROR_CHECK(espaperplay_weather_start());
 
     /* 外设模块。 */
     ESP_ERROR_CHECK(espaperplay_storage_mount());

@@ -16,6 +16,7 @@
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_system.h"
+#include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
 
@@ -53,6 +54,10 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
     /* 连续大面积局刷后强制全刷阈值（0=禁用，只局刷）。 */
     cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
+    /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
+    cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
+    cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
+    cJSON_AddStringToObject(root, "weather_api_host", cfg->weather_api_host);
 
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
@@ -112,6 +117,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
+    /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
+     * API Host 留空 = 使用公共地址）。 */
+    char weather_api_key[ESPAPERPLAY_SYSTEM_WEATHER_KEY_MAX_LEN] = {0};
+    char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN] = {0};
+    char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN] = {0};
+    const bool has_weather_key =
+        webserver_form_get_field(body, "weather_api_key", weather_api_key,
+                                 sizeof(weather_api_key));
+    const bool has_weather_loc = webserver_form_get_field(
+        body, "weather_location", weather_location, sizeof(weather_location));
+    const bool has_weather_host = webserver_form_get_field(
+        body, "weather_api_host", weather_api_host, sizeof(weather_api_host));
+    const bool clear_weather_key = webserver_form_get_flag(body, "clear_weather_api_key");
+    const bool clear_weather_loc = webserver_form_get_flag(body, "clear_weather_location");
+    const bool clear_weather_host = webserver_form_get_flag(body, "clear_weather_api_host");
     free(body);
 
     const espaperplay_system_config_t *cur = espaperplay_system_get_config();
@@ -210,6 +230,49 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
             err = espaperplay_gui_set_full_force_after((uint32_t)n);
         }
     }
+    /* 和风天气：字段出现时应用。API Key 语义与密码一致——输入非空 → 设置新值；
+     * 输入为空且勾选"清除" → 置空；否则保留当前值。位置留空 + 勾选清除 =
+     * 恢复自动定位（按公网 IP）。API Host 同理（留空 + 勾选清除 = 公共地址）。 */
+    bool weather_changed = false;
+    const char *new_weather_key = cur->weather_api_key;
+    const char *new_weather_loc = cur->weather_location;
+    const char *new_weather_host = cur->weather_api_host;
+    if (has_weather_key) {
+        new_weather_key = (weather_api_key[0] == '\0' && !clear_weather_key)
+                              ? cur->weather_api_key
+                              : weather_api_key;
+    }
+    if (has_weather_loc) {
+        new_weather_loc = (weather_location[0] == '\0' && !clear_weather_loc)
+                              ? cur->weather_location
+                              : weather_location;
+    }
+    if (has_weather_host) {
+        new_weather_host = (weather_api_host[0] == '\0' && !clear_weather_host)
+                               ? cur->weather_api_host
+                               : weather_api_host;
+    }
+    if (err == ESP_OK && has_weather_key &&
+        strcmp(new_weather_key, cur->weather_api_key) != 0) {
+        err = espaperplay_system_set_weather_api_key(new_weather_key);
+        if (err == ESP_OK) {
+            weather_changed = true;
+        }
+    }
+    if (err == ESP_OK && has_weather_loc &&
+        strcmp(new_weather_loc, cur->weather_location) != 0) {
+        err = espaperplay_system_set_weather_location(new_weather_loc);
+        if (err == ESP_OK) {
+            weather_changed = true;
+        }
+    }
+    if (err == ESP_OK && has_weather_host &&
+        strcmp(new_weather_host, cur->weather_api_host) != 0) {
+        err = espaperplay_system_set_weather_api_host(new_weather_host);
+        if (err == ESP_OK) {
+            weather_changed = true;
+        }
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to save config: %s", esp_err_to_name(err));
         webserver_send_json_err(req, esp_err_to_name(err));
@@ -231,6 +294,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to re-apply wifi config: %s", esp_err_to_name(err));
         }
+    }
+    /* 天气配置变化：清空缓存并请求立即刷新，使新 Key / 位置尽快生效。 */
+    if (weather_changed) {
+        espaperplay_weather_config_changed();
     }
     return ESP_OK;
 }
@@ -261,6 +328,8 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to re-apply wifi after reset: %s", esp_err_to_name(err));
     }
+    /* 天气配置已恢复默认（Key 清空），同步清空天气缓存。 */
+    espaperplay_weather_config_changed();
     return ESP_OK;
 }
 

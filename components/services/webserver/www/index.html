@@ -365,6 +365,36 @@
         </section>
 
         <section>
+            <h2>天气设置（和风天气）</h2>
+            <form id="weatherForm">
+                <div class="field">
+                    <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取，留空 = 保持不变）</label>
+                    <input type="password" name="weather_api_key" maxlength="47" placeholder="（未设置）"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_key" value="1"> 清除已保存的 API
+                        Key</label>
+                </div>
+                <div class="field">
+                    <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 按公网 IP 自动定位）</label>
+                    <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
+                        autocomplete="off">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1"> 清除已保存的位置（恢复自动定位）</label>
+                </div>
+                <div class="field">
+                    <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/" target="_blank" rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
+                    <input type="text" name="weather_api_host" maxlength="79" placeholder="例如 abc1234xyz.def.qweatherapi.com"
+                        autocomplete="off">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的 API Host（回退到公共地址）</label>
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                    <button type="button" id="weatherRefresh">立即刷新</button>
+                </div>
+            </form>
+            <div class="grid" id="weatherInfo"></div>
+        </section>
+
+        <section>
             <h2>账户安全</h2>
             <form id="passwordForm">
                 <div class="field">
@@ -460,6 +490,7 @@
                     showApp();
                     loadStatus();
                     loadConfig();
+                    loadWeather();
                 } else {
                     showLogin();
                 }
@@ -499,6 +530,7 @@
                     showApp();
                     loadStatus();
                     loadConfig();
+                    loadWeather();
                 } else {
                     $('#authError').textContent = d.error || ('设置失败（' + res.status + '）');
                 }
@@ -655,6 +687,41 @@
             }
         }
 
+        /* 加载并渲染天气状态。 */
+        async function loadWeather() {
+            if (!getToken()) return;
+            try {
+                const res = await apiFetch('/api/weather');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                let html =
+                    '<div class="stat"><div class="label">状态</div><div class="value">' +
+                    (d.configured
+                        ? (d.valid ? '<span class="pill ok">正常</span>' : '<span class="pill err">等待数据</span>')
+                        : '<span class="pill err">未配置 Key</span>') + '</div></div>' +
+                    '<div class="stat"><div class="label">位置</div><div class="value">' + esc(d.location_name || '-') +
+                    (d.auto_location ? '（自动）' : '') + '</div></div>' +
+                    '<div class="stat"><div class="label">最近更新</div><div class="value">' + esc(d.update_time || '-') + '</div></div>';
+                if (d.valid && d.now) {
+                    html +=
+                        '<div class="stat"><div class="label">实时天气</div><div class="value">' + esc(d.now.text || '-') +
+                        ' ' + esc(d.now.temp || '-') + '°C（体感 ' + esc(d.now.feels_like || '-') + '°C）</div></div>' +
+                        '<div class="stat"><div class="label">空气质量</div><div class="value">' +
+                        esc((d.air && d.air.category) || '-') + (d.air && d.air.aqi ? '（AQI ' + esc(d.air.aqi) + '）' : '') + '</div></div>' +
+                        '<div class="stat"><div class="label">气象预警</div><div class="value">' +
+                        (d.warning_count ? '<span class="pill err">' + d.warning_count + ' 条生效中</span>' : '无') + '</div></div>' +
+                        '<div class="stat"><div class="label">日出 / 日落</div><div class="value">' +
+                        esc((d.astronomy && d.astronomy.sunrise) || '-') + ' / ' + esc((d.astronomy && d.astronomy.sunset) || '-') + '</div></div>';
+                }
+                if (d.last_error) {
+                    html += '<div class="stat"><div class="label">最近错误</div><div class="value">' + esc(d.last_error) + '</div></div>';
+                }
+                $('#weatherInfo').innerHTML = html;
+            } catch (e) {
+                /* 设备可能正在重启 / 网络切换，等待下次轮询自动恢复。 */
+            }
+        }
+
         /* 加载当前配置到表单。 */
         async function loadConfig() {
             try {
@@ -678,6 +745,14 @@
                     ? d.epd_idle_sleep_timeout_s : '';
                 $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
                     ? d.gui_full_force_after : '';
+                /* 天气：Key 不回填明文，仅在占位符中提示是否已保存；位置 / API Host 原样回填。 */
+                $('input[name=weather_api_key]').value = '';
+                $('input[name=weather_api_key]').placeholder = d.weather_api_key_set ? '••••••（已配置）' : '（未设置）';
+                $('input[name=weather_location]').value = d.weather_location || '';
+                $('input[name=weather_api_host]').value = d.weather_api_host || '';
+                $('input[name=clear_weather_api_key]').checked = false;
+                $('input[name=clear_weather_location]').checked = false;
+                $('input[name=clear_weather_api_host]').checked = false;
             } catch (e) {
                 /* 服务器暂不可达，忽略。 */
             }
@@ -711,6 +786,43 @@
                 toast('保存失败：' + err, true);
             }
             btn.disabled = false;
+        });
+
+        /* 保存天气设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#weatherForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#weatherForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#weatherForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('天气设置已保存，正在刷新天气数据…');
+                    loadConfig();
+                    setTimeout(loadWeather, 3000);
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 立即刷新天气数据。 */
+        $('#weatherRefresh').addEventListener('click', async () => {
+            try {
+                const d = await postForm('/api/weather/refresh', '');
+                if (d.ok) {
+                    toast('已请求刷新，数据更新可能需要几秒…');
+                    setTimeout(loadWeather, 5000);
+                } else {
+                    toast('刷新失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('刷新失败：' + e, true);
+            }
         });
 
         /* 保存并应用设置。 */
@@ -788,6 +900,7 @@
         /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
         checkAuth();
         setInterval(loadStatus, 5000);
+        setInterval(loadWeather, 15000);
     </script>
 </body>
 

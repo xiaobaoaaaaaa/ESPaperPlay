@@ -101,10 +101,10 @@ static void home_enter(void) {
 
     /* 占位提示：占满屏宽、文本居中，y = 90% 屏高。 */
     lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "single click: test page");
+    lv_label_set_text(hint, "click: test page\nhold: weather page");
     lv_obj_set_style_text_color(hint, lv_color_black(), 0);
     lv_obj_set_width(hint, lv_pct(100));
-    lv_obj_set_pos(hint, 0, lv_pct(90));
+    lv_obj_set_pos(hint, 0, lv_pct(88));
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
 
     s_home_timer = lv_timer_create(home_timer_cb, HOME_UI_PERIOD_MS, NULL);
@@ -123,11 +123,14 @@ static void home_exit(void) {
     ESP_LOGI(TAG, "home screen exited");
 }
 
-/** 主界面按键处理（LVGL 线程内，由按键分发任务调用）：单击进入测试页。 */
+/** 主界面按键处理（LVGL 线程内，由按键分发任务调用）：单击进入测试页，长按松开进入天气页。 */
 static void home_on_key(const espaperplay_input_event_t *event) {
     if (event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK) {
         ESP_LOGI(TAG, "home: single click -> push test page");
         espaperplay_ui_page_push_lv(&espaperplay_ui_page_test);
+    } else if (event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_UP) {
+        ESP_LOGI(TAG, "home: long press -> push weather page");
+        espaperplay_ui_page_push_lv(&espaperplay_ui_page_weather);
     }
 }
 

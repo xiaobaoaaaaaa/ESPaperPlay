@@ -95,6 +95,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req);
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req);
 esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req);
 
+/* 天气域（webserver_handler_weather.c）。 */
+esp_err_t webserver_handle_weather_get(httpd_req_t *req);
+esp_err_t webserver_handle_weather_refresh_post(httpd_req_t *req);
+
 /* 鉴权守卫（webserver_auth_guard.c）。 */
 esp_err_t webserver_require_auth(httpd_req_t *req);
 bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size);

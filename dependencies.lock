@@ -33,6 +33,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.1.1
+  espressif/zlib:
+    component_hash: 64ea2fd6754c5a05951f1ddb312ac835cd782e68cb5bd9dfcd1c3a107c8fbfbc
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.3.2
   idf:
     source:
       type: idf
@@ -47,8 +57,9 @@ dependencies:
 direct_dependencies:
 - espressif/button
 - espressif/cjson
+- espressif/zlib
 - idf
 - lvgl/lvgl
-manifest_hash: 5852e0b8129379f0198aad60aabafd9b27ca6579450b6b03487271b2cd8276b8
+manifest_hash: 2615794902201eba9b93e17c21f243ef0bbaa424b1c0cd9a1b62db6415d4e81c
 target: esp32s3
 version: 2.0.0

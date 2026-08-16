@@ -85,6 +85,14 @@ static esp_err_t register_handlers(httpd_handle_t server) {
          .method = HTTP_POST,
          .handler = webserver_handle_auth_logout_post,
          .user_ctx = NULL},
+        {.uri = "/api/weather",
+         .method = HTTP_GET,
+         .handler = webserver_handle_weather_get,
+         .user_ctx = NULL},
+        {.uri = "/api/weather/refresh",
+         .method = HTTP_POST,
+         .handler = webserver_handle_weather_refresh_post,
+         .user_ctx = NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
@@ -117,7 +125,7 @@ static esp_err_t start_https_server(void) {
     /* HTTPS 主服务器（443）：承载全部业务路由。 */
     httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
     conf.httpd.stack_size = 10240; /* TLS 握手需要较大栈 */
-    conf.httpd.max_uri_handlers = 16;
+    conf.httpd.max_uri_handlers = 24;
     conf.servercert = cert;
     conf.servercert_len = cert_len;
     conf.prvtkey_pem = key;

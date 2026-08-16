@@ -152,6 +152,9 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_home;
 /** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键/触摸事件显示 + 可点击返回按钮，双击旋转屏幕，长按返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 
+/** 天气页页面实例（screen_weather.c）：展示和风天气快照（实时 / 3 日预报 / 空气 / 天文 / 降水 / 预警），单击返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_weather;
+
 #ifdef __cplusplus
 }
 #endif

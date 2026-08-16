@@ -245,6 +245,61 @@ after expiry or an explicit `espaperplay_netip_cache_clear()` /
 `espaperplay_netip_set_cache_ttl_ms()` / `espaperplay_geoip_set_cache_ttl_ms()`
 (0 disables caching).
 
+#### Weather (QWeather / 和风天气)
+
+The `weather` service (`components/services/weather`) fetches weather data from
+the official [QWeather Web API v7](https://dev.qweather.com/docs/api/) over
+HTTPS (ESP-IDF CA certificate bundle, authenticated with the `X-QW-Api-Key`
+header). It implements:
+
+- **Real-time weather** — `v7/weather/now`;
+- **Daily forecast** — `v7/weather/3d` and `v7/weather/7d` (7-day with
+  automatic 3-day fallback for subscriptions that do not include it);
+- **Hourly forecast** — `v7/weather/24h` (next 24 hours);
+- **Minute-level precipitation** — `v7/minutely/5m` (next 2 hours, China
+  mainland; the endpoint only accepts "lon,lat" coordinates on the new
+  platform, so the service resolves the LocationID back to coordinates via
+  GeoAPI before requesting);
+- **Weather alerts** — `v7/warning/now`;
+- **Weather indices** — `v7/indices/1d` (all types);
+- **Air quality** — `v7/air/now` (China mainland);
+- **Astronomy** — `v7/astronomy/sun` + `v7/astronomy/moon`
+  (sunrise/sunset, moonrise/moonset, moon phase; the endpoints require the
+  `date=yyyyMMdd` parameter, filled with the local date; timestamps are
+  returned in full ISO form and truncated to `HH:MM` for display);
+- **GeoAPI** — city-name / "lon,lat" reverse lookup (default public host
+  `geoapi.qweather.com/v2/city/lookup`; with a custom API Host configured the
+  new-style `{host}/geo/v2/city/lookup` path is used; a manual LocationID is
+  used as-is).
+
+QWeather responses are gzip-compressed by default; the service detects the
+gzip magic bytes and decompresses them with the `espressif/zlib` managed
+component (see `components/services/weather/idf_component.yml`).
+
+**Configuration** — the API key, an optional location and an optional custom
+API Host are persisted in NVS and can be set from the web console (*Weather*
+section): `weather_api_key` (required), `weather_location` (optional
+LocationID / city name / "lon,lat" like "116.41,39.92" — "lat,lon" is
+auto-detected and swapped; empty = auto-locate) and `weather_api_host`
+(optional; QWeather is phasing out the public hosts devapi/geoapi.qweather.com
+from 2026 — copy your own API Host from the console settings).
+Without a manual location the service auto-locates: public IP (`netip`) →
+geolocation (`geoip`) → reverse GeoAPI lookup of the coordinates (lon,lat,
+2-decimal precision, cached for 24 h).
+
+**Operation** — `espaperplay_weather_start()` runs a background task that
+waits for STA connectivity and then refreshes the in-RAM snapshot
+(`espaperplay_weather_get_snapshot()`) on a 10-minute cycle. Every API has its
+own TTL cache (now/minutely/warnings 10 min, hourly 30 min, daily/air 60 min,
+indices/astronomy 6 h) so expired data is fetched independently; the web
+console's *Refresh now* button or `espaperplay_weather_request_refresh()`
+wakes the task early. Per-API queries (`espaperplay_weather_query_*`) can be
+called directly with a location argument or with `NULL` for the configured /
+auto-located position. QWeather business codes are surfaced through
+`espaperplay_weather_get_status()` (e.g. `401` = invalid key, `403` = quota
+exceeded). The weather screen (`screen_weather.c`, long-press on the home
+page) displays the snapshot on the e-paper.
+
 #### Naming & Logging Conventions
 
 - All public APIs use the `espaperplay_<module>_<action>()` prefix;
@@ -274,6 +329,8 @@ private key never leaves the device, so it cannot be extracted from the firmware
 | `/api/auth/login`    | POST   | Password login, returns a session token           |
 | `/api/auth/password` | POST   | Set (first-time) or change password (auth if set) |
 | `/api/auth/logout`   | POST   | Revoke the current session                        |
+| `/api/weather`       | GET    | Weather service status + data snapshot summary (auth) |
+| `/api/weather/refresh` | POST | Request an immediate weather refresh (auth)       |
 
 > AP mode: connect to the device AP from a phone / laptop and browse to
 > `http://192.168.4.1/` (it redirects to `https://192.168.4.1/`). Your browser
@@ -554,6 +611,51 @@ I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），�
 `espaperplay_netip_set_cache_ttl_ms()` / `espaperplay_geoip_set_cache_ttl_ms()`
 调整（设为 0 禁用缓存）。
 
+#### 天气（和风天气 QWeather）
+
+`weather` 服务（`components/services/weather`）通过官方
+[和风天气 Web API v7](https://dev.qweather.com/docs/api/)（HTTPS + ESP-IDF
+内置 CA 证书包校验，`X-QW-Api-Key` 请求头认证）获取天气数据，实现：
+
+- **实时天气** —— `v7/weather/now`；
+- **逐日天气预报** —— `v7/weather/3d` 与 `v7/weather/7d`（7 日预报失败时
+  自动回退 3 日，适配不含 7 日预报的订阅）；
+- **逐小时预报** —— `v7/weather/24h`（未来 24 小时）；
+- **分钟级降水** —— `v7/minutely/5m`（未来 2 小时逐分钟降水强度，
+  仅中国大陆；新平台该接口只接受"经度,纬度"坐标，服务会自动把
+  LocationID 经 GeoAPI 反查为坐标后再请求）；
+- **气象灾害预警** —— `v7/warning/now`；
+- **天气指数** —— `v7/indices/1d`（全部类型）；
+- **空气质量** —— `v7/air/now`（仅中国大陆）；
+- **天文** —— `v7/astronomy/sun` + `v7/astronomy/moon`（日出日落、
+  月升月落、月相；接口必选 `date=yyyyMMdd` 参数，自动填本地当天日期；
+  返回时间为完整时间戳，展示时截取 `HH:MM`）；
+- **GeoAPI 城市查询** —— 城市名 / "经度,纬度" 反查 LocationID（默认公共地址
+  `geoapi.qweather.com/v2/city/lookup`；配置自定义 API Host 后使用
+  `{host}/geo/v2/city/lookup`）。
+
+和风天气 API 默认以 gzip 压缩响应，服务检测到 gzip 魔数后用
+`espressif/zlib` 托管组件解压（见 `components/services/weather/idf_component.yml`）。
+
+**配置** —— API Key 与可选位置持久化在 NVS，可在 Web 管理控制台「天气
+设置」区配置：`weather_api_key`（必填）、`weather_location`（可选
+LocationID / 城市名 / "经度,纬度"，如 "116.41,39.92"；按习惯写
+"纬度,经度" 会自动交换；留空 = 自动定位）与 `weather_api_host`（可选；
+和风天气 2026 年起逐步停止公共地址 devapi/geoapi.qweather.com，建议在
+控制台-设置获取自己的 API Host 填入）。未配置位置时服务自动定位：公网
+IP（`netip`）→ 地理位置（`geoip`）→ GeoAPI 经纬度反查 LocationID
+（结果缓存 24 小时）。
+
+**运行** —— `espaperplay_weather_start()` 启动后台任务：等待 STA 联网后
+每 10 分钟把全部数据刷新进内存快照（`espaperplay_weather_get_snapshot()`）。
+各接口拥有独立 TTL 缓存（实时 / 分钟级 / 预警 10 分钟、逐小时 30 分钟、
+预报 / 空气 60 分钟、指数 / 天文 6 小时），按需单独过期；管理页「立即
+刷新」按钮或 `espaperplay_weather_request_refresh()` 可提前唤醒任务。
+单项查询 `espaperplay_weather_query_*()` 可直接传入位置或传 NULL 使用
+配置 / 自动定位位置。QWeather 业务码通过 `espaperplay_weather_get_status()`
+对外暴露（如 401 = Key 无效、403 = 配额超限）。主界面长按进入天气页
+（`screen_weather.c`），在电子纸上展示快照数据。
+
 #### 命名与日志规范
 
 - 所有公开 API 统一使用 `espaperplay_<模块>_<动作>()` 前缀；
@@ -582,6 +684,8 @@ NVS，重启后指纹不变），私钥永不出设备，无法从固件中提�
 | `/api/auth/login`     | POST  | 密码登录，成功后返回会话 token                    |
 | `/api/auth/password`  | POST  | 首次设置 / 修改密码（已设置后需登录）              |
 | `/api/auth/logout`    | POST  | 吊销当前会话                                      |
+| `/api/weather`        | GET   | 天气服务状态与数据快照摘要（需登录）                |
+| `/api/weather/refresh`| POST  | 请求立即刷新天气数据（需登录）                      |
 
 > AP 模式下用手机 / 电脑连接设备热点，浏览器访问 `http://192.168.4.1/`
 >（会自动重定向到 `https://192.168.4.1/`）。浏览器会对自签名证书给出安全

@@ -22,6 +22,9 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_AP_PASS "ap_pass"
 #define NVS_KEY_EPD_IDLE_MS "epd_idle_ms"
 #define NVS_KEY_GUI_FORCE_AFTER "gui_force_after"
+#define NVS_KEY_WEATHER_KEY "weather_key"
+#define NVS_KEY_WEATHER_LOC "weather_loc"
+#define NVS_KEY_WEATHER_HOST "weather_host"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -38,6 +41,9 @@ static espaperplay_system_config_t s_config = {
     .ap_password = ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS,
     .epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS,
     .gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER,
+    .weather_api_key = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
+    .weather_location = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
+    .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
 };
 
 static bool s_initialized = false;
@@ -136,6 +142,15 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_u32(handle, NVS_KEY_GUI_FORCE_AFTER, s_config.gui_full_force_after);
     }
     if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_WEATHER_KEY, s_config.weather_api_key);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_WEATHER_LOC, s_config.weather_location);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -199,6 +214,16 @@ static esp_err_t system_load(void) {
         s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
         missing = true;
     }
+
+    load_str_field(handle, NVS_KEY_WEATHER_KEY, s_config.weather_api_key,
+                   sizeof(s_config.weather_api_key), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
+                   &missing);
+    load_str_field(handle, NVS_KEY_WEATHER_LOC, s_config.weather_location,
+                   sizeof(s_config.weather_location), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
+                   &missing);
+    load_str_field(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host,
+                   sizeof(s_config.weather_api_host), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
+                   &missing);
 
     nvs_close(handle);
 
@@ -305,6 +330,39 @@ esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count) {
     return save_u32_field(NVS_KEY_GUI_FORCE_AFTER, count);
 }
 
+esp_err_t espaperplay_system_set_weather_api_key(const char *key) {
+    if (key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(key) >= ESPAPERPLAY_SYSTEM_WEATHER_KEY_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    strlcpy(s_config.weather_api_key, key, sizeof(s_config.weather_api_key));
+    return save_str_field(NVS_KEY_WEATHER_KEY, s_config.weather_api_key);
+}
+
+esp_err_t espaperplay_system_set_weather_location(const char *location) {
+    if (location == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(location) >= ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    strlcpy(s_config.weather_location, location, sizeof(s_config.weather_location));
+    return save_str_field(NVS_KEY_WEATHER_LOC, s_config.weather_location);
+}
+
+esp_err_t espaperplay_system_set_weather_api_host(const char *host) {
+    if (host == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(host) >= ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    strlcpy(s_config.weather_api_host, host, sizeof(s_config.weather_api_host));
+    return save_str_field(NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
+}
+
 esp_err_t espaperplay_system_reset_defaults(void) {
     s_config.wifi_mode = ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE;
     strlcpy(s_config.sta_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_STA_SSID, sizeof(s_config.sta_ssid));
@@ -314,5 +372,11 @@ esp_err_t espaperplay_system_reset_defaults(void) {
     strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
     s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
     s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
+    strlcpy(s_config.weather_api_key, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
+            sizeof(s_config.weather_api_key));
+    strlcpy(s_config.weather_location, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
+            sizeof(s_config.weather_location));
+    strlcpy(s_config.weather_api_host, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
+            sizeof(s_config.weather_api_host));
     return system_save_all();
 }
