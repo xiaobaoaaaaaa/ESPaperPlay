@@ -424,4 +424,20 @@ esp_err_t espaperplay_wifi_get_status(espaperplay_wifi_status_t *status) {
     return ESP_OK;
 }
 
+esp_err_t espaperplay_wifi_get_rssi(int *out_rssi) {
+    if (out_rssi == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* 仅 STA 已连接时才有 RSSI（AP 模式无意义）。 */
+    if (!s_started || s_mode != ESPAPERPLAY_WIFI_MODE_STA || !s_connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    *out_rssi = ap.rssi;
+    return ESP_OK;
+}
+
 bool espaperplay_wifi_is_connected(void) { return s_connected; }

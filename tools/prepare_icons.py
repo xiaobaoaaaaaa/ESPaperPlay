@@ -33,17 +33,29 @@ HDR_OUT = PROJECT_DIR / "components/graphics/ui/include/icons_data.h"
 
 ICON_SIZE = 64
 
-# (iconify prefix, icon name, C variable suffix, comment)
+# (iconify prefix, icon name, C variable suffix, comment) —— 64x64 应用图标
 ICONS = [
     ("mdi", "weather-partly-cloudy", "weather", "天气：多云转晴"),
     ("mdi", "book-open-page-variant", "reader", "阅读器：打开的书"),
     ("mdi", "bug", "debug", "测试/调试：bug"),
 ]
 
+# 小图标（16x16）：状态栏等 UI 元素
+SMALL_ICON_SIZE = 16
+SMALL_ICONS = [
+    ("mdi", "wifi-strength-4", "wifi4", "WiFi 信号强"),
+    ("mdi", "wifi-strength-3", "wifi3", "WiFi 信号中"),
+    ("mdi", "wifi-strength-2", "wifi2", "WiFi 信号弱"),
+    ("mdi", "wifi-strength-1", "wifi1", "WiFi 信号极弱"),
+    ("mdi", "wifi-off", "wifi_off", "WiFi 未连接"),
+    ("mdi", "wifi", "wifi", "WiFi（默认）"),
+    ("mdi", "access-point", "wifi_ap", "AP 热点"),
+]
 
-def fetch_svg(prefix: str, name: str, out: Path) -> None:
+
+def fetch_svg(prefix: str, name: str, out: Path, size: int) -> None:
     url = (f"https://api.iconify.design/{prefix}/{name}.svg"
-           f"?width={ICON_SIZE}&height={ICON_SIZE}&color=%23000000")
+           f"?width={size}&height={size}&color=%23000000")
     print(f"  download {url}")
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) ESPaperPlay-icon-tool/1.0",
@@ -64,9 +76,9 @@ def rasterize(svg: Path, png: Path) -> None:
     sys.exit(1)
 
 
-def make_alpha_array(png: Path, binary: bool) -> list:
+def make_alpha_array(png: Path, binary: bool, size: int) -> list:
     from PIL import Image
-    im = Image.open(png).convert("L").resize((ICON_SIZE, ICON_SIZE))
+    im = Image.open(png).convert("L").resize((size, size))
     px = list(im.getdata())
     if binary:
         return [255 if v < 128 else 0 for v in px]
@@ -74,7 +86,8 @@ def make_alpha_array(png: Path, binary: bool) -> list:
     return [255 - v for v in px]
 
 
-def emit_c(alpha_map: dict, binary: bool) -> None:
+def emit_c(items: list, binary: bool) -> None:
+    """items: [(var 名, 尺寸, alpha 数组), ...]"""
     lines = [
         "/*",
         " * SPDX-FileCopyrightText: 2026 ESPaperPlay Contributors",
@@ -85,28 +98,27 @@ def emit_c(alpha_map: dict, binary: bool) -> None:
         " *   tools/fonttools-venv/bin/python tools/prepare_icons.py"
         + (" --binary" if binary else ""),
         " *",
-        " * App icon bitmaps (LVGL A8, 64x64) fetched from Iconify (icon-sets.iconify.design).",
+        " * App icon bitmaps (LVGL A8) fetched from Iconify (icon-sets.iconify.design).",
         " */",
         "",
         '#include "icons_data.h"',
         "",
     ]
-    for name in alpha_map:
-        data = alpha_map[name]
+    for name, size, data in items:
         lines.append(f"static const uint8_t s_icon_{name}_px[{len(data)}] = {{")
         for i in range(0, len(data), 16):
             chunk = ", ".join(f"0x{v:02X}" for v in data[i:i + 16])
             lines.append(f"    {chunk},")
         lines.append("};")
         lines.append("")
-    for name in alpha_map:
+    for name, size, data in items:
         lines.extend([
-            f"const lv_image_dsc_t icon_{name}_{ICON_SIZE} = {{",
+            f"const lv_image_dsc_t icon_{name}_{size} = {{",
             "    .header = {",
             f"        .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_A8,",
-            f"        .w = {ICON_SIZE}, .h = {ICON_SIZE},",
+            f"        .w = {size}, .h = {size},",
             "    },",
-            f"    .data_size = {ICON_SIZE * ICON_SIZE},",
+            f"    .data_size = {size * size},",
             f"    .data = s_icon_{name}_px,",
             "};",
             "",
@@ -115,7 +127,7 @@ def emit_c(alpha_map: dict, binary: bool) -> None:
     print(f"wrote {SRC_OUT}")
 
 
-def emit_h(alpha_map: dict) -> None:
+def emit_h(items: list) -> None:
     lines = [
         "/*",
         " * SPDX-FileCopyrightText: 2026 ESPaperPlay Contributors",
@@ -125,7 +137,7 @@ def emit_h(alpha_map: dict) -> None:
         " * GENERATED FILE - DO NOT EDIT. Regenerate with:",
         " *   tools/fonttools-venv/bin/python tools/prepare_icons.py",
         " *",
-        " * App icon bitmaps (LVGL A8, 64x64) fetched from Iconify (icon-sets.iconify.design).",
+        " * App icon bitmaps (LVGL A8) fetched from Iconify (icon-sets.iconify.design).",
         " */",
         "",
         "#pragma once",
@@ -133,10 +145,10 @@ def emit_h(alpha_map: dict) -> None:
         '#include "lvgl.h"',
         "",
     ]
-    for name in alpha_map:
+    for name, size, _data in items:
         lines.append(
-            f"/** {ICON_SIZE}x{ICON_SIZE} A8 图标（Iconify: {name}） */")
-        lines.append(f"extern const lv_image_dsc_t icon_{name}_{ICON_SIZE};")
+            f"/** {size}x{size} A8 图标（Iconify: {name}） */")
+        lines.append(f"extern const lv_image_dsc_t icon_{name}_{size};")
         lines.append("")
     HDR_OUT.write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {HDR_OUT}")
@@ -149,17 +161,29 @@ def main() -> int:
     args = parser.parse_args()
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
-    alpha_map = {}
+    items = []
+
+    # 应用图标 64x64
     for prefix, name, var, comment in ICONS:
         svg = WORK_DIR / f"{var}.svg"
         png = WORK_DIR / f"{var}.png"
         print(f"[{var}] {comment}")
-        fetch_svg(prefix, name, svg)
+        fetch_svg(prefix, name, svg, ICON_SIZE)
         rasterize(svg, png)
-        alpha_map[var] = make_alpha_array(png, args.binary)
+        items.append((var, ICON_SIZE, make_alpha_array(png, args.binary, ICON_SIZE)))
 
-    emit_c(alpha_map, args.binary)
-    emit_h(alpha_map)
+    # 状态栏等小图标 16x16
+    for prefix, name, var, comment in SMALL_ICONS:
+        svg = WORK_DIR / f"{var}.svg"
+        png = WORK_DIR / f"{var}.png"
+        print(f"[{var}] {comment}")
+        fetch_svg(prefix, name, svg, SMALL_ICON_SIZE)
+        rasterize(svg, png)
+        items.append((var, SMALL_ICON_SIZE,
+                      make_alpha_array(png, args.binary, SMALL_ICON_SIZE)))
+
+    emit_c(items, args.binary)
+    emit_h(items)
     return 0
 
 

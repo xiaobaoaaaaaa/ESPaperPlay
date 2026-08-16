@@ -166,7 +166,7 @@ static const char *const s_weekday_zh[] = {"日", "一", "二", "三", "四", "�
 /* 状态栏                                                               */
 /* ------------------------------------------------------------------ */
 
-/** 状态栏：白底 + 底部 2px 分隔线；左侧时间（16px），右侧 WiFi 状态。 */
+/** 状态栏：白底 + 底部 2px 分隔线；左侧时间（16px），右侧 WiFi 强度图标。 */
 static void home_status_bar_create(lv_obj_t *scr) {
     lv_obj_t *bar = lv_obj_create(scr);
     lv_obj_set_size(bar, LV_PCT(100), HOME_STATUS_H_PX);
@@ -188,8 +188,10 @@ static void home_status_bar_create(lv_obj_t *scr) {
     s_status_time = home_label_create(bar, "--:--", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_status_time, 12, 4);
 
-    s_status_wifi = home_label_create(bar, "WiFi --", 16, LV_TEXT_ALIGN_RIGHT);
-    lv_obj_set_pos(s_status_wifi, 0, 4);
+    /* WiFi 强度图标（16x16 A8，A8 默认黑色绘制） */
+    s_status_wifi = lv_image_create(bar);
+    lv_image_set_src(s_status_wifi, &icon_wifi_off_16);
+    lv_obj_align(s_status_wifi, LV_ALIGN_TOP_RIGHT, -12, 7);
 }
 
 /* ------------------------------------------------------------------ */
@@ -379,20 +381,32 @@ static void home_refresh(void) {
     }
     lv_label_set_text(s_status_time, buf);
 
-    /* 状态栏 WiFi */
+    /* 状态栏 WiFi 强度图标：AP 热点 / STA 按 RSSI 分档 / 未连接 */
+    const lv_image_dsc_t *wifi_icon = &icon_wifi_off_16;
     espaperplay_wifi_status_t ws;
     if (espaperplay_wifi_get_status(&ws) == ESP_OK && ws.started) {
         if (ws.mode == ESPAPERPLAY_WIFI_MODE_AP) {
-            snprintf(buf, sizeof(buf), "热点 %.*s", 8, ws.ssid);
+            wifi_icon = &icon_wifi_ap_16;
         } else if (ws.connected) {
-            snprintf(buf, sizeof(buf), "WiFi 已连接");
-        } else {
-            snprintf(buf, sizeof(buf), "WiFi 未连接");
+            int rssi = 0;
+            if (espaperplay_wifi_get_rssi(&rssi) == ESP_OK) {
+                if (rssi >= -50) {
+                    wifi_icon = &icon_wifi4_16;
+                } else if (rssi >= -60) {
+                    wifi_icon = &icon_wifi3_16;
+                } else if (rssi >= -70) {
+                    wifi_icon = &icon_wifi2_16;
+                } else {
+                    wifi_icon = &icon_wifi1_16;
+                }
+            } else {
+                wifi_icon = &icon_wifi_16; /* 已连接但 RSSI 不可得 */
+            }
         }
-    } else {
-        snprintf(buf, sizeof(buf), "WiFi --");
     }
-    lv_label_set_text(s_status_wifi, buf);
+    if (lv_image_get_src(s_status_wifi) != (const void *)wifi_icon) {
+        lv_image_set_src(s_status_wifi, wifi_icon);
+    }
 
     /* 页 0 时钟区：时 / 分 / 星期 / 日期 */
     if (tm != NULL) {

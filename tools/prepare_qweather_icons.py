@@ -3,18 +3,20 @@
 Prepare QWeather (和风天气) icon bitmaps for LVGL.
 
 Pipeline (per icon code):
-  1. Take the pre-downloaded SVG from QWeather-Icons-1.8.0/icons/
-     (fill variant preferred: {code}-fill.svg, fallback {code}.svg).
-  2. Rasterize to a 64x64 grayscale PNG with ImageMagick (`magick`/`convert`).
-  3. Convert to an LVGL A8 (8-bit alpha) bitmap via Pillow:
+  1. Obtain the source SVG set: use the local checkout
+     (project root /QWeather-Icons-1.8.0/icons, if present) or download the
+     official release zip into tools/qweather_icons_src/ (gitignored):
+     https://github.com/qwd/Icons/releases/download/v1.8.0/QWeather-Icons-1.8.0.zip
+  2. Take {code}-fill.svg (fill variant preferred, fallback {code}.svg).
+  3. Rasterize to a 64x64 grayscale PNG with ImageMagick (`magick`/`convert`).
+  4. Convert to an LVGL A8 (8-bit alpha) bitmap via Pillow:
      black glyph -> alpha 255, white background -> alpha 0, anti-aliased.
-  4. Emit components/graphics/ui/src/qweather_icons.c + include/qweather_icons.h
+  5. Emit components/graphics/ui/src/qweather_icons.c + include/qweather_icons.h
      with a lookup: const lv_image_dsc_t *qweather_icon_get(const char *code)
      (returns NULL for unknown codes / weather not available).
 
 Icon codes cover the QWeather API `icon` field (day/night + rain/snow/fog
-variants). Source package: https://github.com/qwd/Icons (MIT, see
-QWeather-Icons-1.8.0/LICENSE).
+variants). Source package license: MIT (QWeather-Icons-1.8.0/LICENSE).
 
 Usage:
   tools/fonttools-venv/bin/python tools/prepare_qweather_icons.py
@@ -22,11 +24,18 @@ Usage:
 
 import subprocess
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = TOOLS_DIR.parent
-ICON_SRC_DIR = PROJECT_DIR / "QWeather-Icons-1.8.0" / "icons"
+LOCAL_ICON_DIR = PROJECT_DIR / "QWeather-Icons-1.8.0" / "icons"
+DL_DIR = TOOLS_DIR / "qweather_icons_src"        # downloaded zip + unpack, gitignored
+DL_ZIP = DL_DIR / "QWeather-Icons-1.8.0.zip"
+DL_UNPACK = DL_DIR / "unpacked"
+ICON_ZIP_URL = ("https://github.com/qwd/Icons/releases/download/v1.8.0/"
+                "QWeather-Icons-1.8.0.zip")
 WORK_DIR = TOOLS_DIR / "icon_src"            # intermediate PNGs, gitignored
 SRC_OUT = PROJECT_DIR / "components/graphics/ui/src/qweather_icons.c"
 HDR_OUT = PROJECT_DIR / "components/graphics/ui/include/qweather_icons.h"
@@ -53,11 +62,37 @@ ICON_CODES = [
 ]
 
 
-def pick_svg(code: str) -> Path | None:
-    fill = ICON_SRC_DIR / f"{code}-fill.svg"
+def ensure_icon_dir() -> Path:
+    """本地图标包目录优先；缺失时下载官方 release zip 并解压（均不进入 git）。"""
+    if LOCAL_ICON_DIR.exists():
+        print(f"使用本地图标包: {LOCAL_ICON_DIR}")
+        return LOCAL_ICON_DIR
+
+    if not (DL_UNPACK / "icons").exists():
+        DL_DIR.mkdir(parents=True, exist_ok=True)
+        if not DL_ZIP.exists():
+            print(f"下载图标包: {ICON_ZIP_URL}")
+            req = urllib.request.Request(ICON_ZIP_URL, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) ESPaperPlay-icon-tool/1.0",
+            })
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                DL_ZIP.write_bytes(resp.read())
+        print(f"解压: {DL_ZIP}")
+        with zipfile.ZipFile(DL_ZIP) as zf:
+            zf.extractall(DL_UNPACK)
+    # zip 内可能带顶层目录（如 QWeather-Icons-1.8.0/icons），递归查找 icons/
+    icons = next((p for p in DL_UNPACK.glob("**/icons") if p.is_dir()), None)
+    if icons is None:
+        print("ERROR: 解压后未找到 icons/ 目录", file=sys.stderr)
+        sys.exit(1)
+    return icons
+
+
+def pick_svg(icon_dir: Path, code: str) -> Path | None:
+    fill = icon_dir / f"{code}-fill.svg"
     if fill.exists():
         return fill
-    plain = ICON_SRC_DIR / f"{code}.svg"
+    plain = icon_dir / f"{code}.svg"
     return plain if plain.exists() else None
 
 
@@ -178,11 +213,12 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
 
 
 def main() -> int:
+    icon_dir = ensure_icon_dir()
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     alpha_map = {}
     used_fill = {}
     for code in ICON_CODES:
-        svg = pick_svg(code)
+        svg = pick_svg(icon_dir, code)
         if svg is None:
             continue
         png = WORK_DIR / f"qw_{code}.png"

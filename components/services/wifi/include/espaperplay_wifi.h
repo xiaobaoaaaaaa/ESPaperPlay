@@ -92,6 +92,16 @@ esp_err_t espaperplay_wifi_stop(void);
 esp_err_t espaperplay_wifi_get_status(espaperplay_wifi_status_t *status);
 
 /**
+ * @brief 获取当前接入 AP 的信号强度 RSSI（dBm，负值，越大越强）。
+ *
+ * 仅 STA 模式且已连接时有效；AP 模式或未连接返回 ESP_ERR_INVALID_STATE。
+ *
+ * @param out_rssi 输出 RSSI（如 -55 表示较强信号）。
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_get_rssi(int *out_rssi);
+
+/**
  * @brief 查询网络是否可用。
  *
  * @return AP 模式且热点已开启、或 STA 模式且已获取 IP 时返回 true。
