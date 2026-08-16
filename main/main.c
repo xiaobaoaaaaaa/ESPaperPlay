@@ -16,6 +16,7 @@
 
 #include "espaperplay_auth.h"
 #include "espaperplay_board.h"
+#include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
@@ -73,6 +74,8 @@ void app_main(void) {
 
     /* 系统级初始化：先从 NVS 加载系统配置（不依赖硬件），再初始化 board / 总线。 */
     ESP_ERROR_CHECK(espaperplay_system_init());
+    /* 系统时钟：从 NVS 恢复持久化的时区（不依赖硬件），供 NTP 同步与本地时间输出使用。 */
+    ESP_ERROR_CHECK(espaperplay_clock_init());
     /* 设备鉴权：加载密码记录（不依赖硬件），供 Web 等模块校验使用。 */
     ESP_ERROR_CHECK(espaperplay_auth_init());
     /* 会话管理：签发/校验登录态与失败限速锁定（纯内存，不依赖硬件）。 */

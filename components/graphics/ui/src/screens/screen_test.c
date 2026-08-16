@@ -27,7 +27,7 @@ static const char *TAG = "ESPaperPlay_UI";
  *      小数字 ~100px 宽 vs 大黑块位移时接近全屏）。
  *
  * 目的 2：验证按键链路——实时显示最近一次按键事件（动作 / id / 按压
- *   时长）与累计计数；长按松开返回上一页。
+ *   时长）与累计计数；双击顺时针旋转屏幕 90 度；长按松开返回上一页。
  *
  * 布局全部使用百分比（相对屏幕尺寸），适配不同分辨率 / 比例面板：
  *   左列（压力测试区）：计数器 / 进度条 / 位移方块 / 状态行；
@@ -138,7 +138,7 @@ static void test_enter(void) {
     lv_obj_set_pos(s_key_count_label, lv_pct(52), lv_pct(42));
 
     lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "long press: back to home");
+    lv_label_set_text(hint, "double click: rotate 90 cw\nlong press: back to home");
     lv_obj_set_style_text_color(hint, lv_color_black(), 0);
     lv_obj_set_width(hint, lv_pct(100));
     lv_obj_set_pos(hint, 0, lv_pct(90));
@@ -169,6 +169,19 @@ static void test_on_key(const espaperplay_input_event_t *event) {
                           espaperplay_input_key_action_str(event->key_action), event->key_id,
                           event->key_press_time_ms);
     lv_label_set_text_fmt(s_key_count_label, "keys: %u", (unsigned)s_key_count);
+
+    if (event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_DOUBLE_CLICK) {
+        /* 双击：屏幕顺时针旋转 90 度（0 -> 90 -> 180 -> 270 -> 0 循环）。
+         * LVGL 只交换逻辑分辨率（如 800x480 -> 480x800）并整屏失效重绘，
+         * 像素旋转由移植层 flush 回调（lvgl_port.c）完成。 */
+        lv_display_t *disp = lv_display_get_default();
+        if (disp != NULL) {
+            const lv_display_rotation_t next =
+                (lv_display_rotation_t)((lv_display_get_rotation(disp) + 1) % 4);
+            lv_display_set_rotation(disp, next);
+            ESP_LOGI(TAG, "test: double click -> rotate cw %d deg", (int)next * 90);
+        }
+    }
 
     if (event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_UP &&
         espaperplay_ui_page_depth() > 1) {

@@ -36,6 +36,9 @@ static const char *s_ntp_servers[ESPAPERPLAY_CLOCK_NTP_SERVER_COUNT] = {
 /** 当前生效的时区名称（内存缓存）。 */
 static char s_tz_name[ESPAPERPLAY_CLOCK_TZ_MAX_LEN] = ESPAPERPLAY_CLOCK_DEFAULT_TZ;
 
+/** 当前已应用到 libc 的 POSIX TZ 字符串（默认 UTC）。 */
+static char s_posix_tz[ESPAPERPLAY_CLOCK_TZ_MAX_LEN] = "UTC0";
+
 /** SNTP 是否已初始化启动。 */
 static bool s_sntp_started = false;
 
@@ -43,11 +46,138 @@ static bool s_sntp_started = false;
 /* 时区                                                                */
 /* ------------------------------------------------------------------ */
 
-/** 应用时区到 libc（setenv("TZ") + tzset()）。 */
+/**
+ * IANA 时区名 -> POSIX TZ 字符串映射表。
+ *
+ * ESP-IDF 的 libc（newlib / picolibc）tzset() 只识别 POSIX 格式的 TZ 字符串
+ * （如 "CST-8"），不支持 IANA 时区名（如 "Asia/Shanghai"）——传 IANA 名会
+ * 解析失败并静默回退 UTC。因此 geoip 返回的 IANA 时区必须先翻译成 POSIX
+ * 格式再应用。未收录的时区保持当前时区并告警（见 clock_apply_timezone）。
+ *
+ * POSIX TZ 语法：std offset [dst [offset2] [,start[/time],end[/time]]]，
+ * 其中 offset 为「本地时间加该值得到 UTC」，符号与常识相反：西正东负，
+ * 故 UTC+8（中国）写作 "CST-8"。
+ */
+typedef struct {
+    const char *iana;  /*!< IANA 时区名（geoip 返回 / NVS 持久化的形式） */
+    const char *posix; /*!< 对应的 POSIX TZ 字符串（tzset() 实际使用的形式） */
+} clock_tz_map_entry_t;
+
+static const clock_tz_map_entry_t s_tz_map[] = {
+    /* ---- 固定偏移（无夏令时） ---- */
+    {"UTC", "UTC0"},
+    {"Etc/UTC", "UTC0"},
+    {"Asia/Shanghai", "CST-8"},
+    {"Asia/Hong_Kong", "HKT-8"},
+    {"Asia/Taipei", "CST-8"},
+    {"Asia/Macau", "CST-8"},
+    {"Asia/Tokyo", "JST-9"},
+    {"Asia/Seoul", "KST-9"},
+    {"Asia/Singapore", "SGT-8"},
+    {"Asia/Kuala_Lumpur", "MYT-8"},
+    {"Asia/Bangkok", "ICT-7"},
+    {"Asia/Ho_Chi_Minh", "ICT-7"},
+    {"Asia/Jakarta", "WIB-7"},
+    {"Asia/Manila", "PHT-8"},
+    {"Asia/Kolkata", "IST-5:30"},
+    {"Asia/Dhaka", "BST-6"},
+    {"Asia/Karachi", "PKT-5"},
+    {"Asia/Dubai", "GST-4"},
+    {"Asia/Riyadh", "AST-3"},
+    {"Asia/Baghdad", "AST-3"},
+    {"Asia/Tehran", "IST-3:30"},
+    {"Asia/Yangon", "MMT-6:30"},
+    {"Asia/Jerusalem", "IST-2"},
+    {"Europe/Moscow", "MSK-3"},
+    {"Europe/Istanbul", "TRT-3"},
+    {"Europe/Kyiv", "EET-2"},
+    {"Europe/Athens", "EET-2"},
+    {"Europe/Helsinki", "EET-2"},
+    {"Europe/Bucharest", "EET-2"},
+    {"Europe/Riga", "EET-2"},
+    {"Europe/Vilnius", "EET-2"},
+    {"Europe/Tallinn", "EET-2"},
+    {"Africa/Cairo", "EET-2"},
+    {"Africa/Johannesburg", "SAST-2"},
+    {"Africa/Lagos", "WAT-1"},
+    {"Africa/Nairobi", "EAT-3"},
+    {"Australia/Perth", "AWST-8"},
+    {"Australia/Brisbane", "AEST-10"},
+    {"Pacific/Honolulu", "HST10"},
+    {"Pacific/Guam", "ChST-10"},
+    {"Pacific/Fiji", "FJT-12"},
+    {"America/Phoenix", "MST7"},
+    {"America/Mexico_City", "CST6"},
+    {"America/Puerto_Rico", "AST4"},
+    {"America/Sao_Paulo", "BRT+3"},
+    {"America/Argentina/Buenos_Aires", "ART+3"},
+    {"America/Bogota", "COT+5"},
+    {"America/Lima", "PET+5"},
+    {"America/Caracas", "VET+4"},
+    {"America/Santiago", "CLT+4"},
+    /* ---- 北美（3 月第二个周日 / 11 月第一个周日，2:00 本地） ---- */
+    {"America/New_York", "EST5EDT,M3.2.0,M11.1.0"},
+    {"America/Toronto", "EST5EDT,M3.2.0,M11.1.0"},
+    {"America/Montreal", "EST5EDT,M3.2.0,M11.1.0"},
+    {"America/Chicago", "CST6CDT,M3.2.0,M11.1.0"},
+    {"America/Winnipeg", "CST6CDT,M3.2.0,M11.1.0"},
+    {"America/Denver", "MST7MDT,M3.2.0,M11.1.0"},
+    {"America/Edmonton", "MST7MDT,M3.2.0,M11.1.0"},
+    {"America/Los_Angeles", "PST8PDT,M3.2.0,M11.1.0"},
+    {"America/Vancouver", "PST8PDT,M3.2.0,M11.1.0"},
+    {"America/Anchorage", "AKST9AKDT,M3.2.0,M11.1.0"},
+    {"America/Halifax", "AST4ADT,M3.2.0,M11.1.0"},
+    {"America/St_Johns", "NST3:30NDT,M3.2.0,M11.1.0"},
+    /* ---- 欧洲（欧盟统一规则：3 月最后周日 / 10 月最后周日） ---- */
+    {"Europe/London", "GMT0BST,M3.5.0/1,M10.5.0"},
+    {"Europe/Dublin", "GMT0IST,M3.5.0/1,M10.5.0"},
+    {"Europe/Lisbon", "WET0WEST,M3.5.0/1,M10.5.0"},
+    {"Europe/Berlin", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Paris", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Madrid", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Rome", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Amsterdam", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Brussels", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Vienna", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Zurich", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Stockholm", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Oslo", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Copenhagen", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Warsaw", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Prague", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Budapest", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Belgrade", "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Sofia", "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    /* ---- 澳洲 / 新西兰 ---- */
+    {"Australia/Sydney", "AEST-10AEDT,M10.1.0,M4.1.0/3"},
+    {"Australia/Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3"},
+    {"Australia/Adelaide", "ACST-9:30ACDT,M10.1.0,M4.1.0/3"},
+    {"Pacific/Auckland", "NZST-12NZDT,M9.5.0,M4.1.0/3"},
+};
+
+/** IANA 时区名 -> POSIX TZ 字符串；未收录返回 NULL。 */
+static const char *clock_iana_to_posix(const char *iana) {
+    for (size_t i = 0; i < sizeof(s_tz_map) / sizeof(s_tz_map[0]); i++) {
+        if (strcmp(s_tz_map[i].iana, iana) == 0) {
+            return s_tz_map[i].posix;
+        }
+    }
+    return NULL;
+}
+
+/** 应用时区到 libc（setenv("TZ") + tzset()，仅支持 POSIX 格式）。 */
 static void clock_apply_timezone(const char *tz_name) {
-    setenv("TZ", tz_name, 1);
+    const char *posix = clock_iana_to_posix(tz_name);
+    if (posix == NULL) {
+        /* 未收录的时区：保持当前已生效的时区，避免误切到 UTC。 */
+        ESP_LOGW(TAG, "IANA timezone \"%s\" has no POSIX mapping, keeping \"%s\"", tz_name,
+                 s_posix_tz);
+        return;
+    }
+    strlcpy(s_posix_tz, posix, sizeof(s_posix_tz));
+    setenv("TZ", s_posix_tz, 1);
     tzset();
-    ESP_LOGI(TAG, "timezone set to \"%s\"", tz_name);
+    ESP_LOGI(TAG, "timezone set to \"%s\" (posix \"%s\")", tz_name, s_posix_tz);
 }
 
 /** 从 NVS 读取持久化的时区名称；不存在或读取失败返回 false。 */

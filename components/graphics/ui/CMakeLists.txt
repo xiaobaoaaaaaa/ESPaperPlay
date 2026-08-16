@@ -6,6 +6,6 @@ idf_component_register(
          "src/ui_stack.c"
          "src/ui_key_input.c"
     INCLUDE_DIRS "include"
-    REQUIRES board epd touch lvgl input
+    REQUIRES board clock epd touch lvgl input
     PRIV_REQUIRES freertos heap esp_timer
 )

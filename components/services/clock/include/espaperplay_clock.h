@@ -22,7 +22,10 @@ extern "C" {
  *
  * 提供三块能力：
  *  - 时区管理：设置 IANA 时区（如 "Asia/Shanghai"）并持久化到 NVS，
- *    重启后自动恢复（espaperplay_clock_init() 时应用）；
+ *    重启后自动恢复（espaperplay_clock_init() 时应用）。ESP-IDF 的 libc
+ *    tzset() 只支持 POSIX 格式的 TZ 字符串，本服务内部会把 IANA 时区名
+ *    翻译为 POSIX 格式（内置常用时区映射表，未收录的时区保持当前值并
+ *    告警）再应用；
  *  - NTP 同步：通过 esp_netif_sntp 启动 SNTP 客户端（默认多个 NTP 服务器），
  *    并可等待首次时间同步完成；
  *  - 本地时间：同步后按当前时区输出本地时间。

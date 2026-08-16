@@ -37,7 +37,7 @@ extern "C" {
 #endif
 
 /**
- * @brief 展示主界面（最基础原型：标题 + 运行时间 + 状态行 + 占位提示）。
+ * @brief 展示主界面（最基础原型：标题 + NTP 系统时钟 + 状态行 + 占位提示）。
  *
  * 等价于 espaperplay_ui_page_push(&espaperplay_ui_page_home)。
  */
@@ -129,7 +129,7 @@ uint8_t espaperplay_ui_page_depth(void);
 /** 主界面页面实例（screen_home.c）。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
 
-/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键事件显示，长按返回。 */
+/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键事件显示，双击旋转屏幕，长按返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 
 #ifdef __cplusplus
