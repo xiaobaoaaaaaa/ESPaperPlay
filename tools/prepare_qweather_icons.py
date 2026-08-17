@@ -41,6 +41,7 @@ SRC_OUT = PROJECT_DIR / "components/graphics/ui/src/qweather_icons.c"
 HDR_OUT = PROJECT_DIR / "components/graphics/ui/include/qweather_icons.h"
 
 ICON_SIZE = 64
+SMALL_ICON_SIZE = 32
 
 # QWeather API icon codes (dev.qweather.com `icon` field), grouped:
 # 100-104/150-154: 晴/多云/阴 (day/night)
@@ -108,14 +109,14 @@ def rasterize(svg: Path, png: Path) -> None:
     sys.exit(1)
 
 
-def make_alpha_array(png: Path) -> list:
+def make_alpha_array(png: Path, size: int) -> list:
     from PIL import Image
-    im = Image.open(png).convert("L").resize((ICON_SIZE, ICON_SIZE))
+    im = Image.open(png).convert("L").resize((size, size))
     # black glyph -> opaque; keep anti-aliased edges linear
     return [255 - v for v in list(im.getdata())]
 
 
-def emit(alpha_map: dict, used_fill: dict) -> None:
+def emit(alpha_map: dict, small_map: dict, used_fill: dict) -> None:
     hdr = [
         "/*",
         " * SPDX-FileCopyrightText: 2026 ESPaperPlay Contributors",
@@ -125,7 +126,7 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
         " * GENERATED FILE - DO NOT EDIT. Regenerate with:",
         " *   tools/fonttools-venv/bin/python tools/prepare_qweather_icons.py",
         " *",
-        " * QWeather (和风天气) icons: LVGL A8 bitmaps, 64x64.",
+        " * QWeather (和风天气) icons: LVGL A8 bitmaps (64x64 + 32x32).",
         " * Source: QWeather-Icons-1.8.0 (github.com/qwd/Icons, MIT).",
         " */",
         "",
@@ -140,6 +141,14 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
         " * @return 图标描述符（可传给 lv_image_set_src）；未收录返回 NULL。",
         " */",
         "const lv_image_dsc_t *qweather_icon_get(const char *code);",
+        "",
+        "/**",
+        " * @brief 按和风天气 API 图标代码取 32x32 A8 小图标描述符（列表/预报行用）。",
+        " *",
+        " * @param code API icon 字段；NULL 或未收录返回 NULL。",
+        " * @return 32x32 图标描述符；未收录返回 NULL。",
+        " */",
+        "const lv_image_dsc_t *qweather_icon_get_small(const char *code);",
         "",
     ]
     HDR_OUT.write_text("\n".join(hdr), encoding="utf-8")
@@ -160,6 +169,7 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
         '#include "qweather_icons.h"',
         "",
     ]
+    # 64x64 位图
     for code in alpha_map:
         data = alpha_map[code]
         lines.append(f"static const uint8_t s_qw_{code}_px[{len(data)}] = {{")
@@ -167,6 +177,15 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
             lines.append("    " + ", ".join(f"0x{v:02X}" for v in data[i:i + 16]) + ",")
         lines.append("};")
         lines.append("")
+    # 32x32 位图
+    for code in small_map:
+        data = small_map[code]
+        lines.append(f"static const uint8_t s_qw_{code}_s_px[{len(data)}] = {{")
+        for i in range(0, len(data), 16):
+            lines.append("    " + ", ".join(f"0x{v:02X}" for v in data[i:i + 16]) + ",")
+        lines.append("};")
+        lines.append("")
+    # 描述符
     for code in alpha_map:
         lines.extend([
             f"static const lv_image_dsc_t s_qw_{code} = {{",
@@ -179,26 +198,45 @@ def emit(alpha_map: dict, used_fill: dict) -> None:
             "};",
             "",
         ])
+    for code in small_map:
+        lines.extend([
+            f"static const lv_image_dsc_t s_qw_{code}_s = {{",
+            "    .header = {",
+            f"        .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_A8,",
+            f"        .w = {SMALL_ICON_SIZE}, .h = {SMALL_ICON_SIZE},",
+            "    },",
+            f"    .data_size = {SMALL_ICON_SIZE * SMALL_ICON_SIZE},",
+            f"    .data = s_qw_{code}_s_px,",
+            "};",
+            "",
+        ])
+    # 查找表与函数
     lines.extend([
         "static const struct {",
         "    const char *code;",
         "    const lv_image_dsc_t *icon;",
+        "    const lv_image_dsc_t *icon_small;",
         "} s_qw_map[] = {",
     ])
     for code in alpha_map:
-        lines.append(f'    {{"{code}", &s_qw_{code}}},')
+        lines.append(f'    {{"{code}", &s_qw_{code}, &s_qw_{code}_s}},')
     lines.extend([
         "};",
         "",
         "const lv_image_dsc_t *qweather_icon_get(const char *code)",
         "{",
-        "    if (code == NULL) {",
-        "        return NULL;",
-        "    }",
+        "    if (code == NULL) return NULL;",
         "    for (size_t i = 0; i < sizeof(s_qw_map) / sizeof(s_qw_map[0]); i++) {",
-        "        if (strcmp(code, s_qw_map[i].code) == 0) {",
-        "            return s_qw_map[i].icon;",
-        "        }",
+        "        if (strcmp(code, s_qw_map[i].code) == 0) return s_qw_map[i].icon;",
+        "    }",
+        "    return NULL;",
+        "}",
+        "",
+        "const lv_image_dsc_t *qweather_icon_get_small(const char *code)",
+        "{",
+        "    if (code == NULL) return NULL;",
+        "    for (size_t i = 0; i < sizeof(s_qw_map) / sizeof(s_qw_map[0]); i++) {",
+        "        if (strcmp(code, s_qw_map[i].code) == 0) return s_qw_map[i].icon_small;",
         "    }",
         "    return NULL;",
         "}",
@@ -216,6 +254,7 @@ def main() -> int:
     icon_dir = ensure_icon_dir()
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     alpha_map = {}
+    small_map = {}
     used_fill = {}
     for code in ICON_CODES:
         svg = pick_svg(icon_dir, code)
@@ -223,10 +262,11 @@ def main() -> int:
             continue
         png = WORK_DIR / f"qw_{code}.png"
         rasterize(svg, png)
-        alpha_map[code] = make_alpha_array(png)
+        alpha_map[code] = make_alpha_array(png, ICON_SIZE)
+        small_map[code] = make_alpha_array(png, SMALL_ICON_SIZE)
         used_fill[code] = "-fill" in svg.name
-    print(f"generated {len(alpha_map)} icons (fill variants: {sum(used_fill.values())})")
-    emit(alpha_map, used_fill)
+    print(f"generated {len(alpha_map)} icons x2 sizes (fill variants: {sum(used_fill.values())})")
+    emit(alpha_map, small_map, used_fill)
     return 0
 
 

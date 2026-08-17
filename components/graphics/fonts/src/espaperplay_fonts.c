@@ -24,7 +24,7 @@ static mmap_assets_handle_t s_font_assets;
 static esp_lv_fs_handle_t s_fs_handle;
 
 /* ---- FreeType 字体缓存（（文件名, 字号, 样式）→ lv_font_t） ---- */
-#define ESPAPERPLAY_FONTS_CACHE_CNT 4
+#define ESPAPERPLAY_FONTS_CACHE_CNT 6
 
 typedef struct {
     char path[64];      /* LVGL 路径，如 "A:NotoSansSC_Regular.ttf" */

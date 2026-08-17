@@ -51,8 +51,9 @@ def build_charset() -> str:
     )
     chars.update(chr(c) for c in range(0x3000, 0x3040))   # CJK symbols & punctuation
     chars.update(chr(c) for c in range(0xFF01, 0xFF5F))   # fullwidth forms
-    chars.update(["\u00b7", "\u2013", "\u2014", "\u2018", "\u2019",
-                  "\u201c", "\u201d", "\u2026", "\u2044", "\u20ac"])
+    chars.update(["\u00b7", "\u00b0", "\u2013", "\u2014", "\u2018", "\u2019",
+                  "\u201c", "\u201d", "\u2026", "\u2044", "\u20ac", "\u2103",
+                  "\u26a0"])
 
     return "".join(sorted(chars))
 

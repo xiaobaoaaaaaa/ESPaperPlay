@@ -42,3 +42,21 @@ extern const lv_image_dsc_t icon_wifi_16;
 
 /** 16x16 A8 图标（Iconify: wifi_ap） */
 extern const lv_image_dsc_t icon_wifi_ap_16;
+
+/** 16x16 A8 图标（Iconify: humidity） */
+extern const lv_image_dsc_t icon_humidity_16;
+
+/** 16x16 A8 图标（Iconify: wind） */
+extern const lv_image_dsc_t icon_wind_16;
+
+/** 16x16 A8 图标（Iconify: rain） */
+extern const lv_image_dsc_t icon_rain_16;
+
+/** 16x16 A8 图标（Iconify: pressure） */
+extern const lv_image_dsc_t icon_pressure_16;
+
+/** 16x16 A8 图标（Iconify: visibility） */
+extern const lv_image_dsc_t icon_visibility_16;
+
+/** 16x16 A8 图标（Iconify: thermo） */
+extern const lv_image_dsc_t icon_thermo_16;

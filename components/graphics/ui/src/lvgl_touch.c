@@ -98,6 +98,8 @@ esp_err_t espaperplay_ui_touch_init(void) {
     }
     lv_indev_set_type(s_indev, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(s_indev, ui_touch_read_cb);
+    /* 滚动触发阈值调低（默认 10px）：天气图表横向滚动更灵敏 */
+    lv_indev_set_scroll_limit(s_indev, 5);
     ESP_LOGI(TAG, "touch pointer indev registered (auto release %u ms)", UI_TOUCH_AUTO_RELEASE_MS);
     return ESP_OK;
 }

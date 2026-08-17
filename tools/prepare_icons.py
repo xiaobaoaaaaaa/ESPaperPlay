@@ -50,6 +50,12 @@ SMALL_ICONS = [
     ("mdi", "wifi-off", "wifi_off", "WiFi 未连接"),
     ("mdi", "wifi", "wifi", "WiFi（默认）"),
     ("mdi", "access-point", "wifi_ap", "AP 热点"),
+    ("mdi", "water-percent", "humidity", "湿度"),
+    ("mdi", "weather-windy", "wind", "风"),
+    ("mdi", "weather-rainy", "rain", "降水"),
+    ("mdi", "gauge", "pressure", "气压"),
+    ("mdi", "eye-outline", "visibility", "能见度"),
+    ("mdi", "thermometer", "thermo", "体感"),
 ]
 
 
