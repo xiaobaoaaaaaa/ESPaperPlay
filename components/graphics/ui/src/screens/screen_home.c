@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "esp_heap_caps.h"
@@ -50,15 +51,17 @@ static const char *TAG = "ESPaperPlay_UI";
  * components/graphics/fonts），字号 16 / 20 / 24 / 64（共 4 项，
  * 与字体组件缓存容量一致）。
  *
- * 时钟与状态每 10s 刷新（EPD 局部刷新粒度）；NTP 未同步（系统时间
- * 停留在 1970 基准）时显示占位文本。
+ * 时钟与状态每秒轮询一次，但仅在显示内容实际变化时才更新标签并触发
+ * EPD 刷新（分钟 / 日期 / 天气 / 版本等一有变化立即刷新，否则静默）——
+ * 秒级响应时间变化、分钟切换精确到边界，同时避免无谓 EPD 刷新。
+ * NTP 未同步（系统时间停留在 1970 基准）时显示占位文本。
  */
 
 #define HOME_STATUS_H_PX      30   /* 状态栏高度 */
 #define HOME_SWIPE_THRESH_PX  90   /* 滑动切页位移阈值 */
 #define HOME_CLICK_MAX_PX     15   /* 点击允许的最大位移（防抖） */
 #define HOME_SWIPE_MIN_RATIO  1.2f /* 横向位移 / 纵向位移 最小比例 */
-#define HOME_UI_PERIOD_MS     10000 /* 状态刷新周期 */
+#define HOME_UI_PERIOD_MS     1000 /* 时间/状态轮询周期（秒级响应；内容未变不刷新 EPD） */
 
 #define HOME_APP_CNT          2    /* 应用数量 */
 #define HOME_PAGE_CNT         2    /* 主区域子页数 */
@@ -119,6 +122,18 @@ static int s_touch_card = -1;            /*!< 手势跟踪：按下起点命中�
 
 /* 页 1 天气行数据缓冲（快照较大，放 PSRAM，页面生命周期内复用）。 */
 static espaperplay_weather_snapshot_t *s_weather_snap = NULL;
+
+/* ---- 各标签「上次已显示的文本」缓存：内容未变化时不重复 set_text，
+ *      避免 LVGL 无效化 -> EPD 无谓局刷（秒级轮询下尤为关键）。 ---- */
+static char s_prev_status_time[8] = "";    /*!< 状态栏时间 HH:MM */
+static char s_prev_clock_h[4] = "";        /*!< 页 0 时钟：时 */
+static char s_prev_clock_m[4] = "";        /*!< 页 0 时钟：分 */
+static char s_prev_week[8] = "";           /*!< 页 0 时钟：星期（英文缩写） */
+static char s_prev_date[16] = "";          /*!< 页 0 时钟：日期 M/D */
+static char s_prev_clock_big[8] = "";      /*!< 页 1 大时钟 HH:MM */
+static char s_prev_info_date[64] = "";     /*!< 页 1 日期（年月日 星期） */
+static char s_prev_info_weather[256] = ""; /*!< 页 1 天气摘要 */
+static char s_prev_info_footer[128] = "";  /*!< 页 1 版本 / 堆 / 提示 */
 
 /* ------------------------------------------------------------------ */
 /* 工具函数                                                             */
@@ -368,6 +383,19 @@ static void home_dots_create(lv_obj_t *scr) {
 /* 内容刷新                                                             */
 /* ------------------------------------------------------------------ */
 
+/** 仅当文本实际变化时才更新标签（EPD 上避免无谓刷新）。
+ *  @param label  目标标签（本页构建期内非 NULL）。
+ *  @param prev   该标签上次已显示的文本缓存（更新时同步写入）。
+ *  @param text   本次要显示的新文本。 */
+static void home_label_update(lv_obj_t *label, char *prev, size_t prev_size,
+                              const char *text) {
+    if (strcmp(prev, text) == 0) {
+        return; /* 内容未变：跳过 set_text，不触发 LVGL 无效化 */
+    }
+    strlcpy(prev, text, prev_size);
+    lv_label_set_text(label, text);
+}
+
 /** 刷新状态栏、页 0 时钟区、页 1 信息（时间 / WiFi / 天气 / 版本）。 */
 static void home_refresh(void) {
     char buf[128];
@@ -379,7 +407,7 @@ static void home_refresh(void) {
     } else {
         snprintf(buf, sizeof(buf), "--:--");
     }
-    lv_label_set_text(s_status_time, buf);
+    home_label_update(s_status_time, s_prev_status_time, sizeof(s_prev_status_time), buf);
 
     /* 状态栏 WiFi 强度图标：AP 热点 / STA 按 RSSI 分档 / 未连接 */
     const lv_image_dsc_t *wifi_icon = &icon_wifi_off_16;
@@ -411,30 +439,31 @@ static void home_refresh(void) {
     /* 页 0 时钟区：时 / 分 / 星期 / 日期 */
     if (tm != NULL) {
         snprintf(buf, sizeof(buf), "%02d", tm->tm_hour);
-        lv_label_set_text(s_clock_h, buf);
+        home_label_update(s_clock_h, s_prev_clock_h, sizeof(s_prev_clock_h), buf);
         snprintf(buf, sizeof(buf), "%02d", tm->tm_min);
-        lv_label_set_text(s_clock_m, buf);
-        lv_label_set_text(s_week_label, s_weekday_en[tm->tm_wday]);
+        home_label_update(s_clock_m, s_prev_clock_m, sizeof(s_prev_clock_m), buf);
+        home_label_update(s_week_label, s_prev_week, sizeof(s_prev_week),
+                          s_weekday_en[tm->tm_wday]);
         snprintf(buf, sizeof(buf), "%d/%d", tm->tm_mon + 1, tm->tm_mday);
-        lv_label_set_text(s_date_label, buf);
+        home_label_update(s_date_label, s_prev_date, sizeof(s_prev_date), buf);
     } else {
-        lv_label_set_text(s_clock_h, "--");
-        lv_label_set_text(s_clock_m, "--");
-        lv_label_set_text(s_week_label, "---");
-        lv_label_set_text(s_date_label, "--/--");
+        home_label_update(s_clock_h, s_prev_clock_h, sizeof(s_prev_clock_h), "--");
+        home_label_update(s_clock_m, s_prev_clock_m, sizeof(s_prev_clock_m), "--");
+        home_label_update(s_week_label, s_prev_week, sizeof(s_prev_week), "---");
+        home_label_update(s_date_label, s_prev_date, sizeof(s_prev_date), "--/--");
     }
 
     /* 页 1 大时钟 + 日期 */
     if (tm != NULL) {
         snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-        lv_label_set_text(s_clock_big, buf);
+        home_label_update(s_clock_big, s_prev_clock_big, sizeof(s_prev_clock_big), buf);
         snprintf(buf, sizeof(buf), "%04d年%02d月%02d日 星期%s", tm->tm_year + 1900,
                  tm->tm_mon + 1, tm->tm_mday, s_weekday_zh[tm->tm_wday]);
     } else {
-        lv_label_set_text(s_clock_big, "--:--");
+        home_label_update(s_clock_big, s_prev_clock_big, sizeof(s_prev_clock_big), "--:--");
         snprintf(buf, sizeof(buf), "正在同步时间…");
     }
-    lv_label_set_text(s_info_date, buf);
+    home_label_update(s_info_date, s_prev_info_date, sizeof(s_prev_info_date), buf);
 
     /* 页 1 天气摘要（快照较大，缓冲在 PSRAM）+ 天气应用图标（实时天气图标） */
     if (s_weather_snap == NULL) {
@@ -449,13 +478,15 @@ static void home_refresh(void) {
         snprintf(wbuf, sizeof(wbuf), "%s · %s %s℃  湿度 %s%%",
                  s_weather_snap->location_name, s_weather_snap->now.text,
                  s_weather_snap->now.temp, s_weather_snap->now.humidity);
-        lv_label_set_text(s_info_weather, wbuf);
+        home_label_update(s_info_weather, s_prev_info_weather, sizeof(s_prev_info_weather),
+                          wbuf);
 
         /* 天气应用图标 = 和风实时天气图标（未收录的代码回退 mdi 图标） */
         qw_icon = qweather_icon_get(s_weather_snap->now.icon);
     } else {
         snprintf(buf, sizeof(buf), "天气：未配置或不可用（Web 页面设置）");
-        lv_label_set_text(s_info_weather, buf);
+        home_label_update(s_info_weather, s_prev_info_weather, sizeof(s_prev_info_weather),
+                          buf);
     }
     if (s_app_icons[0] != NULL) {
         const lv_image_dsc_t *target = (qw_icon != NULL) ? qw_icon : s_apps[0].icon;
@@ -468,7 +499,7 @@ static void home_refresh(void) {
     snprintf(buf, sizeof(buf), "v%s   heap %u.%u MB   左右滑动切换页面",
              ESPAPERPLAY_VERSION, (unsigned)(esp_get_free_heap_size() / 1048576u),
              (unsigned)((esp_get_free_heap_size() % 1048576u) / 104857u));
-    lv_label_set_text(s_info_footer, buf);
+    home_label_update(s_info_footer, s_prev_info_footer, sizeof(s_prev_info_footer), buf);
 }
 
 /** 周期刷新（LVGL 线程内，lv_timer 驱动）。 */
@@ -557,8 +588,23 @@ static void home_enter(void) {
         lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
 
+    /* 标签为本次进入新建（初始占位文本）：清空文本缓存，首次刷新强制落数据。 */
+    s_prev_status_time[0] = '\0';
+    s_prev_clock_h[0] = '\0';
+    s_prev_clock_m[0] = '\0';
+    s_prev_week[0] = '\0';
+    s_prev_date[0] = '\0';
+    s_prev_clock_big[0] = '\0';
+    s_prev_info_date[0] = '\0';
+    s_prev_info_weather[0] = '\0';
+    s_prev_info_footer[0] = '\0';
+
     s_timer = lv_timer_create(home_timer_cb, HOME_UI_PERIOD_MS, NULL);
-    /* 立即刷新一次：返回主界面时即时显示时间 / 状态，不等 10s 定时器。 */
+    if (s_timer == NULL) {
+        /* 定时器创建失败：只有进入时的一次刷新，无法周期更新（罕见，仅记录）。 */
+        ESP_LOGE(TAG, "home: periodic refresh timer create failed");
+    }
+    /* 立即刷新一次：返回主界面时即时显示时间 / 状态，不等下一个定时器周期。 */
     home_refresh();
 
     ESP_LOGI(TAG, "home screen entered");
