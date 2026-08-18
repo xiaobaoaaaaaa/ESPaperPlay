@@ -273,6 +273,23 @@ esp_err_t espaperplay_gui_show_bw(void);
 esp_err_t espaperplay_gui_show_gray4(void);
 
 /**
+ * @brief 强制执行一次全屏刷新（清残影 / 手动全刷）。
+ *
+ * 对当前 RGB565 主帧整帧快照转换后排队一次全屏深刷新，不改变刷新模式：
+ *   - BW 模式：FULL_FORCE —— 全像素翻转走深擦除波形，彻底清除局刷累积的
+ *     残影（画面会闪黑一下，约 1.7s）；
+ *   - GRAY4 模式：整帧四灰阶全屏刷新（~2.5s）。
+ * 丢弃尚未执行的排队帧（全刷建立新基线），异步执行（worker 消费，本函数
+ * 不阻塞，仅快照排队）；如需确认完成请调用 espaperplay_gui_wait_idle()。
+ *
+ * 供用户主动触发（如 BOOT 键长按的全局默认动作）与测试使用。
+ *
+ * @return 成功返回 ESP_OK（已排队）；未初始化返回 ESP_ERR_INVALID_STATE；
+ *         槽位全忙返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_gui_full_refresh(void);
+
+/**
  * @brief 清屏为全白并全屏刷新（异步排队）。
  *
  * 主帧填充 RGB565 白（0xFFFF），丢弃尚未刷新的排队帧，面板走深擦除波形。

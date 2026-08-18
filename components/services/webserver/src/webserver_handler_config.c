@@ -15,6 +15,7 @@
 
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_input.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -24,6 +25,38 @@ static const char *TAG = "ESPaperPlay_WEB_CFG";
 
 /* POST 表单请求体的最大字节数（超过直接拒绝，防内存放大）。 */
 #define ESPAPERPLAY_WEB_FORM_BUF_SIZE 1024
+
+/* ------------------------------------------------------------------ */
+/* BOOT 键长按动作 <-> 字符串                                           */
+/* ------------------------------------------------------------------ */
+
+/** 长按动作序列化为 Web 表单值（GET /api/config 回传）。 */
+static const char *boot_long_press_action_str(espaperplay_boot_long_press_action_t action) {
+    switch (action) {
+    case ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH:
+        return "full_refresh";
+    case ESPAPERPLAY_BOOT_LONG_PRESS_BACK:
+        return "back";
+    case ESPAPERPLAY_BOOT_LONG_PRESS_NONE:
+    default:
+        return "none";
+    }
+}
+
+/** 解析 Web 表单值；非法返回 false。 */
+static bool boot_long_press_action_parse(const char *s,
+                                         espaperplay_boot_long_press_action_t *out) {
+    if (strcmp(s, "full_refresh") == 0) {
+        *out = ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH;
+    } else if (strcmp(s, "back") == 0) {
+        *out = ESPAPERPLAY_BOOT_LONG_PRESS_BACK;
+    } else if (strcmp(s, "none") == 0) {
+        *out = ESPAPERPLAY_BOOT_LONG_PRESS_NONE;
+    } else {
+        return false;
+    }
+    return true;
+}
 
 /* ------------------------------------------------------------------ */
 /* 配置域路由处理器                                                     */
@@ -54,6 +87,12 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
     /* 连续大面积局刷后强制全刷阈值（0=禁用，只局刷）。 */
     cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
+    /* BOOT 键长按的全局默认动作（全屏刷新 / 返回上一页 / 无操作）。 */
+    cJSON_AddStringToObject(root, "boot_long_press_action",
+                            boot_long_press_action_str(cfg->boot_long_press_action));
+    /* BOOT 键长按判定时间（毫秒）。 */
+    cJSON_AddNumberToObject(root, "boot_long_press_time_ms",
+                            (double)cfg->boot_long_press_time_ms);
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -102,6 +141,8 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
     char epd_idle_sleep_s[16] = {0}; /* 屏幕空闲自动睡眠超时（秒） */
     char gui_force_after_s[8] = {0}; /* 连续大面积局刷后强制全刷阈值（0=禁用） */
+    char boot_lp_action[16] = {0};   /* BOOT 键长按动作（full_refresh / back / none） */
+    char boot_lp_time_s[12] = {0};   /* BOOT 键长按判定时间（毫秒） */
     const bool has_wifi_mode =
         webserver_form_get_field(body, "wifi_mode", wifi_mode_str, sizeof(wifi_mode_str));
     const bool has_sta_ssid =
@@ -115,6 +156,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
     const bool has_gui_force = webserver_form_get_field(
         body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
+    const bool has_boot_lp = webserver_form_get_field(
+        body, "boot_long_press_action", boot_lp_action, sizeof(boot_lp_action));
+    const bool has_boot_lp_ms = webserver_form_get_field(
+        body, "boot_long_press_time_ms", boot_lp_time_s, sizeof(boot_lp_time_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -228,6 +273,38 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         if (err == ESP_OK) {
             /* 立即应用到渲染后端（不必等重启）。 */
             err = espaperplay_gui_set_full_force_after((uint32_t)n);
+        }
+    }
+    /* BOOT 键长按动作（字段出现时校验并应用；UI 分发实时读取配置，立即生效）。 */
+    if (err == ESP_OK && has_boot_lp) {
+        espaperplay_boot_long_press_action_t action;
+        if (!boot_long_press_action_parse(boot_lp_action, &action)) {
+            webserver_send_json_err(req,
+                                    "无效的 boot_long_press_action（full_refresh / back / none）");
+            return ESP_FAIL;
+        }
+        err = espaperplay_system_set_boot_long_press_action(action);
+    }
+    /* BOOT 键长按判定时间（毫秒，300-10000）；持久化后立即应用到按键驱动。 */
+    if (err == ESP_OK && has_boot_lp_ms) {
+        char *end = NULL;
+        long ms = strtol(boot_lp_time_s, &end, 10);
+        if (end == boot_lp_time_s || *end != '\0' ||
+            ms < (long)ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MIN_MS ||
+            ms > (long)ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS) {
+            webserver_send_json_err(req, "无效的长按判定时间（300-10000 毫秒）");
+            return ESP_FAIL;
+        }
+        err = espaperplay_system_set_boot_long_press_time_ms((uint32_t)ms);
+        if (err == ESP_OK) {
+            /* 立即应用到驱动（不必等重启）。Web 服务早于 input 启动时按键
+             * 尚未创建（INVALID_STATE）：初始值已在 input_init 读取配置，
+             * 仅告警不回滚。 */
+            const esp_err_t apply_err = espaperplay_input_set_boot_long_press_time_ms((uint32_t)ms);
+            if (apply_err != ESP_OK && apply_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "Failed to apply boot long-press time: %s",
+                         esp_err_to_name(apply_err));
+            }
         }
     }
     /* 和风天气：字段出现时应用。API Key 语义与密码一致——输入非空 → 设置新值；

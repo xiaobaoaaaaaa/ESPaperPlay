@@ -124,7 +124,8 @@
         }
 
         .field input[type=text],
-        .field input[type=password] {
+        .field input[type=password],
+        .field select {
             width: 100%;
             padding: 9px 12px;
             border-radius: 8px;
@@ -134,7 +135,13 @@
             font-size: 14px;
         }
 
-        .field input:focus {
+        .field select {
+            appearance: auto;
+            cursor: pointer;
+        }
+
+        .field input:focus,
+        .field select:focus {
             outline: none;
             border-color: var(--accent);
         }
@@ -357,6 +364,27 @@
                 <div class="field">
                     <label>连续大面积局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
                     <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="5">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                </div>
+            </form>
+        </section>
+
+        <section>
+            <h2>BOOT 键设置</h2>
+            <form id="bootForm">
+                <div class="field">
+                    <label>长按动作（所有页面生效，长按阈值到达即响应一次）</label>
+                    <select name="boot_long_press_action">
+                        <option value="full_refresh">全屏刷新（清残影，默认）</option>
+                        <option value="back">返回上一页</option>
+                        <option value="none">无操作</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>长按判定时间（毫秒，300-10000，默认 1000）</label>
+                    <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50" placeholder="1000">
                 </div>
                 <div class="actions">
                     <button type="submit" class="primary">保存</button>
@@ -745,6 +773,9 @@
                     ? d.epd_idle_sleep_timeout_s : '';
                 $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
                     ? d.gui_full_force_after : '';
+                $('select[name=boot_long_press_action]').value = d.boot_long_press_action || 'full_refresh';
+                $('input[name=boot_long_press_time_ms]').value = d.boot_long_press_time_ms != null
+                    ? d.boot_long_press_time_ms : 1000;
                 /* 天气：Key 不回填明文，仅在占位符中提示是否已保存；位置 / API Host 原样回填。 */
                 $('input[name=weather_api_key]').value = '';
                 $('input[name=weather_api_key]').placeholder = d.weather_api_key_set ? '••••••（已配置）' : '（未设置）';
@@ -778,6 +809,27 @@
                 const d = await postForm('/api/config', body);
                 if (d.ok) {
                     toast('屏幕设置已保存');
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 保存 BOOT 键设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#bootForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#bootForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#bootForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('BOOT 键设置已保存');
                     loadConfig();
                 } else {
                     toast('保存失败：' + (d.error || '未知错误'), true);

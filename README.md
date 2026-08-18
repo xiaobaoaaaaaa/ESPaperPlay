@@ -296,6 +296,16 @@ blocks on the input queue and routes events:
 - **Keys** are forwarded one-by-one into the LVGL thread, where the page stack
   routes them to the top page's optional `on_key` hook (extended
   `espaperplay_ui_page_t`). Navigation decisions belong to pages.
+- **Default long-press action** — the BOOT key's `LONG_PRESS_START` is caught
+  globally (in the page-stack key funnel, before page hooks) and triggers a
+  configurable action **once per press** (HOLD / release events never re-fire):
+  `full_refresh` (default, forces a full-screen deep refresh to clear ghosting),
+  `back` (pop the current page), or `none`. It applies to every page (home,
+  weather, and future pages) and is configurable from the Web console's screen
+  settings (`boot_long_press_action`, NVS-persisted, effective immediately).
+  The long-press trigger time itself is also configurable
+  (`boot_long_press_time_ms`, default 1000 ms, range 300-10000 ms, applied to
+  the button driver at boot and re-applied live from the Web console).
 - **Touch** updates the LVGL pointer indev state directly (critical-section
   guarded, no LVGL round-trip), so all LVGL widgets respond to touch. Events
   are also batched per ~30 ms window and forwarded to the top page's optional
@@ -762,6 +772,13 @@ I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），�
 
 - **按键**：逐个投递到 LVGL 线程，由页面栈转发给栈顶页面的可选 `on_key`
   钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面；
+- **长按默认动作**：BOOT 键的 `LONG_PRESS_START` 在页面栈按键汇流处全局
+  拦截（先于页面钩子），**每次长按只响应一次**（HOLD / 松开事件不再触发）：
+  `full_refresh`（默认——强制整屏深刷新清残影）、`back`（返回上一页）或
+  `none`。对所有页面统一生效（主界面、天气页及后续新增页面），可在 Web
+  控制台「屏幕设置」中配置（`boot_long_press_action`，NVS 持久化，改完
+  立即生效）；长按判定时间同样可配置（`boot_long_press_time_ms`，默认
+  1000ms，范围 300-10000ms，启动时应用到按键驱动，Web 修改即时生效）；
 - **触摸**：直接更新 LVGL 指针 indev 状态（临界区保护、无 LVGL 往返延迟），
   所有 LVGL 控件均响应触摸；事件同时按 ~30ms 窗口批量投递、逐条转发给
   栈顶页面的可选 `on_touch` 钩子——全部中间坐标保留，供轨迹绘制。

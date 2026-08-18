@@ -888,6 +888,75 @@ esp_err_t espaperplay_gui_show_gray4(void) {
     return espaperplay_gui_flush();
 }
 
+esp_err_t espaperplay_gui_full_refresh(void) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* 选一个非 BUSY 槽承载全刷快照（BUSY 槽正被 worker 的 SPI 传输读取，
+     * 必须保留）；另一非 BUSY 槽的排队帧一并丢弃——全刷建立新基线，
+     * 旧帧无需再刷（与 gui_clear 的做法一致）。 */
+    gui_op_t *slot = NULL;
+    if (s_op_a.state != GUI_SLOT_BUSY) {
+        slot = &s_op_a;
+    } else if (s_op_b.state != GUI_SLOT_BUSY) {
+        slot = &s_op_b;
+    } else {
+        /* 两槽皆 BUSY：单 worker 下不可达；防御性拒绝，避免覆盖在途帧。 */
+        ESP_LOGE(TAG, "full refresh: no free slot (both busy)");
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 整帧快照（不改变当前模式）：BW -> 1bpp 全帧 + 强制全像素翻转全刷
+     * （清残影）；GRAY4 -> 整帧四灰阶全屏刷新。 */
+    slot->type = GUI_OP_FRAME;
+    slot->color = s_color;
+    slot->x = 0;
+    slot->y = 0;
+    slot->w = s_disp_w;
+    slot->h = s_disp_h;
+    slot->large_area = false;
+    if (s_color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
+        uint8_t *stage = (slot == &s_op_a) ? s_stage_a_gray4 : s_stage_b_gray4;
+        gui_convert_gray4(s_fb_rgb, stage);
+        slot->stage = stage;
+        slot->force_full = false;
+    } else {
+        uint8_t *stage = (slot == &s_op_a) ? s_stage_a_bw : s_stage_b_bw;
+        gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage);
+        slot->stage = stage;
+        slot->force_full = true; /* FULL_FORCE：全像素深波形，清残影 */
+    }
+    slot->state = GUI_SLOT_READY;
+
+    if (slot == &s_op_a) {
+        if (s_op_b.state != GUI_SLOT_BUSY) {
+            s_op_b.state = GUI_SLOT_IDLE;
+        }
+    } else {
+        if (s_op_a.state != GUI_SLOT_BUSY) {
+            s_op_a.state = GUI_SLOT_IDLE;
+        }
+    }
+    s_dirty = false;
+    s_large_partial_count = 0; /* 全刷建立新基线，大面积局刷计数归零 */
+
+    if (s_worker_task != NULL) {
+        xTaskNotifyGive(s_worker_task);
+    } else {
+        const esp_err_t ret = gui_execute_op(slot);
+        slot->state = GUI_SLOT_IDLE;
+        xSemaphoreGive(s_lock);
+        return ret;
+    }
+    xSemaphoreGive(s_lock);
+    return ESP_OK;
+}
+
 esp_err_t espaperplay_gui_clear(void) {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;

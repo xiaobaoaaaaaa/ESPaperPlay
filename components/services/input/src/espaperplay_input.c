@@ -15,6 +15,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_input.h"
+#include "espaperplay_system.h"
 
 static const char *TAG = "ESPaperPlay_INPUT";
 
@@ -238,8 +239,12 @@ esp_err_t espaperplay_input_init(void) {
     }
 
     /* BOOT 按键：GPIO0，按下为低电平，使能内部上拉（disable_pull = false）。
-     * enable_power_save 暂不开启：电源组件（浅睡眠唤醒）接入后再启用。 */
-    const button_config_t btn_cfg = {0};
+     * enable_power_save 暂不开启：电源组件（浅睡眠唤醒）接入后再启用。
+     * 长按判定时间取系统配置（Web 可配置，NVS 持久化，默认 1000ms），
+     * 覆盖驱动编译期默认值（CONFIG_BUTTON_LONG_PRESS_TIME_MS=1500）。 */
+    const button_config_t btn_cfg = {
+        .long_press_time = (uint16_t)espaperplay_system_get_config()->boot_long_press_time_ms,
+    };
     const button_gpio_config_t btn_gpio_cfg = {
         .gpio_num = ESPAPERPLAY_PIN_KEY_BOOT,
         .active_level = ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
@@ -361,4 +366,24 @@ esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event) {
         }
     }
     return ESP_OK;
+}
+
+esp_err_t espaperplay_input_set_boot_long_press_time_ms(uint32_t time_ms) {
+    if (time_ms < ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MIN_MS ||
+        time_ms > ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_boot_button == NULL) {
+        ESP_LOGW(TAG, "BOOT button not initialized yet, long-press time applied at init");
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* 驱动以"值即毫秒"语义接收（内部除以扫描周期得到 tick 数）。 */
+    const esp_err_t ret =
+        iot_button_set_param(s_boot_button, BUTTON_LONG_PRESS_TIME_MS, (void *)(intptr_t)time_ms);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "BOOT long-press time set to %u ms", (unsigned)time_ms);
+    } else {
+        ESP_LOGE(TAG, "BOOT long-press time set failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
 }

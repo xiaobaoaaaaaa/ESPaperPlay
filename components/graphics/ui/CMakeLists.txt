@@ -11,6 +11,6 @@ idf_component_register(
          "src/ui_stack.c"
          "src/ui_key_input.c"
     INCLUDE_DIRS "include"
-    REQUIRES board clock epd fonts touch lvgl input weather wifi
+    REQUIRES board clock epd fonts touch lvgl input weather wifi system
     PRIV_REQUIRES freertos heap esp_timer
 )

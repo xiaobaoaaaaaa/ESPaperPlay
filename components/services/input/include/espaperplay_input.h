@@ -49,6 +49,15 @@ typedef enum {
 #define ESPAPERPLAY_INPUT_KEY_ID_BOOT 0
 
 /**
+ * @brief BOOT 键长按判定时间的合法范围（毫秒）。
+ *
+ * 与系统配置（Web 管理页可调，NVS 持久化）一致；下限须大于驱动短按
+ * 判定时间（180ms），避免长短按语义混淆。
+ */
+#define ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MIN_MS 300u
+#define ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MAX_MS 10000u
+
+/**
  * @brief 归一化的按键动作。
  *
  * 与底层驱动（espressif/button）的事件一一对应，屏蔽驱动细节。
@@ -123,6 +132,22 @@ const char *espaperplay_input_key_action_str(espaperplay_input_key_action_t acti
  *         ESP_ERR_INVALID_STATE。
  */
 esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event);
+
+/**
+ * @brief 设置 BOOT 键长按判定时间（毫秒），立即生效。
+ *
+ * 运行期调整 espressif/button 的长按触发阈值（下一次扫描即采用新值，
+ * 正在进行的按压也按新阈值判定）。初始值在 espaperplay_input_init() 时
+ * 取自系统配置；Web 管理页修改后调用本函数应用。
+ *
+ * @param[in] time_ms 判定时间（毫秒，
+ *                    ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MIN_MS ..
+ *                    ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MAX_MS）。
+ *
+ * @return ESP_OK；参数越界返回 ESP_ERR_INVALID_ARG；按键未初始化返回
+ *         ESP_ERR_INVALID_STATE；驱动设置失败返回相应错误码。
+ */
+esp_err_t espaperplay_input_set_boot_long_press_time_ms(uint32_t time_ms);
 
 #ifdef __cplusplus
 }

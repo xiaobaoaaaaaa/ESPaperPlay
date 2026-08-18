@@ -64,6 +64,30 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST ""
 
 /**
+ * @brief BOOT 键长按的全局默认动作（Web 管理页可配置，NVS 持久化）。
+ *
+ * 由 UI 按键分发在 **LONG_PRESS_START** 时刻响应一次（不等松开、不重复：
+ * 长按 HOLD / 松开事件不再触发），对所有页面统一生效（主界面、天气页及
+ * 后续新增页面均继承该默认功能，页面自身仍可用 on_key 做额外处理）。
+ */
+typedef enum {
+    ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH = 0, /*!< 全屏刷新（强制全像素翻转，清残影；默认） */
+    ESPAPERPLAY_BOOT_LONG_PRESS_BACK,             /*!< 返回上一页（页面栈非根时） */
+    ESPAPERPLAY_BOOT_LONG_PRESS_NONE,             /*!< 无操作 */
+    ESPAPERPLAY_BOOT_LONG_PRESS_MAX,
+} espaperplay_boot_long_press_action_t;
+
+/** 出厂默认 BOOT 键长按动作：全屏刷新清残影。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH
+
+/** 出厂默认 BOOT 键长按判定时间（毫秒；比驱动默认 1500ms 略短，Web 可配置）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS 1000u
+
+/** BOOT 键长按判定时间的合法范围（毫秒，下限须大于短按判定时间 ~180ms）。 */
+#define ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MIN_MS 300u
+#define ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS 10000u
+
+/**
  * @brief WiFi 工作模式。
  */
 typedef enum {
@@ -85,6 +109,8 @@ typedef struct {
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
     uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
     uint32_t gui_full_force_after; /*!< 连续大面积局刷后强制全刷阈值（0=禁用） */
+    espaperplay_boot_long_press_action_t boot_long_press_action; /*!< BOOT 键长按默认动作 */
+    uint32_t boot_long_press_time_ms; /*!< BOOT 键长按判定时间（毫秒） */
     char weather_api_key[ESPAPERPLAY_SYSTEM_WEATHER_KEY_MAX_LEN]; /*!< 和风天气 API Key（空=未配置） */
     char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN]; /*!< 和风天气位置（空=自动定位） */
     char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN]; /*!< 和风天气自定义 API Host（空=公共地址） */
@@ -153,6 +179,44 @@ esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms);
  * @return 成功返回 ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
  */
 esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count);
+
+/**
+ * @brief 设置 BOOT 键长按的全局默认动作并持久化。
+ *
+ * UI 按键分发在 LONG_PRESS_START 时刻按该动作响应一次（全屏刷新 / 返回
+ * 上一页 / 无操作），对所有页面统一生效。修改后立即生效（无需重启）。
+ *
+ * @param action 长按动作。
+ * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action);
+
+/**
+ * @brief 获取当前 BOOT 键长按的全局默认动作。
+ *
+ * @return 当前动作。
+ */
+espaperplay_boot_long_press_action_t espaperplay_system_get_boot_long_press_action(void);
+
+/**
+ * @brief 设置 BOOT 键长按判定时间（毫秒）并持久化。
+ *
+ * 输入服务在创建按键时读取该值，Web 修改后可调用
+ * espaperplay_input_set_boot_long_press_time_ms() 立即生效。
+ *
+ * @param time_ms 判定时间（毫秒，范围
+ *                ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MIN_MS ..
+ *                ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS）。
+ * @return 成功返回 ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_boot_long_press_time_ms(uint32_t time_ms);
+
+/**
+ * @brief 获取当前 BOOT 键长按判定时间（毫秒）。
+ *
+ * @return 当前判定时间。
+ */
+uint32_t espaperplay_system_get_boot_long_press_time_ms(void);
 
 /**
  * @brief 设置和风天气 API Key 并持久化。
