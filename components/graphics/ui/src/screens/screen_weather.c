@@ -47,7 +47,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *
  * 图表约定：仅显示平滑曲线——无网格刻度（div line = 0）、不画数据点；
  * 平滑使用 Catmull-Rom 插值并对每段输出做端点范围钳制（保证最高温曲线
- * 永不低于最低温曲线，避免过冲交叉）。
+ * 永不低于最低温曲线，避免过冲交叉）；24h 曲线渲染到最后一列标注点
+ * （21h），右端与末列对齐，折线不超出温度/图标列。
  *
  * 风格统一（主界面设计基准）：FreeType 中文（16 / 20 / 24 / 96 四档 +
  * 主页共用 80 档，字体缓存 6 项）、和风天气图标、圆角卡片（与屏幕边缘
@@ -68,7 +69,8 @@ static const char *TAG = "ESPaperPlay_UI";
 #define WEATHER_MARGIN       24    /* 卡片与屏幕边缘间距 */
 
 #define WEATHER_SUBPAGE_CNT  3
-#define WEATHER_HOURLY_CNT   24    /* 未来 24 小时 */
+#define WEATHER_HOURLY_CNT   24    /* 未来 24 小时（数据点数） */
+#define WEATHER_HOURLY_CHART_CNT 22 /* 曲线渲染点数（0..21：最后一列 21h 与曲线右端对齐，避免折线超出末列） */
 #define WEATHER_HOURLY_STEP  30    /* 24h 图每点水平间距（px） */
 #define WEATHER_HOURLY_LABEL 3     /* 每 N 小时标注一次温度值 */
 #define WEATHER_DAILY_CNT    7     /* 未来 7 天 */
@@ -372,8 +374,9 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     s_hourly_scroll = scroll;
     /* 容器左内边距：仅防第一个标注被裁剪，图表起点尽量靠左 */
     lv_obj_set_style_pad_left(scroll, 18, 0);
-    /* 图表宽 = 点距 * (n-1) + 两侧 pad：点间距严格等于 WEATHER_HOURLY_STEP */
-    const int chart_w = (WEATHER_HOURLY_CNT - 1) * WEATHER_HOURLY_STEP + 12;
+    /* 图表宽 = 曲线渲染点数步进 + 两侧 pad：点间距严格等于 WEATHER_HOURLY_STEP，
+     * 曲线渲染到 21h（= 最后一列标注），右端与末列对齐 */
+    const int chart_w = (WEATHER_HOURLY_CHART_CNT - 1) * WEATHER_HOURLY_STEP + 12;
     const int val_h = 22;                      /* 标注行高 */
     const int scroll_h = card_h - scroll_y - 8;
     const int icon_y = scroll_h - 52;          /* 图标行固定，距滚动区底 20px（防贴框） */
@@ -393,7 +396,7 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     }
 
     s_hourly_chart = weather_chart_create(scroll, chart_w, chart_h,
-                                          WEATHER_HOURLY_CNT, 0, 40, 1);
+                                          WEATHER_HOURLY_CHART_CNT, 0, 40, 1);
     lv_obj_set_pos(s_hourly_chart, 6, val_h);
 }
 
@@ -788,8 +791,9 @@ static void weather_refresh(void) {
     /* 24h 曲线 + 温度标注 + 图标行 */
     if (snap->hourly_count > 0) {
         static int32_t raw[WEATHER_HOURLY_CNT];
-        int n = snap->hourly_count > WEATHER_HOURLY_CNT ? WEATHER_HOURLY_CNT
-                                                        : snap->hourly_count;
+        /* 曲线只渲染到 21h（与末列标注对齐）；数据仍按最多 24 点读取。 */
+        int n = snap->hourly_count > WEATHER_HOURLY_CHART_CNT ? WEATHER_HOURLY_CHART_CNT
+                                                              : snap->hourly_count;
         int32_t ymin = 100, ymax = -100;
         for (int i = 0; i < n; i++) {
             raw[i] = atoi(snap->hourly[i].temp);
