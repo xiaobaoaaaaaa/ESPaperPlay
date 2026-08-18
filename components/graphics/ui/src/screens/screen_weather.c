@@ -54,10 +54,13 @@ static const char *TAG = "ESPaperPlay_UI";
  * 保持间距）、白底黑字。除图表滚动容器外，所有对象禁用 LVGL 滚动。
  *
  * 数据：weather 服务内存快照（后台任务周期刷新），页面定时器 30s 刷新，
- * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）。
+ * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）；快照尚不可用
+ * （启动初期 / 刷新失败）时页面切到秒级快速轮询并周期性催促后台任务，
+ * 天气数据获取成功后即刻更新页面。
  */
 
 #define WEATHER_UI_PERIOD_MS 30000 /* 页面定时器刷新周期 */
+#define WEATHER_UI_RETRY_MS  1000  /* 快照还不可用时（启动初期/刷新失败）的快速重试周期 */
 #define WEATHER_BAR_H_PX     30    /* 标题栏高度 */
 #define WEATHER_EDGE_PX      48    /* 边缘滑动触发宽度 */
 #define WEATHER_EDGE_SWIPE_PX 70   /* 边缘向内滑动位移阈值 */
@@ -75,6 +78,13 @@ static const char *TAG = "ESPaperPlay_UI";
 
 /** 数据是否变化才更新标签（EPD 上避免无谓刷新）。 */
 static char s_last_update[32] = "";
+
+/** 快照不可用时的状态（避免秒级轮询重复刷新同一提示文本 / 无谓 EPD 刷新）。 */
+static char s_hint[80] = "";
+/** 是否已切到快速重试周期（数据就绪后恢复 30s 正常周期）。 */
+static bool s_fast_poll = false;
+/** 快速重试计数：每 30 次（约 30s）催促一次后台刷新任务（任务刷新失败后会长时间休眠）。 */
+static uint32_t s_nudge_cnt = 0;
 
 /* ---- 标题栏 ---- */
 static lv_obj_t *s_loc_label = NULL;
@@ -659,10 +669,17 @@ static void weather_enter(void) {
     lv_obj_set_pos(s_warn_desc, 4, 40);
 
     s_last_update[0] = '\0';
+    s_hint[0] = '\0';
+    s_fast_poll = false;
+    s_nudge_cnt = 0;
     s_touch_down = false;
     s_touch_zone = 3;
 
     s_weather_timer = lv_timer_create(weather_timer_cb, WEATHER_UI_PERIOD_MS, NULL);
+    if (s_weather_timer == NULL) {
+        /* 定时器创建失败：只有进入时的一次刷新，无法周期更新（罕见，仅记录）。 */
+        ESP_LOGE(TAG, "weather: periodic refresh timer create failed");
+    }
     weather_refresh();
 
     ESP_LOGI(TAG, "weather screen entered");
@@ -689,12 +706,40 @@ static void weather_refresh(void) {
         return;
     }
     if (espaperplay_weather_get_snapshot(snap) != ESP_OK || !snap->valid) {
-        lv_label_set_text(s_loc_label, "--");
-        lv_label_set_text(s_temp_label, "--");
-        lv_label_set_text(s_cond_label, "数据不可用，请在 Web 页配置 API Key");
+        /* 快照尚不可用（启动初期数据未就绪 / 刷新失败）：给出准确提示，并把
+         * 本轮询切成秒级快速重试——天气获取成功后页面即刻更新，无需等下一
+         * 个 30s 周期。同时周期性催促后台刷新任务（某次整体刷新失败后任务会
+         * 长时间休眠直到下一个周期，仅靠页面轮询会一直等不到数据）。 */
+        espaperplay_weather_status_t st;
+        const bool configured =
+            (espaperplay_weather_get_status(&st) == ESP_OK) ? st.configured : false;
+        const char *hint = configured ? "正在获取天气数据…"
+                                      : "未配置 API Key，请在 Web 管理页设置";
+        if (strcmp(s_hint, hint) != 0) {
+            strlcpy(s_hint, hint, sizeof(s_hint));
+            lv_label_set_text(s_loc_label, "--");
+            lv_label_set_text(s_temp_label, "--");
+            lv_label_set_text(s_cond_label, hint);
+        }
+        if (s_nudge_cnt % 30 == 0) { /* 每 ~30s 催促一次（进页即催促一次） */
+            espaperplay_weather_request_refresh();
+        }
+        s_nudge_cnt++;
+        if (s_weather_timer != NULL && !s_fast_poll) {
+            lv_timer_set_period(s_weather_timer, WEATHER_UI_RETRY_MS);
+            s_fast_poll = true;
+        }
         free(snap);
         return;
     }
+
+    /* 数据可用：恢复正常 30s 刷新周期，并清空"获取中"状态。 */
+    if (s_fast_poll && s_weather_timer != NULL) {
+        lv_timer_set_period(s_weather_timer, WEATHER_UI_PERIOD_MS);
+        s_fast_poll = false;
+    }
+    s_nudge_cnt = 0;
+    s_hint[0] = '\0';
 
     /* 更新时变化才刷新标签（EPD 局部刷新省电）。 */
     if (strcmp(s_last_update, snap->update_time) == 0) {
