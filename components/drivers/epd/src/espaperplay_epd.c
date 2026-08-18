@@ -119,6 +119,7 @@ static spi_device_handle_t s_spi_dev = NULL; /*!< EPD SPI 设备句柄 */
 static SemaphoreHandle_t s_lock = NULL;      /*!< 刷新互斥锁（自检任务与业务可并发调用） */
 static bool s_initialized = false;           /*!< init() 已完成标志 */
 static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠（init 后默认睡眠） */
+static bool s_needs_full_after_wake = false; /*!< 从深度睡眠唤醒后首次局刷需强制 DTM1 反写新帧 */
 static uint8_t *s_snapshot =
     NULL; /*!< 私有帧快照：SPI 传输只读此缓冲，杜绝并发改写源缓冲导致错位 */
 static espaperplay_epd_mode_t s_last_mode =
@@ -593,6 +594,9 @@ static esp_err_t epd_refresh_full(const void *image_buf, bool force) {
         ESP_RETURN_ON_ERROR(epd_init_controller(true), TAG, "controller init (full) failed");
     }
 
+    /* 全刷建立干净基线：清除唤醒后局刷强制翻转标志。 */
+    s_needs_full_after_wake = false;
+
     /* 强制翻转（清残影）或从灰阶切回黑白：DTM1 = ~新帧（强制全像素翻转，
      * 全像素走深波形；画面闪黑一下，残影/中间灰残留一并清除）。 */
     if (force || s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
@@ -641,9 +645,11 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 从灰阶切回黑白且做局部刷新：窗口内 DTM1 = ~新窗口数据（强制窗口内
-     * 全像素翻转，清除窗口区域的中间灰残留；窗口外不刷新，旧平面无需处理）。 */
-    if (s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+    /* 从深度睡眠唤醒后首次局刷：DTM1 = ~新窗口数据（强制窗口内全像素翻转，
+     * 走 K2W/W2K 深波形建立干净基线；N2OCP 拷贝后后续差分照常工作）。
+     * 从灰阶切回黑白同理：窗口内灰阶残留须通过翻转清除。 */
+    if (s_needs_full_after_wake || s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+        s_needs_full_after_wake = false;
         ret = epd_write_cmd(UC8179_CMD_DTM1);
         ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
         if (image_buf == NULL) {
@@ -692,6 +698,9 @@ static esp_err_t epd_refresh_fast(const void *image_buf) {
         ESP_RETURN_ON_ERROR(epd_init_controller_fast(), TAG, "controller init (fast) failed");
     }
 
+    /* 快刷建立干净基线：清除唤醒后局刷强制翻转标志。 */
+    s_needs_full_after_wake = false;
+
     /* 从灰阶切回黑白/快刷：DTM1 = ~新帧（强制全像素翻转，清除灰阶残留）。 */
     ret = epd_prepare_bw_old_plane(image_buf);
     if (ret != ESP_OK) {
@@ -729,6 +738,9 @@ static esp_err_t epd_refresh_gray4(const void *image_buf) {
     if (s_asleep || s_controller_mode != ESPAPERPLAY_EPD_MODE_GRAY4) {
         ESP_RETURN_ON_ERROR(epd_init_controller_gray4(), TAG, "controller init (gray4) failed");
     }
+
+    /* 灰阶建立独立基线：清除唤醒后局刷强制翻转标志。 */
+    s_needs_full_after_wake = false;
 
     for (unsigned plane = 0; plane < 2; plane++) {
         ret = epd_write_cmd(plane == 0 ? UC8179_CMD_DTM1 : UC8179_CMD_DTM2);
@@ -1267,6 +1279,12 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
         }
         memcpy(s_snapshot, image_buf, frame_bytes);
         frame = s_snapshot;
+    }
+
+    /* 从深度睡眠唤醒后首次局刷：标记需要强制 DTM1 反写新帧，
+     * 使所有像素走 K2W/W2K 深波形，建立干净差分基线。 */
+    if (s_asleep && mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
+        s_needs_full_after_wake = true;
     }
 
     if (mode == ESPAPERPLAY_EPD_MODE_FULL || mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) {
