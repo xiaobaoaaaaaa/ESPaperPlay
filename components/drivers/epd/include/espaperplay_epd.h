@@ -204,6 +204,18 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
 esp_err_t espaperplay_epd_sleep(void);
 
 /**
+ * @brief 查询面板当前是否处于深度睡眠状态。
+ *
+ * 面板在空闲自动睡眠（idle timeout）或显式 espaperplay_epd_sleep() 后为
+ * true；任何一次成功的刷新完成后为 false。上层（如 GUI 渲染后端）可用
+ * 它判断"下一次刷新是否将从深度睡眠唤醒"，从而在唤醒首刷时选择整帧
+ * 快照 + 全屏窗口，把驱动对首次局刷的强制翻转扩展到整个面板。
+ *
+ * @return true = 面板处于深度睡眠（下一次刷新将走唤醒路径）。
+ */
+bool espaperplay_epd_is_asleep(void);
+
+/**
  * @brief 完全关闭电子纸显示屏的电源轨。
  *
  * 若面板尚处于上电状态，先执行深度睡眠，再拉低 ESPAPERPLAY_PIN_EPD_PWR。

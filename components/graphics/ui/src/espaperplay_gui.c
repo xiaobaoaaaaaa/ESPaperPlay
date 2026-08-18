@@ -238,6 +238,11 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
  * 是否强制全像素翻转全刷（op->force_full）由"已执行的大面积局刷计数"
  * s_large_partial_count 决定（该计数在 worker 出队时递增，见
  * gui_count_executed）；本函数只读计数，不做累加/清零。
+ *
+ * 深度睡眠唤醒策略（方案 B）：面板处于深度睡眠（espaperplay_epd_is_asleep
+ * 为 true）时，本次快照改用**整帧** + 全屏窗口局刷——驱动在唤醒首刷时
+ * 会对整个窗口强制 DTM1 反写（全像素 K2W/W2K），把"首个脏区窗口"的翻转
+ * 扩展到整个面板，一次建立全屏干净差分基线；后续任意窗口的局刷均可靠。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
     op->state = GUI_SLOT_READY;
@@ -259,19 +264,34 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
             large && s_full_force_after > 0 && s_large_partial_count >= s_full_force_after;
 
         op->type = GUI_OP_FRAME;
-        op->stage = stage_bw;
         op->large_area = large;
         if (do_force) {
             /* 连续大面积局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
             gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h,
                            stage_bw);
+            op->stage = stage_bw;
             op->force_full = true;
+            op->x = 0;
+            op->y = 0;
+            op->w = s_disp_w;
+            op->h = s_disp_h;
+        } else if (espaperplay_epd_is_asleep()) {
+            /* 深度睡眠唤醒后的首次刷新：整帧快照 + 全屏窗口局刷，把驱动的
+             * 唤醒翻转（DTM1 = ~新帧，全像素 K2W/W2K）从首个脏区窗口扩展
+             * 到整个面板；N2OCP 随后同步全平面，此后任意窗口的差分局刷都
+             * 有干净基线（含"首帧之后才变化"的其他区域）。耗时 ~0.5s
+             * （全屏窗口局刷），远快于全屏 FULL/FULL_FORCE（~1.7s）。 */
+            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage_bw);
+            op->stage = stage_bw;
+            op->force_full = false;
+            op->large_area = false; /* 全屏基线刷新：大面积局刷计数归零 */
             op->x = 0;
             op->y = 0;
             op->w = s_disp_w;
             op->h = s_disp_h;
         } else {
             gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
+            op->stage = stage_bw;
             op->force_full = false;
             op->x = s_dirty_x;
             op->y = s_dirty_y;

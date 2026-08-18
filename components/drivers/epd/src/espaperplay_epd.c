@@ -1010,6 +1010,15 @@ static esp_err_t epd_sleep_locked(void) {
     if (ret == ESP_OK) {
         s_asleep = true;
         ESP_LOGI(TAG, "EPD deep sleep");
+    } else {
+        /* 睡眠序列中途失败（如 POF 已发但等 BUSY 超时、DSLP 数据写错误）：
+         * 面板处于未知/未上电状态。宁可把状态标记为已睡并复位控制器模式，
+         * 强制下一次刷新走完整初始化（硬件复位 + PON）后再写入——绝不向
+         * 未上电的面板直接发 DTM/DRF，否则窗口会静默不更新（上层仍记成功）。 */
+        s_asleep = true;
+        s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX;
+        ESP_LOGW(TAG, "EPD sleep sequence incomplete (%s); next refresh will re-init",
+                 esp_err_to_name(ret));
     }
     return ret;
 }
@@ -1345,6 +1354,8 @@ esp_err_t espaperplay_epd_sleep(void) {
     xSemaphoreGive(s_lock);
     return ret;
 }
+
+bool espaperplay_epd_is_asleep(void) { return s_asleep; }
 
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
 esp_err_t espaperplay_epd_set_idle_sleep_timeout_ms(uint32_t timeout_ms) {
