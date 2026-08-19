@@ -75,3 +75,10 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
 # mbedtls 动态缓冲：握手完成后释放 16KB×2 大缓冲（Web 管理页 keep-alive
 # 长连接不再长期占用内部 RAM / PSRAM）。
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# FATFS（SD 卡文件系统，SDIO/SDMMC 接口）：
+# - 长文件名缓冲放堆上（默认）而非任务栈（255 字符缓冲会显著增加任务栈需求）
+CONFIG_FATFS_LFN_HEAP=y
+# - API 统一使用 UTF-8 编码：中文文件名 / TXT 内容在 FAT 卡上以 UTF-8
+#   存取（电子书阅读器场景必需；默认 ANSI/OEM 编码会乱码）
+CONFIG_FATFS_API_ENCODING_UTF_8=y
