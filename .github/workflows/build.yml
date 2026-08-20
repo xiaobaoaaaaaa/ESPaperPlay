@@ -3,6 +3,7 @@ name: ESP-IDF Build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -30,3 +31,77 @@ jobs:
             build/mmap_build/fonts/fonts/fonts.bin
             build/flash_args
           if-no-files-found: error
+
+  # 打 v* tag 时自动发布：打包完整烧录镜像（bootloader/分区表/APP/fonts）
+  # 并创建 GitHub Release 附带 tar.gz（正文从 CHANGELOG 对应版本段提取）。
+  # 约定：tag 打在 main 上（release 合并提交处）。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: espapaperplay
+          path: firmware/
+
+      - name: Package full firmware tarball
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          PKG="firmware"
+          cat > "$PKG/FLASH.txt" <<'EOF'
+          ESPaperPlay - 完整烧录镜像包（ESP32-S3, 16MB flash / 8MB PSRAM）
+          
+          包含：
+            bootloader/bootloader.bin          0x000000
+            partition_table/partition-table.bin 0x008000
+            ESPaperPlay.bin                    0x010000
+            mmap_build/fonts/fonts/fonts.bin   0x410000
+          
+          烧录（python -m esptool）：
+            python -m esptool --chip esp32s3 -b 460800 --before default-reset --after hard-reset \
+              write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
+              0x0 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin \
+              0x10000 ESPaperPlay.bin 0x410000 mmap_build/fonts/fonts/fonts.bin
+          
+          或项目内：idf.py flash
+          EOF
+          cat "$PKG/flash_args"
+          cd "$PKG" && sha256sum bootloader/bootloader.bin partition_table/partition-table.bin ESPaperPlay.bin mmap_build/fonts/fonts/fonts.bin > SHA256SUMS.txt
+          cd ..
+          tar czf "${TAG}-flash.tar.gz" -C "$PKG" .
+
+      - name: Create release and upload tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          VER="${TAG#v}"
+          # 从 CHANGELOG.md 提取对应版本段作为 Release 正文
+          awk -v ver="$VER" '
+            $0 ~ ("^## \\[" ver "\\]") {found=1; next}
+            found && /^## / {exit}
+            found {print}
+          ' CHANGELOG.md > /tmp/release_body.md
+          if [ -s /tmp/release_body.md ]; then
+            cat >> /tmp/release_body.md <<EOF
+          
+          ## 下载
+          
+          - `$TAG-flash.tar.gz`：完整烧录镜像包（bootloader / 分区表 / APP / fonts 分区），内含 FLASH.txt 烧录说明与 SHA256SUMS 校验和。
+          EOF
+            gh release create "$TAG" "${TAG}-flash.tar.gz" \
+              --title "ESPaperPlay $VER" --notes-file /tmp/release_body.md
+          else
+            gh release create "$TAG" "${TAG}-flash.tar.gz" \
+              --title "ESPaperPlay $VER" --generate-notes
+          fi
