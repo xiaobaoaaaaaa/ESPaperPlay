@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf: ">=5.5"
+  # LVGL 文件系统盘符注册（esp_lv_fs 依赖 lvgl，显式声明便于 REQUIRES）
+  lvgl/lvgl: "^9.5.0"
+  # 只读内存映射资产（构建期打包 SPIFFS 镜像 + 生成 mmap_generate_fonts.h）
+  espressif/esp_mmap_assets: "^1.4.0"
+  # LVGL 文件系统桥接：把 mmap 资产注册为 LVGL 盘符（如 A:）
+  espressif/esp_lv_fs: "^1.0.0"
+  # FreeType 字体引擎本体（LVGL 只带封装层，真正的 libfreetype 由该组件提供）
+  espressif/freetype: "^2.14.3"

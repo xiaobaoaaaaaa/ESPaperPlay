@@ -14,15 +14,26 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "espaperplay_auth.h"
 #include "espaperplay_board.h"
+#include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
+#include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
+#include "espaperplay_nettime.h"
 #include "espaperplay_power.h"
 #include "espaperplay_reader.h"
+#include "espaperplay_session.h"
 #include "espaperplay_storage.h"
+#include "espaperplay_system.h"
 #include "espaperplay_touch.h"
+#include "espaperplay_ui.h"
+#include "espaperplay_weather.h"
+#include "espaperplay_webserver.h"
+#include "espaperplay_wifi.h"
 
 static const char *TAG = "ESPaperPlay_MAIN";
 
@@ -63,18 +74,56 @@ void app_main(void) {
     ESP_LOGI(TAG, "%s v%s starting on %s", ESPAPERPLAY_PROJECT_NAME, ESPAPERPLAY_VERSION,
              CONFIG_IDF_TARGET);
 
-    /* 系统级初始化（先初始化 board / 总线）。 */
+    /* 系统级初始化：先从 NVS 加载系统配置（不依赖硬件），再初始化 board / 总线。 */
+    ESP_ERROR_CHECK(espaperplay_system_init());
+    /* 系统时钟：从 NVS 恢复持久化的时区（不依赖硬件），供 NTP 同步与本地时间输出使用。 */
+    ESP_ERROR_CHECK(espaperplay_clock_init());
+    /* 设备鉴权：加载密码记录（不依赖硬件），供 Web 等模块校验使用。 */
+    ESP_ERROR_CHECK(espaperplay_auth_init());
+    /* 会话管理：签发/校验登录态与失败限速锁定（纯内存，不依赖硬件）。 */
+    ESP_ERROR_CHECK(espaperplay_session_init());
+
     ESP_ERROR_CHECK(espaperplay_board_init());
 
+    /* 网络服务：依据系统配置（AP / STA 模式及凭据）启动 WiFi。 */
+    ESP_ERROR_CHECK(espaperplay_wifi_init());
+
+    /* Web 管理服务：查看系统状态、修改系统设置（监听所有网络接口）。 */
+    ESP_ERROR_CHECK(espaperplay_webserver_start());
+
+    /* 网络时间：STA 联网后自动执行「公网 IP → 地理位置 → 时区 → NTP 同步」。 */
+    ESP_ERROR_CHECK(espaperplay_nettime_start());
+
+    /* 天气：STA 联网后按周期拉取和风天气全部数据（实时 / 预报 / 分钟降水 /
+     * 预警 / 指数 / 空气质量 / 天文）到内存快照，供屏幕与 Web 展示使用。
+     * API Key 与位置通过 Web 管理页配置（NVS 持久化）。 */
+    ESP_ERROR_CHECK(espaperplay_weather_start());
+
     /* 外设模块。 */
-    ESP_ERROR_CHECK(espaperplay_storage_mount());
+    /* SD 卡挂载失败不阻断启动：无卡/未格式化时设备其余功能（网络时钟、
+     * 天气、Web 管理、UI）照常工作，仅文件类功能（阅读器）不可用。 */
+    esp_err_t storage_err = espaperplay_storage_mount();
+    if (storage_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card storage unavailable: %s (device continues without storage)",
+                 esp_err_to_name(storage_err));
+    }
     ESP_ERROR_CHECK(espaperplay_epd_init());
+    /* 应用屏幕空闲自动睡眠超时（Web 可配置，NVS 持久化）。 */
+    espaperplay_epd_set_idle_sleep_timeout_ms(
+        espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
     ESP_ERROR_CHECK(espaperplay_touch_init());
 
     /* 应用级模块。 */
     ESP_ERROR_CHECK(espaperplay_input_init());
     ESP_ERROR_CHECK(espaperplay_power_init());
     ESP_ERROR_CHECK(espaperplay_gui_init());
+    /* 应用"连续局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
+    espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
+    ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
+    /* 字体资产：映射 fonts 分区并注册 LVGL 盘符（需在 LVGL 初始化之后）。 */
+    ESP_ERROR_CHECK(espaperplay_fonts_init());
+    ESP_ERROR_CHECK(espaperplay_ui_page_push(&espaperplay_ui_page_home)); /* 主界面入栈 */
+    ESP_ERROR_CHECK(espaperplay_ui_key_input_start()); /* 按键分发：input 队列 -> GUI 页面 */
     ESP_ERROR_CHECK(espaperplay_reader_init());
 
     /* 创建任务。 */

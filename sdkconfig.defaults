@@ -15,3 +15,68 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_TYPE_ESPPSRAM64=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_USE_MALLOC=y
+
+# Web 管理：HTTPS + 运行时生成自签名证书（设备端自产密钥对，私钥永不出设备）
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+CONFIG_MBEDTLS_X509_CREATE_C=y
+# 生成 P-256 密钥对 / 证书需较大栈；main 任务在 app_main 返回后即销毁，无长期开销
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# 编译优化：-O2（默认 -Og 使 GUI 转换循环慢 2-4 倍；-O2 后转换耗时显著下降）
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# CPU 动态调频（DFS）：繁忙升 240MHz，空闲自动降 80MHz（平衡功耗与性能）
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_PM_ENABLE=y
+CONFIG_PM_DFS_INIT_AUTO=y
+# 自定义分区表：APP 4MB（LVGL / 阅读器代码空间）
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# LVGL 字体
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+# LVGL FreeType 字体引擎：TTF/OTF 矢量字体渲染（配合 fonts 分区资产，
+# 见 components/graphics/fonts）。LV_FREETYPE_USE_LVGL_PORT 让 FreeType
+# 走 LVGL 的内存分配与文件系统（盘符 A: 由 esp_lv_fs 注册）。
+CONFIG_LV_USE_FREETYPE=y
+CONFIG_LV_FREETYPE_USE_LVGL_PORT=y
+CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256
+# FreeType 字形栅格化在 LVGL draw 线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768
+# LVGL 内存用 C 标准库 malloc（走 ESP-IDF heap，大块分配自动落 8MB PSRAM）；
+# 不用内置 TLSF 池（仅 64KB，触发 benchmark 的 #warning 且被 -Werror 当错误）
+# LVGL 日志接入 ESP-IDF（默认关闭：LVGL/FreeType 内部错误全部静默，排查困难）
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+# esp_mmap_assets 文件名缓冲长度（默认 16 会截断 NotoSansSC_Regular.ttf 这类
+# 长文件名，导致运行时 strcmp 匹配失败、字体打不开；32 为 Kconfig 上限）
+CONFIG_MMAP_FILE_NAME_LENGTH=32
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# 网络时间（IP 定位 + NTP）：HTTPS 客户端使用 ESP-IDF 内置 CA 证书包校验
+# uapis.cn / NTP 域名证书（netip / geoip 服务依赖）
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# 网络时间：允许同时配置多个 NTP 服务器（clock 服务默认 3 个：阿里云 / cn.pool / pool）
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# LWIP 连接资源：天气服务每次请求都新建 TLS 连接，关闭后进入 TIME_WAIT
+# 暂占 PCB / 套接字（默认 MAX_SOCKETS=10、MAX_ACTIVE_TCP=16 在 Web 轮询 +
+# 快速连续刷新时会耗尽导致 connect 失败，表现为偶发 ESP_ERR_HTTP_CONNECT），
+# 适当放大池容量（内存开销仅数 KB）。
+CONFIG_LWIP_MAX_SOCKETS=20
+CONFIG_LWIP_MAX_ACTIVE_TCP=32
+
+# 内部 RAM 保护：TLS 的 16KB SSL 收发缓冲若按默认阈值 16384 强制落在内部
+# RAM，长时间运行后内部堆碎片化（最大连续块 <16KB）会直接导致握手失败
+# （create_ssl_handle failed）。阈值降至 8192 后 16KB 级缓冲自动回落到
+# 8MB PSRAM（仅缓存映射访问，性能影响可忽略），内部 RAM 只保留小块分配。
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
+# mbedtls 动态缓冲：握手完成后释放 16KB×2 大缓冲（Web 管理页 keep-alive
+# 长连接不再长期占用内部 RAM / PSRAM）。
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# FATFS（SD 卡文件系统，SDIO/SDMMC 接口）：
+# - 长文件名缓冲放堆上（默认）而非任务栈（255 字符缓冲会显著增加任务栈需求）
+CONFIG_FATFS_LFN_HEAP=y
+# - API 统一使用 UTF-8 编码：中文文件名 / TXT 内容在 FAT 卡上以 UTF-8
+#   存取（电子书阅读器场景必需；默认 ANSI/OEM 编码会乱码）
+CONFIG_FATFS_API_ENCODING_UTF_8=y

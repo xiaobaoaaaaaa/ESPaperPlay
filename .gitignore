@@ -89,3 +89,25 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Font preparation: downloaded source fonts (large, regenerable)
+tools/font_src/
+
+# Component manager cache (redirected into workspace for sandboxed builds)
+.component_cache/
+
+# Sandbox-only: Pillow/numpy for esp_mmap_assets build-time checks
+.pydeps/
+.pip-cache/
+
+# Font tooling: venv + python caches (regenerable)
+tools/fonttools-venv/
+__pycache__/
+*.pyc
+
+# Icon preparation: downloaded SVG/PNG sources (regenerable)
+tools/icon_src/
+
+# QWeather icon package (downloaded, regenerable)
+QWeather-Icons-1.8.0/
+tools/qweather_icons_src/

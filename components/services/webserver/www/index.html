@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESPaperPlay 控制台</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --ok: #4ade80;
+            --err: #f87171;
+            --border: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.6;
+        }
+
+        header {
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        header h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        header .sub {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        main {
+            max-width: 780px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+
+        section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-bottom: 20px;
+        }
+
+        section h2 {
+            font-size: 15px;
+            margin: 0 0 14px;
+            color: var(--accent);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }
+
+        .stat {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+
+        .stat .label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .stat .value {
+            font-size: 17px;
+            font-weight: 600;
+            margin-top: 2px;
+            word-break: break-all;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+        }
+
+        .pill.ok {
+            background: #052e16;
+            color: var(--ok);
+            border: 1px solid var(--ok);
+        }
+
+        .pill.err {
+            background: #450a0a;
+            color: var(--err);
+            border: 1px solid var(--err);
+        }
+
+        .field {
+            margin-bottom: 14px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+
+        .field input[type=text],
+        .field input[type=password],
+        .field select {
+            width: 100%;
+            padding: 9px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .field select {
+            appearance: auto;
+            cursor: pointer;
+        }
+
+        .field input:focus,
+        .field select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .radio {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-right: 18px;
+            cursor: pointer;
+        }
+
+        .checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 6px;
+            cursor: pointer;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        button {
+            padding: 10px 18px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            filter: brightness(1.15);
+        }
+
+        button.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #082f49;
+            font-weight: 600;
+        }
+
+        button.danger {
+            color: var(--err);
+            border-color: var(--err);
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #334155;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity .25s;
+            pointer-events: none;
+            max-width: 90vw;
+        }
+
+        #toast.show {
+            opacity: 1;
+        }
+
+        #toast.error {
+            background: #7f1d1d;
+        }
+
+        /* 登录界面 */
+        #login {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            z-index: 10;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .login-card {
+            width: min(360px, 90vw);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 28px 24px;
+        }
+
+        .login-card h2 {
+            margin: 0 0 4px;
+            font-size: 18px;
+        }
+
+        .login-sub {
+            margin: 0 0 18px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .login-error {
+            color: var(--err);
+            font-size: 13px;
+            min-height: 18px;
+            margin-bottom: 6px;
+        }
+
+        #logoutBtn {
+            margin-left: auto;
+            font-size: 13px;
+            padding: 6px 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>ESPaperPlay 控制台</h1>
+        <span class="sub">系统状态与网络设置</span>
+        <button type="button" id="logoutBtn" class="hidden">退出登录</button>
+    </header>
+    <div id="login">
+        <div class="login-card">
+            <h2>ESPaperPlay 控制台</h2>
+            <p class="login-sub" id="authSubtitle">请输入设备密码以继续</p>
+            <form id="setupForm" class="hidden">
+                <div class="field">
+                    <label>设置设备密码（至少 8 位）</label>
+                    <input type="password" id="setupPassword" placeholder="新密码" minlength="8" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <input type="password" id="setupConfirm" placeholder="确认新密码" minlength="8" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary" style="width:100%">设置密码并进入</button>
+                </div>
+            </form>
+            <form id="loginForm" class="hidden">
+                <div class="field">
+                    <input type="password" name="password" id="loginPassword" placeholder="设备密码"
+                        autocomplete="current-password">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary" style="width:100%">登 录</button>
+                </div>
+            </form>
+            <div id="authError" class="login-error"></div>
+        </div>
+    </div>
+    <main>
+        <section>
+            <h2>系统状态</h2>
+            <div class="grid" id="status">
+                <div class="stat">
+                    <div class="label">加载中…</div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>网络设置</h2>
+            <form id="configForm">
+                <div class="field">
+                    <label>WiFi 工作模式</label>
+                    <label class="radio"><input type="radio" name="wifi_mode" value="ap"> 热点 (AP)</label>
+                    <label class="radio"><input type="radio" name="wifi_mode" value="sta"> 站点 (STA)</label>
+                </div>
+                <div class="field">
+                    <label>STA SSID（要连接的路由器）</label>
+                    <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label>STA 密码（留空 = 保持不变）</label>
+                    <input type="password" name="sta_password" maxlength="63" placeholder="••••••"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_sta_password" value="1"> 清除已保存的 STA
+                        密码（开放网络）</label>
+                </div>
+                <div class="field">
+                    <label>AP SSID（设备热点名）</label>
+                    <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label>AP 密码（留空 = 保持不变）</label>
+                    <input type="password" name="ap_password" maxlength="63" placeholder="••••••"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_ap_password" value="1"> 清除已保存的 AP
+                        密码（开放网络）</label>
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存并应用</button>
+                    <button type="button" id="wifiRestart">重新应用网络</button>
+                    <button type="button" id="reset" class="danger">恢复默认</button>
+                    <button type="button" id="reboot" class="danger">重启设备</button>
+                </div>
+            </form>
+        </section>
+
+        <section>
+            <h2>屏幕设置</h2>
+            <form id="screenForm">
+                <div class="field">
+                    <label>屏幕空闲自动睡眠（秒，0 = 关闭自动睡眠）</label>
+                    <input type="number" name="epd_idle_sleep_timeout_s" min="0" max="86400" step="1" placeholder="90">
+                </div>
+                <div class="field">
+                    <label>连续局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
+                    <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="10">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                </div>
+            </form>
+        </section>
+
+        <section>
+            <h2>BOOT 键设置</h2>
+            <form id="bootForm">
+                <div class="field">
+                    <label>长按动作（所有页面生效，长按阈值到达即响应一次）</label>
+                    <select name="boot_long_press_action">
+                        <option value="full_refresh">全屏刷新（清残影，默认）</option>
+                        <option value="back">返回上一页</option>
+                        <option value="none">无操作</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>长按判定时间（毫秒，300-10000，默认 1000）</label>
+                    <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50" placeholder="1000">
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                </div>
+            </form>
+        </section>
+
+        <section>
+            <h2>天气设置（和风天气）</h2>
+            <form id="weatherForm">
+                <div class="field">
+                    <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取，留空 = 保持不变）</label>
+                    <input type="password" name="weather_api_key" maxlength="47" placeholder="（未设置）"
+                        autocomplete="new-password">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_key" value="1"> 清除已保存的 API
+                        Key</label>
+                </div>
+                <div class="field">
+                    <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 按公网 IP 自动定位）</label>
+                    <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
+                        autocomplete="off">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1"> 清除已保存的位置（恢复自动定位）</label>
+                </div>
+                <div class="field">
+                    <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/" target="_blank" rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
+                    <input type="text" name="weather_api_host" maxlength="79" placeholder="例如 abc1234xyz.def.qweatherapi.com"
+                        autocomplete="off">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的 API Host（回退到公共地址）</label>
+                </div>
+                <div class="actions">
+                    <button type="submit" class="primary">保存</button>
+                    <button type="button" id="weatherRefresh">立即刷新</button>
+                </div>
+            </form>
+            <div class="grid" id="weatherInfo"></div>
+        </section>
+
+        <section>
+            <h2>账户安全</h2>
+            <form id="passwordForm">
+                <div class="field">
+                    <label>当前密码</label>
+                    <input type="password" id="curPassword" placeholder="当前密码" maxlength="63"
+                        autocomplete="current-password">
+                </div>
+                <div class="field">
+                    <label>新密码（至少 8 位）</label>
+                    <input type="password" id="newPassword" placeholder="新密码" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div class="field">
+                    <input type="password" id="confirmPassword" placeholder="确认新密码" maxlength="63"
+                        autocomplete="new-password">
+                </div>
+                <div id="pwdError" class="login-error"></div>
+                <div class="actions">
+                    <button type="submit" class="primary">修改密码</button>
+                </div>
+            </form>
+        </section>
+    </main>
+    <div id="toast"></div>
+
+    <script>
+        const $ = (sel) => document.querySelector(sel);
+        let toastTimer = null;
+        const TOKEN_KEY = 'espaperplay_token';
+        let currentWifiMode = 'ap'; /* 当前 WiFi 模式，用于判断保存时是否切换 */
+
+        /* ---- 登录态管理 ---- */
+        function getToken() {
+            return localStorage.getItem(TOKEN_KEY) || '';
+        }
+
+        function setToken(t) {
+            localStorage.setItem(TOKEN_KEY, t);
+        }
+
+        function clearToken() {
+            localStorage.removeItem(TOKEN_KEY);
+        }
+
+        /* 带鉴权的 fetch：自动附加 Bearer token，401 时回到登录页。 */
+        async function apiFetch(path, opts) {
+            opts = opts || {};
+            opts.headers = Object.assign({}, opts.headers || {});
+            const t = getToken();
+            if (t) opts.headers['Authorization'] = 'Bearer ' + t;
+            const res = await fetch(path, opts);
+            if (res.status === 401) {
+                clearToken();
+                showLogin();
+                throw new Error('Unauthorized');
+            }
+            return res;
+        }
+
+        function showApp() {
+            $('#login').classList.add('hidden');
+            $('#logoutBtn').classList.remove('hidden');
+        }
+
+        function showSetup() {
+            $('#login').classList.remove('hidden');
+            $('#logoutBtn').classList.add('hidden');
+            $('#setupForm').classList.remove('hidden');
+            $('#loginForm').classList.add('hidden');
+            $('#authSubtitle').textContent = '首次使用：请先设置设备密码';
+        }
+
+        function showLogin() {
+            $('#login').classList.remove('hidden');
+            $('#logoutBtn').classList.add('hidden');
+            $('#setupForm').classList.add('hidden');
+            $('#loginForm').classList.remove('hidden');
+            $('#authSubtitle').textContent = '请输入设备密码以继续';
+        }
+
+        /* 查询登录状态，决定显示登录页还是管理页。 */
+        async function checkAuth() {
+            const t = getToken();
+            try {
+                const res = await fetch('/api/auth/status', {
+                    headers: t ? { 'Authorization': 'Bearer ' + t } : {}
+                });
+                const d = await res.json();
+                if (!d.password_configured) {
+                    /* 出厂未设置密码：引导首次设置。 */
+                    showSetup();
+                } else if (d.authenticated) {
+                    showApp();
+                    loadStatus();
+                    loadConfig();
+                    loadWeather();
+                } else {
+                    showLogin();
+                }
+            } catch (e) {
+                /* 设备可能重启/网络切换，保持当前界面并稍后重试。 */
+                showLogin();
+            }
+        }
+
+        /* 首次设置密码。 */
+        $('#setupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const pwd = $('#setupPassword').value;
+            const confirm = $('#setupConfirm').value;
+            $('#authError').textContent = '';
+            if (pwd.length < 8) {
+                $('#authError').textContent = '密码至少 8 位';
+                return;
+            }
+            if (pwd !== confirm) {
+                $('#authError').textContent = '两次输入的密码不一致';
+                return;
+            }
+            const btn = $('#setupForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/auth/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok && d.token) {
+                    setToken(d.token);
+                    $('#setupPassword').value = '';
+                    $('#setupConfirm').value = '';
+                    showApp();
+                    loadStatus();
+                    loadConfig();
+                    loadWeather();
+                } else {
+                    $('#authError').textContent = d.error || ('设置失败（' + res.status + '）');
+                }
+            } catch (err) {
+                $('#authError').textContent = '网络错误，请重试';
+            }
+            btn.disabled = false;
+        });
+
+        /* 登录。 */
+        $('#loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const pwd = $('#loginPassword').value;
+            $('#authError').textContent = '';
+            if (!pwd) {
+                $('#authError').textContent = '请输入密码';
+                return;
+            }
+            const btn = $('#loginForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok && d.token) {
+                    setToken(d.token);
+                    $('#loginPassword').value = '';
+                    checkAuth();
+                } else {
+                    $('#authError').textContent = d.error || ('登录失败（' + res.status + '）');
+                }
+            } catch (err) {
+                $('#authError').textContent = '网络错误，请重试';
+            }
+            btn.disabled = false;
+        });
+
+        /* 登出。 */
+        $('#logoutBtn').addEventListener('click', async () => {
+            try {
+                await apiFetch('/api/auth/logout', { method: 'POST' });
+            } catch (e) { /* 已回到登录页 */ }
+            clearToken();
+            showLogin();
+        });
+
+        /* 修改密码（改后全部会话失效，需重新登录）。 */
+        $('#passwordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const cur = $('#curPassword').value;
+            const pwd = $('#newPassword').value;
+            const confirm = $('#confirmPassword').value;
+            $('#pwdError').textContent = '';
+            if (!cur) {
+                $('#pwdError').textContent = '请输入当前密码';
+                return;
+            }
+            if (pwd.length < 8) {
+                $('#pwdError').textContent = '新密码至少 8 位';
+                return;
+            }
+            if (pwd !== confirm) {
+                $('#pwdError').textContent = '两次输入的新密码不一致';
+                return;
+            }
+            const btn = $('#passwordForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const res = await apiFetch('/api/auth/password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ current_password: cur, password: pwd }).toString()
+                });
+                const d = await res.json();
+                if (res.ok) {
+                    toast('密码已修改，请重新登录');
+                    clearToken();
+                    $('#curPassword').value = '';
+                    $('#newPassword').value = '';
+                    $('#confirmPassword').value = '';
+                    showLogin();
+                } else {
+                    $('#pwdError').textContent = d.error || ('修改失败（' + res.status + '）');
+                }
+            } catch (err) {
+                if (err.message !== 'Unauthorized') {
+                    $('#pwdError').textContent = '网络错误，请重试';
+                }
+            }
+            btn.disabled = false;
+        });
+
+        /* 轻量转义，防止注入。 */
+        function esc(s) {
+            return String(s).replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function toast(msg, isErr) {
+            const el = $('#toast');
+            el.textContent = msg;
+            el.classList.toggle('error', !!isErr);
+            el.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+        }
+
+        function fmtBytes(n) {
+            if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+            if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+            return n + ' B';
+        }
+
+        function fmtUptime(s) {
+            const d = Math.floor(s / 86400);
+            const h = Math.floor((s % 86400) / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = s % 60;
+            if (d > 0) return d + ' 天 ' + h + ' 小时';
+            if (h > 0) return h + ' 小时 ' + m + ' 分';
+            if (m > 0) return m + ' 分 ' + sec + ' 秒';
+            return sec + ' 秒';
+        }
+
+        /* 加载并渲染系统状态。 */
+        async function loadStatus() {
+            if (!getToken()) return; /* 未登录时不轮询，避免无效 401 请求 */
+            try {
+                const res = await apiFetch('/api/status');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                const sys = d.system || {};
+                const fw = d.firmware || {};
+                const wifi = d.wifi || {};
+                const modeLabel = wifi.mode === 'AP' ? '热点 (AP)' : '站点 (STA)';
+                const connPill = wifi.connected
+                    ? '<span class="pill ok">已连接</span>'
+                    : '<span class="pill err">未连接</span>';
+                $('#status').innerHTML =
+                    '<div class="stat"><div class="label">运行时间</div><div class="value">' + fmtUptime(sys.uptime_s || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">剩余堆内存</div><div class="value">' + fmtBytes(sys.free_heap || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">历史最低堆</div><div class="value">' + fmtBytes(sys.min_free_heap || 0) + '</div></div>' +
+                    '<div class="stat"><div class="label">固件版本</div><div class="value">v' + esc(fw.version || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">WiFi 模式</div><div class="value">' + modeLabel + '</div></div>' +
+                    '<div class="stat"><div class="label">SSID</div><div class="value">' + esc(wifi.ssid || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">IP 地址</div><div class="value">' + esc(wifi.ip || '-') + '</div></div>' +
+                    '<div class="stat"><div class="label">连接状态</div><div class="value">' + connPill + '</div></div>';
+            } catch (e) {
+                /* 设备可能正在重启 / 网络切换，等待下次轮询自动恢复。 */
+            }
+        }
+
+        /* 加载并渲染天气状态。 */
+        async function loadWeather() {
+            if (!getToken()) return;
+            try {
+                const res = await apiFetch('/api/weather');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                let html =
+                    '<div class="stat"><div class="label">状态</div><div class="value">' +
+                    (d.configured
+                        ? (d.valid ? '<span class="pill ok">正常</span>' : '<span class="pill err">等待数据</span>')
+                        : '<span class="pill err">未配置 Key</span>') + '</div></div>' +
+                    '<div class="stat"><div class="label">位置</div><div class="value">' + esc(d.location_name || '-') +
+                    (d.auto_location ? '（自动）' : '') + '</div></div>' +
+                    '<div class="stat"><div class="label">最近更新</div><div class="value">' + esc(d.update_time || '-') + '</div></div>';
+                if (d.valid && d.now) {
+                    html +=
+                        '<div class="stat"><div class="label">实时天气</div><div class="value">' + esc(d.now.text || '-') +
+                        ' ' + esc(d.now.temp || '-') + '°C（体感 ' + esc(d.now.feels_like || '-') + '°C）</div></div>' +
+                        '<div class="stat"><div class="label">空气质量</div><div class="value">' +
+                        esc((d.air && d.air.category) || '-') + (d.air && d.air.aqi ? '（AQI ' + esc(d.air.aqi) + '）' : '') + '</div></div>' +
+                        '<div class="stat"><div class="label">气象预警</div><div class="value">' +
+                        (d.warning_count ? '<span class="pill err">' + d.warning_count + ' 条生效中</span>' : '无') + '</div></div>' +
+                        '<div class="stat"><div class="label">日出 / 日落</div><div class="value">' +
+                        esc((d.astronomy && d.astronomy.sunrise) || '-') + ' / ' + esc((d.astronomy && d.astronomy.sunset) || '-') + '</div></div>';
+                }
+                if (d.last_error) {
+                    html += '<div class="stat"><div class="label">最近错误</div><div class="value">' + esc(d.last_error) + '</div></div>';
+                }
+                $('#weatherInfo').innerHTML = html;
+            } catch (e) {
+                /* 设备可能正在重启 / 网络切换，等待下次轮询自动恢复。 */
+            }
+        }
+
+        /* 加载当前配置到表单。 */
+        async function loadConfig() {
+            try {
+                const res = await apiFetch('/api/config');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                const mode = d.wifi_mode === 'sta' ? 'sta' : 'ap';
+                currentWifiMode = mode;
+                const radio = document.querySelector('input[name=wifi_mode][value="' + mode + '"]');
+                if (radio) radio.checked = true;
+                $('input[name=sta_ssid]').value = d.sta_ssid || '';
+                $('input[name=ap_ssid]').value = d.ap_ssid || '';
+                /* 密码不回填明文，仅在占位符中提示是否已保存。 */
+                $('input[name=sta_password]').value = '';
+                $('input[name=sta_password]').placeholder = d.sta_password ? '••••••（已保存）' : '（未设置）';
+                $('input[name=ap_password]').value = '';
+                $('input[name=ap_password]').placeholder = d.ap_password ? '••••••（已保存）' : '（未设置）';
+                $('input[name=clear_sta_password]').checked = false;
+                $('input[name=clear_ap_password]').checked = false;
+                $('input[name=epd_idle_sleep_timeout_s]').value = d.epd_idle_sleep_timeout_s != null
+                    ? d.epd_idle_sleep_timeout_s : '';
+                $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
+                    ? d.gui_full_force_after : '';
+                $('select[name=boot_long_press_action]').value = d.boot_long_press_action || 'full_refresh';
+                $('input[name=boot_long_press_time_ms]').value = d.boot_long_press_time_ms != null
+                    ? d.boot_long_press_time_ms : 1000;
+                /* 天气：Key 不回填明文，仅在占位符中提示是否已保存；位置 / API Host 原样回填。 */
+                $('input[name=weather_api_key]').value = '';
+                $('input[name=weather_api_key]').placeholder = d.weather_api_key_set ? '••••••（已配置）' : '（未设置）';
+                $('input[name=weather_location]').value = d.weather_location || '';
+                $('input[name=weather_api_host]').value = d.weather_api_host || '';
+                $('input[name=clear_weather_api_key]').checked = false;
+                $('input[name=clear_weather_location]').checked = false;
+                $('input[name=clear_weather_api_host]').checked = false;
+            } catch (e) {
+                /* 服务器暂不可达，忽略。 */
+            }
+        }
+
+        async function postForm(action, data) {
+            const res = await apiFetch(action, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: data
+            });
+            return res.json();
+        }
+
+        /* 保存屏幕设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#screenForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#screenForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#screenForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('屏幕设置已保存');
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 保存 BOOT 键设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#bootForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#bootForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#bootForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('BOOT 键设置已保存');
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 保存天气设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#weatherForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#weatherForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#weatherForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('天气设置已保存，正在刷新天气数据…');
+                    loadConfig();
+                    setTimeout(loadWeather, 3000);
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 立即刷新天气数据。 */
+        $('#weatherRefresh').addEventListener('click', async () => {
+            try {
+                const d = await postForm('/api/weather/refresh', '');
+                if (d.ok) {
+                    toast('已请求刷新，数据更新可能需要几秒…');
+                    setTimeout(loadWeather, 5000);
+                } else {
+                    toast('刷新失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('刷新失败：' + e, true);
+            }
+        });
+
+        /* 保存并应用设置。 */
+        $('#configForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#configForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#configForm button[type=submit]');
+            const sel = $('input[name=wifi_mode]:checked');
+            const modeChanged = !!sel && sel.value !== currentWifiMode;
+            /* 立即给出反馈，避免网络切换导致无响应感。 */
+            toast(modeChanged ? '正在保存并切换 WiFi 模式…' : '正在保存并应用设置…');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    if (modeChanged) {
+                        toast('已保存。WiFi 模式已切换，设备 IP 可能变化，请用新地址访问', true);
+                    } else {
+                        toast('设置已保存，正在重新应用网络…');
+                    }
+                    loadStatus();
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                /* WiFi 重启会中断当前连接（切换模式时 IP 可能变化）。 */
+                toast(modeChanged
+                    ? '已保存，但连接已断开。模式已切换，设备 IP 可能变化，请重新连接'
+                    : '已保存，连接短暂断开，等待设备重新上线…', true);
+                setTimeout(loadConfig, 3000);
+            }
+            btn.disabled = false;
+        });
+
+        $('#wifiRestart').addEventListener('click', async () => {
+            try {
+                const d = await postForm('/api/wifi/restart', '');
+                if (d.ok) {
+                    toast('网络已重新应用');
+                    loadStatus();
+                } else {
+                    toast('失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('连接已断开，WiFi 正在重启…');
+            }
+        });
+
+        $('#reset').addEventListener('click', async () => {
+            if (!confirm('确定恢复出厂默认设置并重新应用网络吗？')) return;
+            try {
+                const d = await postForm('/api/config/reset', '');
+                if (d.ok) {
+                    toast('已恢复默认设置');
+                    loadConfig();
+                    loadStatus();
+                } else {
+                    toast('恢复失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('连接已断开，设备正在重新应用网络…');
+            }
+        });
+
+        $('#reboot').addEventListener('click', async () => {
+            if (!confirm('确定重启设备吗？')) return;
+            try {
+                await apiFetch('/api/system/reboot', { method: 'POST' });
+            } catch (e) { /* 连接会立即断开 */ }
+            toast('正在重启…');
+        });
+
+        /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
+        checkAuth();
+        setInterval(loadStatus, 5000);
+        setInterval(loadWeather, 15000);
+    </script>
+</body>
+
+</html>
