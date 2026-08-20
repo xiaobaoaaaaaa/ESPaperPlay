@@ -149,7 +149,6 @@ esp_err_t espaperplay_sd_init(void) {
 
     esp_err_t ret;
     bool host_inited = false;
-    bool slot_inited = false;
 
     /* 1. 电源轨上电 */
     ret = sd_power_rail_enable();
@@ -193,7 +192,6 @@ esp_err_t espaperplay_sd_init(void) {
         goto fail;
     }
     s_slot_ready = true;
-    slot_inited = true;
 
     /* 4. SDIO 卡片初始化（CMD0/CMD8/ACMD41/CMD2/CMD3/CMD9/CMD7 探测序列） */
     ret = sdmmc_card_init(&s_host, &s_card);
@@ -216,9 +214,14 @@ esp_err_t espaperplay_sd_init(void) {
     return ESP_OK;
 
 fail:
-    if (slot_inited) {
-        sdmmc_host_deinit_slot(ESPAPERPLAY_SDMMC_HOST_SLOT);
-    }
+    /* 收尾统一走 sdmmc_host_deinit()：它会移除仍注册的槽位并删除控制器。
+     *
+     * 不能先 sdmmc_host_deinit_slot() 再 sdmmc_host_deinit()——
+     * IDF v6.0.2 legacy shim 中 deinit_slot 在最后一个槽位被移除后就会
+     * 释放控制器（registered_slot_nums==0），但 legacy 静态 s_ctlr 不会
+     * 置空，随后的 deinit() 会再次删除同一控制器 → use-after-free →
+     * 执行流跳入已释放内存导致 InstructionFetchError 崩溃（无卡时必现）。
+     * 单槽位场景直接用 deinit() 一次完成即可（与 IDF 示例配对方式一致）。 */
     if (host_inited) {
         sdmmc_host_deinit();
     }
@@ -235,10 +238,9 @@ esp_err_t espaperplay_sd_deinit(void) {
         return ESP_OK;
     }
 
-    if (s_slot_ready) {
-        sdmmc_host_deinit_slot(ESPAPERPLAY_SDMMC_HOST_SLOT);
-    }
-    if (s_host_ready) {
+    /* 同样只用 sdmmc_host_deinit() 收尾（切勿 deinit_slot+deinit 连用，
+     * 见 espaperplay_sd_init 失败路径的注释：会双重删除控制器）。 */
+    if (s_host_ready || s_slot_ready || s_card_ready) {
         sdmmc_host_deinit();
     }
     s_host_ready = false;
