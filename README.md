@@ -15,7 +15,7 @@
 
 ESPaperPlay is an embedded software platform for low-power e-paper applications. The first milestone is a low-power e-reader built around an **ESP32-S3 + 7.5-inch e-ink display**, while keeping clear extension points for e-book readers, desktop info panels, smart calendars, Home Assistant status screens, e-labels, and more.
 
-The repository is under active development: a modular, maintainable, and extensible architecture is in place. Board drivers (UC8179 EPD, GT911 touch), MicroSD storage (SDIO/SDMMC + FATFS), system config (NVS), WiFi (AP/STA), a Web management console, and net time sync (IP geolocation + NTP) are already implemented; EPUB/PDF parsing and the LVGL UI are planned for later phases.
+The repository is under active development: a modular, maintainable, and extensible architecture is in place. Board drivers (UC8179 EPD, GT911 touch), system config (NVS), WiFi (AP/STA), a Web management console, and net time sync (IP geolocation + NTP) are already implemented; EPUB/PDF parsing and the LVGL UI are planned for later phases.
 
 ### Hardware Platform
 
@@ -24,7 +24,7 @@ The repository is under active development: a modular, maintainable, and extensi
 | MCU     | ESP32-S3-WROOM-1-N16R8  | 16MB Flash, 8MB PSRAM                         |
 | Display | Good Display GDEY075T7-T01 | 7.5", 800x480, UC8179 controller, SPI      |
 | Touch   | GT911                   | Capacitive touch, I2C + INT + RESET            |
-| Storage | MicroSD  | SDIO (SDMMC 4-bit), EPUB / TXT / images / config files |
+| Storage | MicroSD                 | EPUB / TXT / images / config files             |
 | Power   | Low-power design        | ESP32 sleep, external wake-up, peripheral power-off control |
 
 Default GPIO and bus parameters are defined centrally in
@@ -41,8 +41,7 @@ ESPaperPlay
     ├── board/             # Board-level HW abstraction: GPIO/SPI/I2C config & peripheral init
     ├── drivers/           # Peripheral driver layer
     │   ├── epd/           # E-paper driver (GDEY075T7-T01 / UC8179: full/partial/gray4/fast)
-    │   ├── touch/         # GT911 touch abstraction
-    │   └── sd/            # MicroSD driver (SDIO/SDMMC: host/slot/card + block I/O)
+    │   └── touch/         # GT911 touch abstraction
     ├── services/          # System service layer
     │   ├── auth/          # Device auth: secure password storage & verification
     │   ├── clock/         # System clock: timezone (persisted) + NTP sync
@@ -97,15 +96,13 @@ graph TD
 
     epd --> board[board]
     touch --> board
-    storage --> sd
-    sd --> board
     power --> board
     storage --> board
     ui --> board
 ```
 
 - `board` is the lowest-level hardware abstraction, providing pin and bus configuration upward;
-- `drivers` holds peripheral driver abstractions (epd / touch / sd), while `services` holds system services (auth / clock / geoip / input / netip / power / storage / system / session / wifi / webserver);
+- `drivers` holds peripheral driver abstractions (epd / touch), while `services` holds system services (auth / clock / geoip / input / netip / power / storage / system / session / wifi / webserver);
 - `graphics/ui` and `applications/reader` belong to the application-layer framework and reserve interfaces for future features;
 - Modules communicate only through public APIs (`espaperplay_xxx()`); direct access to internal variables is prohibited.
 
@@ -325,67 +322,6 @@ A boot self-test (`ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST`, off by default) injects
 synthetic key events through the real input queue and asserts the page-stack
 response (1→2→1→2), printing `key selftest PASS/FAIL`.
 
-#### MicroSD Storage: SDIO (SDMMC) + FATFS
-
-The storage stack follows the project's two-layer split: a low-level MicroSD
-driver (`components/drivers/sd`) drives the card over the on-chip **SDMMC
-host (SDIO protocol stack)**, and the storage service
-(`components/services/storage`) layers FAT + VFS on top, exposing everything
-under the mount point `/sdcard` through standard C file APIs (`fopen` /
-`fread` / `fwrite` …).
-
-**Driver layer (`espaperplay_sd_*`)** — optionally powers the card rail
-(`ESPAPERPLAY_PIN_SD_PWR`, off by default — no pin is driven until the
-schematic-confirmed power pin is configured), then runs the SDIO bring-up
-sequence: `sdmmc_host_init()` → `sdmmc_host_init_slot()` →
-`sdmmc_card_init()` (CMD0/CMD8/ACMD41/CMD2/CMD3/CMD9/CMD7), prints card info
-and exposes raw sector I/O (`espaperplay_sd_read/write_sectors()`). All SDMMC
-signals are routed through the GPIO matrix, so any GPIO works; the pins chosen
-here (see `espaperplay_config.h` "SD" section) deliberately avoid the EPD SPI
-(6–13), touch (1–5) and UART0 (43/44) pins, unlike the IDF defaults
-(D0=2/D1=4/D2=12/D3=13 would collide). **GPIO19/20 are the chip's USB D-/D+
-pads** (board USB / secondary USB-Serial-JTAG console) and must never be used
-for SD — an earlier draft mapped D3=19 / PWR=20 and the device lost USB and
-reset-looped immediately. 4-bit mode needs external pull-ups on CMD+D0-D3; the
-driver also enables the internal pull-ups (`SDMMC_SLOT_FLAG_INTERNAL_PULLUP`).
-SDIO needs no chip-select; GPIO21 (the old SPI-mode CS guess) is reused for
-D3 since it was already expected to reach the SD socket.
-
-| Signal | GPIO |
-| ------ | ---- |
-| CLK    | 14   |
-| CMD    | 15   |
-| D0     | 16   |
-| D1     | 17   |
-| D2     | 18   |
-| D3     | 21   |
-| PWR    | n/a (off by default, set per schematic) |
-
-Clock is 20 MHz by default (SDMMC_FREQ_DEFAULT); 4-bit SDIO at 20 MHz already
-outperforms the old SPI plan (≈10 MB/s vs ≈2.5 MB/s peak), and the host
-supports up to 40 MHz SDR if the card and layout allow.
-
-**Storage service (`espaperplay_storage_*`)** — `espaperplay_storage_mount()`
-calls the SD driver, allocates a free FAT drive number
-(`ff_diskio_get_drive`), registers the card as a FATFS disk
-(`ff_diskio_register_sdmmc`), registers the VFS prefixed path
-(`esp_vfs_fat_register`) and runs `f_mount`. It deliberately does **not**
-auto-format: a card without a FAT32 filesystem fails cleanly instead of
-silently wiping data. `espaperplay_storage_unmount()` reverses the whole chain
-in order (unmount → unregister VFS → unregister disk → SD deinit/power-off).
-
-A boot without a card is tolerated: `main.c` logs a warning and the device
-keeps working (net clock / weather / web console / UI), only file-based
-features (reader) are unavailable. FATFS is configured for LFN on the heap and
-UTF-8 API encoding (`sdkconfig.defaults`), so Chinese filenames and TXT
-content on the card are read/written as UTF-8.
-
-Optional acceptance self-tests (both off by default): the driver self-test
-(`ESPAPERPLAY_SD_ENABLE_SELFTEST`) reads sector 0 and the last sector (read
-only, non-destructive), and the storage self-test
-(`ESPAPERPLAY_STORAGE_ENABLE_SELFTEST`) writes/reads/deletes a temporary file
-after mount, proving the SDIO → FATFS → VFS chain end to end.
-
 #### Network Time: IP Geolocation + NTP Sync
 
 Three independent services, chained at boot by the `nettime` application
@@ -562,7 +498,7 @@ GitHub Actions runs `idf.py build` automatically in `.github/workflows/build.yml
 - [x] **Phase 1**: Board drivers (GPIO / SPI / I2C bus init)
 - [x] **Phase 2**: EPD (UC8179) driver & refresh (full / partial / gray4 / fast), GT911 touch driver
 - [ ] **Phase 3**: Low-power power management (sleep / wake-up / power domains)
-- [x] **Phase 4**: SD card + FATFS file system (SDIO/SDMMC)
+- [ ] **Phase 4**: SD card + FATFS file system
 - [ ] **Phase 5**: LVGL UI framework
   - [x] LVGL render backend + page-stack navigation + physical key input
 - [ ] **Phase 6**: Reader (TXT → EPUB → PDF)
@@ -585,9 +521,9 @@ ESPaperPlay 是一个面向低功耗电子纸应用的嵌入式软件平台。�
 应用预留清晰的扩展点。
 
 当前仓库处于 **积极开发阶段**：已建立模块化、可维护、可扩展的软件架构。
-Board 驱动（UC8179 电子纸、GT911 触摸）、MicroSD 存储（SDIO/SDMMC + FATFS）、
-系统配置（NVS）、WiFi（AP/STA）、Web 管理控制台与网络时间同步（IP 定位 + NTP）
-均已实现；EPUB/PDF 解析与 LVGL 界面将在后续阶段接入。
+Board 驱动（UC8179 电子纸、GT911 触摸）、系统配置（NVS）、WiFi（AP/STA）、
+Web 管理控制台与网络时间同步（IP 定位 + NTP）均已实现；EPUB/PDF 解析与
+LVGL 界面将在后续阶段接入。
 
 ### 硬件平台
 
@@ -596,7 +532,7 @@ Board 驱动（UC8179 电子纸、GT911 触摸）、MicroSD 存储（SDIO/SDMMC 
 | MCU         | ESP32-S3-WROOM-1-N16R8 | Flash 16MB，PSRAM 8MB                  |
 | 显示屏      | 佳显 GDEY075T7-T01   | 7.5"，800x480，UC8179 控制器，SPI 接口  |
 | 触摸屏      | GT911                | 电容触摸，I2C + INT + RESET             |
-| 存储        | MicroSD              | SDIO（SDMMC 4-bit），EPUB / TXT / 图片 / 配置文件 |
+| 存储        | MicroSD              | EPUB / TXT / 图片 / 配置文件             |
 | 电源        | 低功耗设计            | ESP32 sleep、外部唤醒、外设断电控制     |
 
 GPIO 与总线默认参数统一在 `components/board/include/espaperplay_config.h`
@@ -613,8 +549,7 @@ ESPaperPlay
     ├── board/             # Board 级硬件抽象：GPIO/SPI/I2C 配置与外设初始化
     ├── drivers/           # 外设驱动层
     │   ├── epd/           # 电子纸驱动（GDEY075T7-T01 / UC8179：全刷/局刷/灰阶/快刷）
-    │   ├── touch/         # GT911 触摸抽象层
-    │   └── sd/            # MicroSD 驱动（SDIO/SDMMC：主机/槽位/卡片 + 块读写）
+    │   └── touch/         # GT911 触摸抽象层
     ├── services/          # 系统服务层
     │   ├── auth/          # 设备鉴权：密码安全存储 / 校验 / 更改
     │   ├── clock/         # 系统时钟：时区设置（NVS 持久化）+ NTP 同步
@@ -669,15 +604,13 @@ graph TD
 
     epd --> board[board]
     touch --> board
-    storage --> sd
-    sd --> board
     power --> board
     storage --> board
     ui --> board
 ```
 
 - `board` 为最底层硬件抽象，向上提供引脚与总线配置；
-- `drivers` 承载外设驱动抽象（epd / touch / sd），`services` 承载系统服务（auth / clock / geoip / input / netip / power / storage / system / session / wifi / webserver）；
+- `drivers` 承载外设驱动抽象（epd / touch），`services` 承载系统服务（auth / clock / geoip / input / netip / power / storage / system / session / wifi / webserver）；
 - `graphics/ui` 与 `applications/reader` 属于应用层框架，为后续业务预留接口；
 - 模块之间仅通过公共 API（`espaperplay_xxx()`）通信，禁止直接访问内部变量。
 
@@ -859,61 +792,6 @@ I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），�
 注入合成按键事件，断言页面栈响应（1→2→1→2），输出
 `key selftest PASS/FAIL`。
 
-#### MicroSD 存储：SDIO（SDMMC）接口 + FATFS
-
-存储栈沿用项目的双层划分：底层 MicroSD 驱动（`components/drivers/sd`）基于
-片上 **SDMMC 主机（SDIO 协议栈）** 驱动卡片，存储服务
-（`components/services/storage`）在其上叠加 FAT + VFS，把内容统一挂到
-`/sdcard` 挂载点，通过标准 C 文件 API（`fopen` / `fread` / `fwrite` ...）
-直接访问。
-
-**驱动层（`espaperplay_sd_*`）** —— 可选使能卡片电源轨
-（`ESPAPERPLAY_PIN_SD_PWR`，默认关闭：未按原理图确认电源引脚前不驱动任何
-引脚），随后执行 SDIO 上电时序：`sdmmc_host_init()` →
-`sdmmc_host_init_slot()` → `sdmmc_card_init()`（CMD0/CMD8/ACMD41/CMD2/CMD3/
-CMD9/CMD7），并打印卡片信息，对外暴露底层扇区读写
-（`espaperplay_sd_read/write_sectors()`）。SDMMC 信号经 GPIO 矩阵路由、可
-任意选脚；本板选用的引脚（见 `espaperplay_config.h` 的 SD 节）刻意避开 EPD
-SPI（6-13）、触摸（1-5）与 UART0（43/44），而 IDF 默认引脚（D0=2/D1=4/
-D2=12/D3=13）会与它们冲突。**GPIO19/20 是芯片内置 USB D-/D+ 焊盘**（板载
-USB / 次级 USB-Serial-JTAG 串口），严禁用于 SD——先前版本曾把 D3=19 /
-PWR=20，设备立即失去 USB 并复位循环。4-bit 模式要求 CMD 与 D0-D3 外接上拉，
-驱动同时开启内部上拉（`SDMMC_SLOT_FLAG_INTERNAL_PULLUP`）作为补充。SDIO
-模式不需要片选——GPIO21（原 SPI 方案的片选猜测脚）被复用作 D3，因为它
-最可能已连到 SD 卡座。
-
-| 信号 | GPIO |
-| ---- | ---- |
-| CLK  | 14   |
-| CMD  | 15   |
-| D0   | 16   |
-| D1   | 17   |
-| D2   | 18   |
-| D3   | 21   |
-| PWR  | 无（默认关闭，按原理图配置） |
-
-时钟默认 20MHz（SDMMC_FREQ_DEFAULT）。4-bit SDIO 在 20MHz 下吞吐已远超原
-SPI 方案（峰值约 10MB/s 对 2.5MB/s），主机最高支持 40MHz SDR（视卡片与
-布线而定）。
-
-**存储服务（`espaperplay_storage_*`）** —— `espaperplay_storage_mount()` 先调用
-SD 驱动，再分配空闲 FAT 卷号（`ff_diskio_get_drive`）、把卡片注册为 FATFS
-底层磁盘（`ff_diskio_register_sdmmc`）、注册 VFS 前缀路径
-（`esp_vfs_fat_register`）并执行 `f_mount`。刻意**不自动格式化**：卡片没有
-FAT32 文件系统时干净地报错返回，绝不静默擦除已有数据。
-`espaperplay_storage_unmount()` 逆序释放整条链路（卸载 → 注销 VFS → 注销
-磁盘 → SD 驱动反初始化/断电）。
-
-无卡启动被容忍：`main.c` 记录警告后继续运行（网络时钟 / 天气 / Web 管理 /
-UI 不受影响），仅文件类功能（阅读器）不可用。FATFS 已配置为堆上 LFN + UTF-8
-API 编码（`sdkconfig.defaults`），卡片上的中文文件名与 TXT 内容按 UTF-8
-读写。
-
-可选的验收自检（均默认关闭）：驱动级自检（`ESPAPERPLAY_SD_ENABLE_SELFTEST`）
-只读校验扇区 0 与最后一扇区（非破坏、不写数据），存储级自检
-（`ESPAPERPLAY_STORAGE_ENABLE_SELFTEST`）在挂载后写入/读回/删除临时文件，
-端到端验证 SDIO → FATFS → VFS 链路。
-
 #### 网络时间：IP 定位 + NTP 同步
 
 三个相互独立的服务，由 `nettime` 应用（`components/applications/nettime`）
@@ -1077,7 +955,7 @@ GitHub Actions 在 `.github/workflows/build.yml` 中自动执行 `idf.py build`
 - [x] **Phase 1**：Board 驱动（GPIO / SPI / I2C 总线初始化）
 - [x] **Phase 2**：EPD（UC8179）驱动与刷新（全刷/局刷/灰阶/快刷）、GT911 触摸驱动
 - [ ] **Phase 3**：低功耗电源管理（sleep / 唤醒 / 电源域）
-- [x] **Phase 4**：SD 卡 + FATFS 文件系统（SDIO/SDMMC 接口）
+- [ ] **Phase 4**：SD 卡 + FATFS 文件系统
 - [ ] **Phase 5**：LVGL 界面框架
   - [x] LVGL 渲染后端 + 页面栈导航 + 物理按键输入
 - [ ] **Phase 6**：阅读器（TXT → EPUB → PDF）

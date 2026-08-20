@@ -54,12 +54,12 @@ extern "C" {
 #define ESPAPERPLAY_DISPLAY_HEIGHT 480
 
 /* ====================================================================
- * EPD SPI 接口（独占 SPI2 主机；SD 卡走独立 SDIO/SDMMC，见下方 SD 节）
+ * EPD SPI 接口（与 SD 卡共用 SPI2 主机）
  * ==================================================================== */
 
 #define ESPAPERPLAY_PIN_EPD_SCLK 12 /*!< SPI 时钟 */
 #define ESPAPERPLAY_PIN_EPD_MOSI 11 /*!< SPI MOSI */
-#define ESPAPERPLAY_PIN_EPD_MISO -1 /*!< SPI MISO（EPD 只写不读，未使用） */
+#define ESPAPERPLAY_PIN_EPD_MISO 13 /*!< SPI MISO */
 #define ESPAPERPLAY_PIN_EPD_CS 10   /*!< EPD 片选 */
 #define ESPAPERPLAY_PIN_EPD_DC 9    /*!< EPD 数据 / 命令 */
 #define ESPAPERPLAY_PIN_EPD_RST 8   /*!< EPD 硬件复位 */
@@ -100,44 +100,17 @@ extern "C" {
 #define ESPAPERPLAY_TOUCH_I2C_CLK_HZ 400000
 
 /* ====================================================================
- * SD 卡（SDIO / SDMMC 接口，专用 SDMMC 主机，不再占用 SPI2）
- *
- * ESP32-S3 集成 SDMMC 主机（SOC_SDMMC_HOST_SUPPORTED）：slot 1 支持
- * 1/4-bit，slot 0 仅 1-bit。所有 SDMMC 信号经 GPIO 矩阵路由，可任意选脚。
- *
- * 引脚分配避开已占用 / 不可用的 GPIO：
- *   - EPD SPI（6-13）、触摸（1-5：INT=3 / RST=2 / PWR=1）、BOOT 键 0；
- *   - **GPIO19/20 是芯片内置 USB D-/D+ 焊盘**，被板载 USB（烧录 / 调试 /
- *     次级 USB-Serial-JTAG 串口）占用，严禁用作 SD 信号或电源控制；
- *   - 43/44 为 UART0 串口。CLK/CMD 沿用 IDF 默认 14/15，D0-D3 收敛到
- *     16-18 + 21（21 原是 SPI 方案假定的片选脚，最可能已连到 SD 卡座）。
- *
- * 4-bit 模式要求 CMD/D0-D3 外接 10kΩ 上拉，驱动同时开启内部上拉
- * （SDMMC_SLOT_FLAG_INTERNAL_PULLUP）作为补充。上电前请务必对照原理图
- * 核对引脚；若板载 SD 供电由 GPIO 控制，请把 ESPAPERPLAY_PIN_SD_PWR 改为
- * 实际引脚并置 ESPAPERPLAY_SD_ENABLE_POWER_PIN=1（默认关闭：避免误操作
- * 未知引脚，例如 GPIO20=USB D+ 拉高会导致设备断连）。
+ * SD 卡（SPI 模式，与 EPD 共用 SPI2 主机）
  * ==================================================================== */
 
-#define ESPAPERPLAY_PIN_SD_CLK 14 /*!< SDMMC 时钟线（CLK） */
-#define ESPAPERPLAY_PIN_SD_CMD 15 /*!< SDMMC 命令线（CMD） */
-#define ESPAPERPLAY_PIN_SD_D0 16  /*!< SDMMC 数据线 D0 */
-#define ESPAPERPLAY_PIN_SD_D1 17  /*!< SDMMC 数据线 D1 */
-#define ESPAPERPLAY_PIN_SD_D2 18  /*!< SDMMC 数据线 D2 */
-#define ESPAPERPLAY_PIN_SD_D3 21  /*!< SDMMC 数据线 D3 */
-#define ESPAPERPLAY_PIN_SD_PWR -1 /*!< SD 卡电源轨使能（-1=无；按原理图配置实际引脚） */
-
-/** SDMMC 主机槽位（ESP32-S3：slot 1 支持 4-bit，slot 0 仅 1-bit）。 */
-#define ESPAPERPLAY_SDMMC_HOST_SLOT 1
-
-/** SD 卡 SDMMC 总线宽度（1 或 4；4 线最高 40MHz SDR）。 */
-#define ESPAPERPLAY_SD_BUS_WIDTH 4
-
-/** SD 卡默认 SDMMC 时钟频率，单位 Hz（SDMMC 默认 20MHz，上限 40MHz）。 */
-#define ESPAPERPLAY_SD_CLK_HZ 20000000
+#define ESPAPERPLAY_PIN_SD_CS 21  /*!< SD 卡片选 */
+#define ESPAPERPLAY_PIN_SD_PWR 20 /*!< SD 卡电源轨使能 */
 
 /** SD 卡的 VFS 挂载点。 */
 #define ESPAPERPLAY_STORAGE_MOUNT_POINT "/sdcard"
+
+/** SD 卡默认 SPI 时钟频率，单位 Hz。 */
+#define ESPAPERPLAY_SD_SPI_CLK_HZ 20000000
 
 /* ====================================================================
  * 物理按键（BOOT）
@@ -150,7 +123,7 @@ extern "C" {
  * 默认总线参数
  * ==================================================================== */
 
-/** EPD 使用的 SPI 主机（ESP32-S3：SPI2_HOST == 1，SPI3_HOST == 2）。 */
+/** EPD 与 SD 使用的 SPI 主机（ESP32-S3：SPI2_HOST == 1，SPI3_HOST == 2）。 */
 #define ESPAPERPLAY_SPI_HOST_ID 1
 
 /** 触摸控制器使用的 I2C 端口（I2C_NUM_0 == 0）。 */

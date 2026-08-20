@@ -18,12 +18,12 @@ static const char *TAG = "ESPaperPlay_BOARD";
 esp_err_t espaperplay_board_init(void) {
     ESP_LOGI(TAG, "%s v%s starting", ESPAPERPLAY_PROJECT_NAME, ESPAPERPLAY_VERSION);
 
-    /* 初始化 SPI 主机（EPD 独占 SPI2；SD 卡走独立 SDMMC/SDIO 主机，
-     * 引脚见 espaperplay_config.h 的 SD 节）。EPD 只写不读，MISO 未接。 */
+    /* 初始化 SPI 主机（EPD 与 SD 卡共用 SPI2，引脚见 espaperplay_config.h）。
+     * EPD / SD 各自通过 spi_bus_add_device() 注册设备；本函数只负责主机总线。 */
     const spi_bus_config_t buscfg = {
         .sclk_io_num = ESPAPERPLAY_PIN_EPD_SCLK,
         .mosi_io_num = ESPAPERPLAY_PIN_EPD_MOSI,
-        .miso_io_num = ESPAPERPLAY_PIN_EPD_MISO, /* -1：EPD 无读取需求 */
+        .miso_io_num = ESPAPERPLAY_PIN_EPD_MISO, /* SD 使用；EPD 只写不读 */
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = ESPAPERPLAY_EPD_SPI_MAX_TRANSFER,
