@@ -26,12 +26,19 @@ extern "C" {
  * 软件版本
  * ==================================================================== */
 
+/* 版本号唯一来源：仅需修改下面三个数字宏。版本字符串由它们拼接生成；
+ * 根目录 CMakeLists.txt 也会解析这三个宏作为 ESP-IDF 应用版本
+ * （esp_app_desc），改版本只需动这里。 */
 #define ESPAPERPLAY_VERSION_MAJOR 0
 #define ESPAPERPLAY_VERSION_MINOR 1
 #define ESPAPERPLAY_VERSION_PATCH 0
 
-/** 人类可读的版本字符串。 */
-#define ESPAPERPLAY_VERSION "0.1.0"
+/* 由 MAJOR/MINOR/PATCH 拼接人类可读版本字符串（勿手改字符串）。 */
+#define ESPAPERPLAY_VERSION_XSTR(major, minor, patch) #major "." #minor "." #patch
+#define ESPAPERPLAY_VERSION_STR(major, minor, patch) ESPAPERPLAY_VERSION_XSTR(major, minor, patch)
+#define ESPAPERPLAY_VERSION \
+    ESPAPERPLAY_VERSION_STR(ESPAPERPLAY_VERSION_MAJOR, ESPAPERPLAY_VERSION_MINOR, \
+                            ESPAPERPLAY_VERSION_PATCH)
 
 /** 项目 / 产品名称。 */
 #define ESPAPERPLAY_PROJECT_NAME "ESPaperPlay"
