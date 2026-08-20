@@ -111,7 +111,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_input_init());
     ESP_ERROR_CHECK(espaperplay_power_init());
     ESP_ERROR_CHECK(espaperplay_gui_init());
-    /* 应用"连续大面积局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
+    /* 应用"连续局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
     espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
     ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
     /* 字体资产：映射 fonts 分区并注册 LVGL 盘符（需在 LVGL 初始化之后）。 */

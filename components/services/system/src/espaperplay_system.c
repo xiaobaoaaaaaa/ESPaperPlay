@@ -31,7 +31,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
 
-/** 连续大面积局刷后强制全刷阈值上限。 */
+/** 连续局刷后强制全刷阈值上限。 */
 #define ESPAPERPLAY_SYSTEM_GUI_FULL_FORCE_AFTER_MAX 255u
 
 /* 内存中的配置缓存，初始化为出厂默认值。 */

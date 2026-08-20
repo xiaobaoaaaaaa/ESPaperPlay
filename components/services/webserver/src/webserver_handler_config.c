@@ -85,7 +85,7 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     /* 屏幕空闲自动睡眠超时（秒，0=关闭）。 */
     cJSON_AddNumberToObject(root, "epd_idle_sleep_timeout_s",
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
-    /* 连续大面积局刷后强制全刷阈值（0=禁用，只局刷）。 */
+    /* 连续局刷后强制全刷阈值（0=禁用，只局刷）。 */
     cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
     /* BOOT 键长按的全局默认动作（全屏刷新 / 返回上一页 / 无操作）。 */
     cJSON_AddStringToObject(root, "boot_long_press_action",
@@ -140,7 +140,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = {0};
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN] = {0};
     char epd_idle_sleep_s[16] = {0}; /* 屏幕空闲自动睡眠超时（秒） */
-    char gui_force_after_s[8] = {0}; /* 连续大面积局刷后强制全刷阈值（0=禁用） */
+    char gui_force_after_s[8] = {0}; /* 连续局刷后强制全刷阈值（0=禁用） */
     char boot_lp_action[16] = {0};   /* BOOT 键长按动作（full_refresh / back / none） */
     char boot_lp_time_s[12] = {0};   /* BOOT 键长按判定时间（毫秒） */
     const bool has_wifi_mode =
@@ -261,7 +261,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
             err = espaperplay_epd_set_idle_sleep_timeout_ms(ms);
         }
     }
-    /* 连续大面积局刷后强制全刷阈值（0=禁用，0-255）；字段缺失 = 保持不变。 */
+    /* 连续局刷后强制全刷阈值（0=禁用，0-255）；字段缺失 = 保持不变。 */
     if (err == ESP_OK && has_gui_force) {
         char *end = NULL;
         long n = strtol(gui_force_after_s, &end, 10);

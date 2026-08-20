@@ -36,10 +36,10 @@ extern "C" {
  *     （阻塞只发生在 worker），渲染/调用线程永不被屏幕刷新阻塞；双槽位
  *     允许渲染器连续提交，worker 顺序消费并天然节流。需要同步点时用
  *     espaperplay_gui_wait_idle()；
- *   - 脏区为单包围盒（8 对齐，帧内合并）；全屏策略：脏区面积超过
- *     阈值（默认 70% 屏）时不立即全刷，继续按包围盒局刷并计数，连续
- *     达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后强制一次全像素翻转
- *     全刷，清除局刷累积的残影（GRAY4/CLEAR 恒全屏）；
+ *   - 脏区为单包围盒（8 对齐，帧内合并）；全刷策略：无论局刷区域大小，
+ *     每次 BW 局部刷新都累计连续局刷次数，连续达到
+ *     ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后强制一次全像素翻转全刷，
+ *     清除局刷累积的残影（GRAY4/CLEAR 恒全屏）；
  *   - 模式切换是页面级操作（espaperplay_gui_show_bw / show_gray4），
  *     切换后主帧内容不变，只是转换路径不同；驱动保证切换刷新干净
  *     （灰阶->黑白旧平面反相，清除中间灰残留）。
@@ -115,28 +115,18 @@ typedef struct {
 #endif
 
 /**
- * @brief 大面积局刷计数流程的面积阈值（占屏幕像素百分比，默认 70）。
+ * @brief 连续局刷达到该次数后，强制执行一次全像素翻转全刷清残影。
  *
- * 超过该面积（默认 70% 屏幕）不立即全刷：仍按包围盒执行局部刷新，但
- * 连续达到 ESPAPERPLAY_GUI_FULL_FORCE_AFTER 次后，强制一次全像素翻转
- * 全刷（画面闪黑一下），清除局部刷新累积的残影。
- */
-#ifndef ESPAPERPLAY_GUI_FULL_AREA_RATIO
-#define ESPAPERPLAY_GUI_FULL_AREA_RATIO 70
-#endif
-
-/**
- * @brief 连续大面积局刷达到该次数后，强制执行一次全像素翻转全刷清残影。
- *
- * 该宏仅作为上电初始默认值；运行期可用
+ * 无论局刷区域大小，每次 BW 局部刷新都会累计；连续达到该次数后下一次
+ * 刷新强制全刷（画面闪黑一下）。该宏仅作为上电初始默认值；运行期可用
  * espaperplay_gui_set_full_force_after() 调整（Web 可配置并经 NVS 持久化），
  * 置 0 表示禁用周期性全刷清残影（永远只用局部刷新）。
  */
 #ifndef ESPAPERPLAY_GUI_FULL_FORCE_AFTER
-#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 5
+#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 10
 #endif
 
-/** 大面积局刷计数阈值上限（防止不合理配置）。 */
+/** 连续局刷计数阈值上限（防止不合理配置）。 */
 #define ESPAPERPLAY_GUI_FULL_FORCE_AFTER_MAX 255u
 
 /**
@@ -186,7 +176,7 @@ esp_err_t espaperplay_gui_set_converter(espaperplay_gui_converter_t converter);
 esp_err_t espaperplay_gui_set_gray4_dither(espaperplay_gui_gray4_dither_t dither);
 
 /**
- * @brief 设置"连续大面积局刷 N 次后强制全刷清残影"的计数阈值（0 = 禁用）。
+ * @brief 设置"连续局刷 N 次后强制全刷清残影"的计数阈值（0 = 禁用）。
  *
  * 立即生效：下一次 flush 快照即按新阈值决策。置 0 后永远不再强制全刷
  * （只做局部刷新）；运行期可经 Web 修改并经 NVS 持久化。
@@ -199,7 +189,7 @@ esp_err_t espaperplay_gui_set_gray4_dither(espaperplay_gui_gray4_dither_t dither
 esp_err_t espaperplay_gui_set_full_force_after(uint32_t count);
 
 /**
- * @brief 获取当前"连续大面积局刷后强制全刷"的计数阈值（0 = 禁用）。
+ * @brief 获取当前"连续局刷后强制全刷"的计数阈值（0 = 禁用）。
  *
  * @return 当前阈值。
  */

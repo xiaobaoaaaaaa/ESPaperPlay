@@ -100,7 +100,7 @@ typedef enum {
  * 可配置并经 NVS 持久化）；本宏仅作为上电初始值。
  */
 #ifndef ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS
-#define ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 30000
+#define ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 90000
 #endif
 
 /**

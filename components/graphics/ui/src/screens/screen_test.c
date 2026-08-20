@@ -43,8 +43,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *   右列（按键+触摸测试区）：最近按键事件 / 累计计数 / 触摸状态与坐标 /
  *   back + clear 按钮。
  *
- * 压力测试元素集中在左侧（包围盒 < 全屏阈值），验证稳定局部刷新链路；
- * 分散布局会触发"大面积局刷计数"策略（连续 5 次后强制全刷清残影）。
+ * 压力测试（200ms 周期连续局刷）会触发"连续局刷计数"策略：无论区域大小，
+ * 连续局刷达阈值（默认 5 次）后强制一次全刷清残影。
  */
 
 #define TEST_UI_PERIOD_MS 200 /* UI 更新周期（快于 EPD 局部刷新 ~370ms，制造排队合并） */
@@ -63,7 +63,7 @@ typedef struct {
 
 static lv_obj_t *s_cnt_label = NULL;       /*!< 计数器数字（48 号大字，小区域） */
 static lv_obj_t *s_bar = NULL;             /*!< 进度条（中等区域） */
-static lv_obj_t *s_block = NULL;           /*!< 大黑块（位移 -> 大面积刷新） */
+static lv_obj_t *s_block = NULL;           /*!< 大黑块（位移 -> 局刷计数） */
 static lv_obj_t *s_status_label = NULL;    /*!< 状态行 */
 static lv_obj_t *s_last_key_label = NULL;  /*!< 最近一次按键事件 */
 static lv_obj_t *s_key_count_label = NULL; /*!< 按键累计计数 */

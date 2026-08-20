@@ -32,7 +32,6 @@ static size_t s_fb_rgb_bytes = 0;     /*!< RGB565 主帧字节数 w*h*2 */
 static size_t s_fb_bw_bytes = 0;      /*!< 1bpp 帧字节数 w*h/8 */
 static size_t s_fb_gray4_bytes = 0;   /*!< 2bpp 帧字节数 w*h/4 */
 static size_t s_stride_rgb = 0;       /*!< 主帧行字节数 w*2 */
-static uint32_t s_full_threshold = 0; /*!< 全屏阈值（70% 像素，运行时） */
 
 /* ====================================================================
  * 内部状态
@@ -60,11 +59,12 @@ static uint16_t s_dirty_y = 0;
 static uint16_t s_dirty_w = 0;
 static uint16_t s_dirty_h = 0;
 
-/* 大面积局刷计数：脏区面积超过全屏阈值时不立即全刷，而是继续局刷并计数；
- * 连续达到 s_full_force_after 次才强制一次全像素翻转全刷，清除累积残影。
+/* 连续局刷计数：每次 BW 局部刷新（无论脏区大小）都累计 +1，连续达到
+ * s_full_force_after 次后强制一次全像素翻转全刷，清除累积残影；强制全刷、
+ * 清白、灰阶刷新或唤醒后的全屏基线局刷都会建立新基线，计数归零。
  * 计数在 worker 出队执行时递增（按"已执行"而非"已快照"），杜绝连刷。 */
-static uint32_t s_large_partial_count = 0;
-/* 连续大面积局刷后强制全刷的阈值（0=禁用；运行期可经 Web 调整并持久化）。 */
+static uint32_t s_partial_count = 0;
+/* 连续局刷后强制全刷的阈值（0=禁用；运行期可经 Web 调整并持久化）。 */
 static uint32_t s_full_force_after = ESPAPERPLAY_GUI_FULL_FORCE_AFTER;
 
 /* 刷新操作槽位状态：
@@ -80,7 +80,7 @@ typedef struct {
     gui_op_type_t type;            /*!< FRAME=快照帧；CLEAR=深擦除清白 */
     espaperplay_gui_color_t color; /*!< 快照时的模式 */
     uint16_t x, y, w, h;           /*!< FRAME 有效（BW 局部窗口；全屏/灰阶=全帧） */
-    bool large_area;               /*!< 脏区是否达大面积阈值（BW 计数用） */
+    bool reset_count;              /*!< 本次刷新建立新基线，连续局刷计数归零 */
     bool force_full;               /*!< 强制全像素翻转全刷（清残影） */
     const uint8_t *stage;          /*!< 已转换的快照缓冲（CLEAR 为 NULL） */
 } gui_op_t;
@@ -234,15 +234,17 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
 /**
  * @brief 把当前脏区按当前模式快照转换进指定暂存（调用方须持锁）。
  *
- * BW 全屏策略：脏区面积超过阈值时*不*立即全刷——继续按包围盒局刷。
- * 是否强制全像素翻转全刷（op->force_full）由"已执行的大面积局刷计数"
- * s_large_partial_count 决定（该计数在 worker 出队时递增，见
- * gui_count_executed）；本函数只读计数，不做累加/清零。
+ * BW 全刷策略：无论脏区面积大小，都先按包围盒局部刷新并累计连续局刷次数；
+ * 连续达到 s_full_force_after 次后，本次强制全像素翻转全刷（op->force_full）
+ * 清除局刷累积的残影。是否强制全刷由"已执行的连续局刷计数"
+ * s_partial_count 决定（该计数在 worker 出队时递增，见 gui_count_executed）；
+ * 本函数只读计数，不做累加/清零。
  *
  * 深度睡眠唤醒策略（方案 B）：面板处于深度睡眠（espaperplay_epd_is_asleep
  * 为 true）时，本次快照改用**整帧** + 全屏窗口局刷——驱动在唤醒首刷时
  * 会对整个窗口强制 DTM1 反写（全像素 K2W/W2K），把"首个脏区窗口"的翻转
  * 扩展到整个面板，一次建立全屏干净差分基线；后续任意窗口的局刷均可靠。
+ * 该全屏基线刷新同样建立新基线，连续局刷计数归零（op->reset_count）。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
     op->state = GUI_SLOT_READY;
@@ -255,22 +257,21 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->y = 0;
         op->w = s_disp_w;
         op->h = s_disp_h;
-        op->large_area = false;
+        op->reset_count = true; /* 灰阶恒全屏刷新，建立新基线 */
         op->force_full = false;
     } else {
-        const uint32_t area = (uint32_t)s_dirty_w * s_dirty_h;
-        const bool large = area >= s_full_threshold;
+        /* 无论脏区面积大小：只要连续局刷已达满阈值，本次就强制全刷清残影。 */
         const bool do_force =
-            large && s_full_force_after > 0 && s_large_partial_count >= s_full_force_after;
+            s_full_force_after > 0 && s_partial_count >= s_full_force_after;
 
         op->type = GUI_OP_FRAME;
-        op->large_area = large;
         if (do_force) {
-            /* 连续大面积局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
+            /* 连续局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
             gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h,
                            stage_bw);
             op->stage = stage_bw;
             op->force_full = true;
+            op->reset_count = true;
             op->x = 0;
             op->y = 0;
             op->w = s_disp_w;
@@ -284,7 +285,7 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
             gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage_bw);
             op->stage = stage_bw;
             op->force_full = false;
-            op->large_area = false; /* 全屏基线刷新：大面积局刷计数归零 */
+            op->reset_count = true; /* 全屏基线刷新：连续局刷计数归零 */
             op->x = 0;
             op->y = 0;
             op->w = s_disp_w;
@@ -293,6 +294,7 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
             gui_convert_bw(s_fb_rgb, s_dirty_x, s_dirty_y, s_dirty_w, s_dirty_h, stage_bw);
             op->stage = stage_bw;
             op->force_full = false;
+            op->reset_count = false;
             op->x = s_dirty_x;
             op->y = s_dirty_y;
             op->w = s_dirty_w;
@@ -327,23 +329,23 @@ static esp_err_t gui_execute_op(const gui_op_t *op) {
 }
 
 /**
- * @brief 按"已执行"更新大面积局刷计数（worker 出队 / 同步执行前调用，须持锁）。
+ * @brief 按"已执行"更新连续局刷计数（worker 出队 / 同步执行前调用，须持锁）。
  *
- * 只有 BW 普通局刷参与计数：大面积 +1、小面积清零；force / clear / gray4
- * 都是全屏刷新，会建立新基线，计数清零。force 在出队那一刻即清零，因此
- * force 执行期间渲染端合并进另一槽的帧只会计数，不会再排队下一个 force。
+ * 只有 BW 普通局刷参与计数：无论区域大小，连续执行一律 +1（上限为阈值）；
+ * force / clear / gray4 / 唤醒基线全屏局刷（reset_count）都是全屏刷新，会
+ * 建立新基线，计数清零。force 在出队那一刻即清零，因此 force 执行期间
+ * 渲染端合并进另一槽的帧只会计数，不会再排队下一个 force。
  */
 static void gui_count_executed(const gui_op_t *op) {
-    if (op->type == GUI_OP_FRAME && op->color == ESPAPERPLAY_GUI_COLOR_BW && !op->force_full) {
-        if (op->large_area && s_full_force_after > 0) {
-            if (s_large_partial_count < s_full_force_after) {
-                s_large_partial_count++;
-            }
-        } else {
-            s_large_partial_count = 0;
+    const bool plain_partial = op->type == GUI_OP_FRAME &&
+                               op->color == ESPAPERPLAY_GUI_COLOR_BW && !op->force_full &&
+                               !op->reset_count;
+    if (plain_partial) {
+        if (s_full_force_after > 0 && s_partial_count < s_full_force_after) {
+            s_partial_count++;
         }
     } else {
-        s_large_partial_count = 0;
+        s_partial_count = 0;
     }
 }
 
@@ -604,7 +606,6 @@ esp_err_t espaperplay_gui_init(void) {
     s_fb_bw_bytes = s_fb_pixels / 8;
     s_fb_gray4_bytes = s_fb_pixels / 4;
     s_stride_rgb = (size_t)s_disp_w * 2;
-    s_full_threshold = (uint32_t)s_fb_pixels * ESPAPERPLAY_GUI_FULL_AREA_RATIO / 100;
     if (s_lock == NULL) {
         s_lock = xSemaphoreCreateMutex();
         if (s_lock == NULL) {
@@ -718,7 +719,7 @@ esp_err_t espaperplay_gui_set_full_force_after(uint32_t count) {
     }
     if (count != s_full_force_after) {
         s_full_force_after = count;
-        s_large_partial_count = 0; /* 阈值变化，重新开始计数 */
+        s_partial_count = 0; /* 阈值变化，重新开始计数 */
         ESP_LOGI(TAG, "full force after: %u (%s)", (unsigned)count, count ? "enabled" : "disabled");
     }
     xSemaphoreGive(s_lock);
@@ -939,7 +940,7 @@ esp_err_t espaperplay_gui_full_refresh(void) {
     slot->y = 0;
     slot->w = s_disp_w;
     slot->h = s_disp_h;
-    slot->large_area = false;
+    slot->reset_count = true; /* 手动全刷建立新基线 */
     if (s_color == ESPAPERPLAY_GUI_COLOR_GRAY4) {
         uint8_t *stage = (slot == &s_op_a) ? s_stage_a_gray4 : s_stage_b_gray4;
         gui_convert_gray4(s_fb_rgb, stage);
@@ -963,7 +964,7 @@ esp_err_t espaperplay_gui_full_refresh(void) {
         }
     }
     s_dirty = false;
-    s_large_partial_count = 0; /* 全刷建立新基线，大面积局刷计数归零 */
+    s_partial_count = 0; /* 全刷建立新基线，连续局刷计数归零 */
 
     if (s_worker_task != NULL) {
         xTaskNotifyGive(s_worker_task);
@@ -1004,7 +1005,7 @@ esp_err_t espaperplay_gui_clear(void) {
     slot->type = GUI_OP_CLEAR;
     slot->color = s_color;
     slot->stage = NULL;
-    slot->large_area = false;
+    slot->reset_count = true; /* 清白全刷建立新基线 */
     slot->force_full = false;
     slot->x = slot->y = slot->w = slot->h = 0;
 
@@ -1023,6 +1024,7 @@ esp_err_t espaperplay_gui_clear(void) {
     if (s_worker_task != NULL) {
         xTaskNotifyGive(s_worker_task);
     } else {
+        gui_count_executed(slot); /* 同步路径：与 worker 出队一致的计数规则 */
         const esp_err_t ret = gui_execute_op(slot);
         slot->state = GUI_SLOT_IDLE;
         xSemaphoreGive(s_lock);
