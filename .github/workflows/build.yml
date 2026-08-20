@@ -23,5 +23,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: espapaperplay
-          path: build/*.bin
+          path: |
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ESPaperPlay.bin
+            build/mmap_build/fonts/fonts/fonts.bin
+            build/flash_args
           if-no-files-found: error
