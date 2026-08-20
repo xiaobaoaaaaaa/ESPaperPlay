@@ -100,7 +100,13 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_weather_start());
 
     /* 外设模块。 */
-    ESP_ERROR_CHECK(espaperplay_storage_mount());
+    /* SD 卡挂载失败不阻断启动：无卡/未格式化时设备其余功能（网络时钟、
+     * 天气、Web 管理、UI）照常工作，仅文件类功能（阅读器）不可用。 */
+    esp_err_t storage_err = espaperplay_storage_mount();
+    if (storage_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card storage unavailable: %s (device continues without storage)",
+                 esp_err_to_name(storage_err));
+    }
     ESP_ERROR_CHECK(espaperplay_epd_init());
     /* 应用屏幕空闲自动睡眠超时（Web 可配置，NVS 持久化）。 */
     espaperplay_epd_set_idle_sleep_timeout_ms(
