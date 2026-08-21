@@ -44,8 +44,7 @@ static const char *boot_long_press_action_str(espaperplay_boot_long_press_action
 }
 
 /** 解析 Web 表单值；非法返回 false。 */
-static bool boot_long_press_action_parse(const char *s,
-                                         espaperplay_boot_long_press_action_t *out) {
+static bool boot_long_press_action_parse(const char *s, espaperplay_boot_long_press_action_t *out) {
     if (strcmp(s, "full_refresh") == 0) {
         *out = ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH;
     } else if (strcmp(s, "back") == 0) {
@@ -91,8 +90,7 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     cJSON_AddStringToObject(root, "boot_long_press_action",
                             boot_long_press_action_str(cfg->boot_long_press_action));
     /* BOOT 键长按判定时间（毫秒）。 */
-    cJSON_AddNumberToObject(root, "boot_long_press_time_ms",
-                            (double)cfg->boot_long_press_time_ms);
+    cJSON_AddNumberToObject(root, "boot_long_press_time_ms", (double)cfg->boot_long_press_time_ms);
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -156,10 +154,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
     const bool has_gui_force = webserver_form_get_field(
         body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
-    const bool has_boot_lp = webserver_form_get_field(
-        body, "boot_long_press_action", boot_lp_action, sizeof(boot_lp_action));
-    const bool has_boot_lp_ms = webserver_form_get_field(
-        body, "boot_long_press_time_ms", boot_lp_time_s, sizeof(boot_lp_time_s));
+    const bool has_boot_lp = webserver_form_get_field(body, "boot_long_press_action",
+                                                      boot_lp_action, sizeof(boot_lp_action));
+    const bool has_boot_lp_ms = webserver_form_get_field(body, "boot_long_press_time_ms",
+                                                         boot_lp_time_s, sizeof(boot_lp_time_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -168,8 +166,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN] = {0};
     char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN] = {0};
     const bool has_weather_key =
-        webserver_form_get_field(body, "weather_api_key", weather_api_key,
-                                 sizeof(weather_api_key));
+        webserver_form_get_field(body, "weather_api_key", weather_api_key, sizeof(weather_api_key));
     const bool has_weather_loc = webserver_form_get_field(
         body, "weather_location", weather_location, sizeof(weather_location));
     const bool has_weather_host = webserver_form_get_field(
@@ -315,9 +312,8 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     const char *new_weather_loc = cur->weather_location;
     const char *new_weather_host = cur->weather_api_host;
     if (has_weather_key) {
-        new_weather_key = (weather_api_key[0] == '\0' && !clear_weather_key)
-                              ? cur->weather_api_key
-                              : weather_api_key;
+        new_weather_key = (weather_api_key[0] == '\0' && !clear_weather_key) ? cur->weather_api_key
+                                                                             : weather_api_key;
     }
     if (has_weather_loc) {
         new_weather_loc = (weather_location[0] == '\0' && !clear_weather_loc)
@@ -329,22 +325,19 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
                                ? cur->weather_api_host
                                : weather_api_host;
     }
-    if (err == ESP_OK && has_weather_key &&
-        strcmp(new_weather_key, cur->weather_api_key) != 0) {
+    if (err == ESP_OK && has_weather_key && strcmp(new_weather_key, cur->weather_api_key) != 0) {
         err = espaperplay_system_set_weather_api_key(new_weather_key);
         if (err == ESP_OK) {
             weather_changed = true;
         }
     }
-    if (err == ESP_OK && has_weather_loc &&
-        strcmp(new_weather_loc, cur->weather_location) != 0) {
+    if (err == ESP_OK && has_weather_loc && strcmp(new_weather_loc, cur->weather_location) != 0) {
         err = espaperplay_system_set_weather_location(new_weather_loc);
         if (err == ESP_OK) {
             weather_changed = true;
         }
     }
-    if (err == ESP_OK && has_weather_host &&
-        strcmp(new_weather_host, cur->weather_api_host) != 0) {
+    if (err == ESP_OK && has_weather_host && strcmp(new_weather_host, cur->weather_api_host) != 0) {
         err = espaperplay_system_set_weather_api_host(new_weather_host);
         if (err == ESP_OK) {
             weather_changed = true;

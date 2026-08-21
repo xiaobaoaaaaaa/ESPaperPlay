@@ -36,8 +36,8 @@ extern "C" {
 /* 由 MAJOR/MINOR/PATCH 拼接人类可读版本字符串（勿手改字符串）。 */
 #define ESPAPERPLAY_VERSION_XSTR(major, minor, patch) #major "." #minor "." #patch
 #define ESPAPERPLAY_VERSION_STR(major, minor, patch) ESPAPERPLAY_VERSION_XSTR(major, minor, patch)
-#define ESPAPERPLAY_VERSION \
-    ESPAPERPLAY_VERSION_STR(ESPAPERPLAY_VERSION_MAJOR, ESPAPERPLAY_VERSION_MINOR, \
+#define ESPAPERPLAY_VERSION                                                                        \
+    ESPAPERPLAY_VERSION_STR(ESPAPERPLAY_VERSION_MAJOR, ESPAPERPLAY_VERSION_MINOR,                  \
                             ESPAPERPLAY_VERSION_PATCH)
 
 /** 项目 / 产品名称。 */

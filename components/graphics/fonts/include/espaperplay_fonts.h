@@ -35,6 +35,9 @@ extern "C" {
 /** LVGL 文件系统盘符（大写字母），字体路径形如 "A:NotoSansSC_Regular.ttf" */
 #define ESPAPERPLAY_FONTS_DRIVE_LETTER 'A'
 
+/** 出厂内置字体文件名（Flash 字体分区内的裁剪子集；SD 卡缺所选字体时回退到此）。 */
+#define ESPAPERPLAY_FONTS_DEFAULT_NAME "NotoSansSC_Regular.ttf"
+
 /** FreeType 字体样式（与 LVGL lv_freetype_font_style_t 取值一致）。 */
 typedef enum {
     ESPAPERPLAY_FONT_STYLE_NORMAL = 0,
@@ -85,6 +88,17 @@ esp_err_t espaperplay_fonts_get_path(const char *file_name, char *buf, size_t bu
  */
 lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
                                   espaperplay_font_style_t style);
+
+/**
+ * @brief 获取当前实际加载（正在使用）的字体文件名。
+ *
+ * 字体在开机建屏时按 selected_font 加载，运行期选择新字体需重启才生效；
+ * 本函数返回实际被渲染的字体名（SD 完整字库优先，否则出厂 Flash 子集），
+ * 供 WebUI 判断「当前正在使用」的字体，避免把尚未生效的选择误判为正在使用。
+ *
+ * @return 字体文件名（如 "NotoSansSC_Regular.ttf" 或 SD 卡上的文件名）。
+ */
+const char *espaperplay_fonts_get_active_name(void);
 
 #ifdef __cplusplus
 }

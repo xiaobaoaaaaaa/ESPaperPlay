@@ -229,6 +229,13 @@ SD card when one is inserted and mounted (the flash `fonts` partition is only an
      `(Flash subset)`.
 - Putting `NotoSansSC_Regular.ttf` in `/sdcard/system/fonts/` therefore makes the
   whole device render with the full CJK coverage instead of the GB2312 subset.
+- **Managing fonts from the Web UI:** the Web console exposes a *字体管理*
+  (Font Management) section where you can **upload** font files (`.ttf` / `.otf` /
+  `.ttc`) to the SD card, **list** what is already there, and **select** the active
+  font (persisted to NVS). The selected font is used when present on the SD card;
+  otherwise the device falls back to the built-in flash subset so rendering never
+  breaks. A link to Google Fonts (Noto Sans SC) is shown as a download hint. The
+  new selection takes effect after a **reboot**.
 
 #### FreeType Font Rendering
 

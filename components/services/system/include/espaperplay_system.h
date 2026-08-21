@@ -38,6 +38,8 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN 64
 /** 和风天气自定义 API Host 最大长度（含结尾 '\0'，如 "abc1234xyz.def.qweatherapi.com"）。 */
 #define ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN 80
+/** 当前选用字体文件名最大长度（含结尾 '\0'，如 "NotoSansSC_Regular.ttf"）。 */
+#define ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN 64
 
 /** 出厂默认 WiFi 工作模式。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE ESPAPERPLAY_WIFI_MODE_AP
@@ -62,6 +64,9 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION ""
 /** 出厂默认和风天气自定义 API Host（空 = 使用公共地址 devapi/geoapi.qweather.com）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST ""
+
+/** 出厂默认选用字体文件名（Flash 字体分区内的裁剪子集；SD 卡缺所选字体时回退）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME "NotoSansSC_Regular.ttf"
 
 /**
  * @brief BOOT 键长按的全局默认动作（Web 管理页可配置，NVS 持久化）。
@@ -108,12 +113,17 @@ typedef struct {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
     uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
-    uint32_t gui_full_force_after; /*!< 连续局刷后强制全刷阈值（0=禁用） */
+    uint32_t gui_full_force_after;                      /*!< 连续局刷后强制全刷阈值（0=禁用） */
     espaperplay_boot_long_press_action_t boot_long_press_action; /*!< BOOT 键长按默认动作 */
-    uint32_t boot_long_press_time_ms; /*!< BOOT 键长按判定时间（毫秒） */
-    char weather_api_key[ESPAPERPLAY_SYSTEM_WEATHER_KEY_MAX_LEN]; /*!< 和风天气 API Key（空=未配置） */
-    char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN]; /*!< 和风天气位置（空=自动定位） */
-    char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN]; /*!< 和风天气自定义 API Host（空=公共地址） */
+    uint32_t boot_long_press_time_ms;                            /*!< BOOT 键长按判定时间（毫秒） */
+    char weather_api_key[ESPAPERPLAY_SYSTEM_WEATHER_KEY_MAX_LEN]; /*!< 和风天气 API Key（空=未配置）
+                                                                   */
+    char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN];  /*!< 和风天气位置（空=自动定位）
+                                                                     */
+    char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN]; /*!< 和风天气自定义 API
+                                                                       Host（空=公共地址） */
+    char selected_font[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN]; /*!< 当前选用字体文件名（空=出厂默认）
+                                                               */
 } espaperplay_system_config_t;
 
 /**
@@ -189,7 +199,8 @@ esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count);
  * @param action 长按动作。
  * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
  */
-esp_err_t espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action);
+esp_err_t
+espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action);
 
 /**
  * @brief 获取当前 BOOT 键长按的全局默认动作。
@@ -250,6 +261,18 @@ esp_err_t espaperplay_system_set_weather_location(const char *location);
  * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG / ESP_ERR_INVALID_SIZE。
  */
 esp_err_t espaperplay_system_set_weather_api_host(const char *host);
+
+/**
+ * @brief 设置当前选用字体文件名并持久化。
+ *
+ * 字体组件按此文件名优先从 SD 卡（/sdcard/system/fonts/{name}）加载完整字库，
+ * 缺该文件时回退 Flash 字体分区的出厂裁剪子集。空串表示恢复出厂默认字体。
+ *
+ * @param name 字体文件名（如 "NotoSansSC_Regular.ttf"，无路径分隔符，以
+ *             .ttf/.otf/.ttc 结尾）；长度 < ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN。
+ * @return 成功返回 ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG / ESP_ERR_INVALID_SIZE。
+ */
+esp_err_t espaperplay_system_set_selected_font(const char *name);
 
 /**
  * @brief 恢复出厂默认配置并持久化。

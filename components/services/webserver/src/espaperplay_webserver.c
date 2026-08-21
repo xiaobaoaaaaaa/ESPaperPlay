@@ -93,6 +93,22 @@ static esp_err_t register_handlers(httpd_handle_t server) {
          .method = HTTP_POST,
          .handler = webserver_handle_weather_refresh_post,
          .user_ctx = NULL},
+        {.uri = "/api/fonts",
+         .method = HTTP_GET,
+         .handler = webserver_handle_fonts_get,
+         .user_ctx = NULL},
+        {.uri = "/api/fonts/select",
+         .method = HTTP_POST,
+         .handler = webserver_handle_fonts_select_post,
+         .user_ctx = NULL},
+        {.uri = "/api/fonts/upload",
+         .method = HTTP_POST,
+         .handler = webserver_handle_fonts_upload_post,
+         .user_ctx = NULL},
+        {.uri = "/api/fonts/delete",
+         .method = HTTP_POST,
+         .handler = webserver_handle_fonts_delete_post,
+         .user_ctx = NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {

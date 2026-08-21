@@ -13,7 +13,7 @@
 
 #include "esp_lv_fs.h"
 #include "esp_mmap_assets.h"
-#include "lvgl.h" /* LV_USE_FREETYPE 开启时内含 lv_freetype.h */
+#include "lvgl.h"                /* LV_USE_FREETYPE 开启时内含 lv_freetype.h */
 #include "mmap_generate_fonts.h" /* 构建期由 spiffs_create_partition_assets 生成 */
 
 #include "espaperplay_fonts.h"
@@ -28,7 +28,7 @@ static esp_lv_fs_handle_t s_fs_handle;
 #define ESPAPERPLAY_FONTS_CACHE_CNT 6
 
 typedef struct {
-    char path[64];      /* LVGL 路径，如 "A:NotoSansSC_Regular.ttf" */
+    char path[64]; /* LVGL 路径，如 "A:NotoSansSC_Regular.ttf" */
     uint32_t size;
     espaperplay_font_style_t style;
     lv_font_t *font;
@@ -36,8 +36,13 @@ typedef struct {
 
 static font_cache_entry_t s_font_cache[ESPAPERPLAY_FONTS_CACHE_CNT];
 
-esp_err_t espaperplay_fonts_init(void)
-{
+/* 当前实际加载（正在使用）的字体名。字体在开机建屏时按 selected_font 加载，
+ * 选择后需重启才生效；此处记录实际被渲染的字体（SD 完整字库优先，否则出厂
+ * Flash 子集），供 WebUI 判断「当前正在使用」的字体，避免把尚未生效的选择
+ * 误判为正在使用。长度与 ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN 保持一致。 */
+static char s_active_font_name[64] = ESPAPERPLAY_FONTS_DEFAULT_NAME;
+
+esp_err_t espaperplay_fonts_init(void) {
     if (s_fs_handle != NULL) {
         return ESP_OK; /* 幂等 */
     }
@@ -46,13 +51,13 @@ esp_err_t espaperplay_fonts_init(void)
         .partition_label = "fonts",
         .max_files = MMAP_FONTS_FILES,
         .checksum = MMAP_FONTS_CHECKSUM,
-        .flags = {
-            .mmap_enable = 1,
-        },
+        .flags =
+            {
+                .mmap_enable = 1,
+            },
     };
 
-    ESP_RETURN_ON_ERROR(mmap_assets_new(&cfg, &s_font_assets), TAG,
-                        "mmap fonts partition failed");
+    ESP_RETURN_ON_ERROR(mmap_assets_new(&cfg, &s_font_assets), TAG, "mmap fonts partition failed");
 
     const size_t stored = mmap_assets_get_stored_files(s_font_assets);
     ESP_RETURN_ON_FALSE(stored > 0, ESP_ERR_NOT_FOUND, TAG,
@@ -96,19 +101,17 @@ esp_err_t espaperplay_fonts_init(void)
         }
     }
 
-    ESP_LOGI(TAG, "fonts ready: %d file(s) on LVGL drive '%c:', FreeType enabled",
-             (int)stored, ESPAPERPLAY_FONTS_DRIVE_LETTER);
+    ESP_LOGI(TAG, "fonts ready: %d file(s) on LVGL drive '%c:', FreeType enabled", (int)stored,
+             ESPAPERPLAY_FONTS_DRIVE_LETTER);
     return ESP_OK;
 }
 
-esp_err_t espaperplay_fonts_get_path(const char *file_name, char *buf, size_t buf_size)
-{
+esp_err_t espaperplay_fonts_get_path(const char *file_name, char *buf, size_t buf_size) {
     if (file_name == NULL || buf == NULL || buf_size < 3) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    const int written = snprintf(buf, buf_size, "%c:%s", ESPAPERPLAY_FONTS_DRIVE_LETTER,
-                                 file_name);
+    const int written = snprintf(buf, buf_size, "%c:%s", ESPAPERPLAY_FONTS_DRIVE_LETTER, file_name);
     if (written < 0 || written >= (int)buf_size) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -116,8 +119,7 @@ esp_err_t espaperplay_fonts_get_path(const char *file_name, char *buf, size_t bu
 }
 
 lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
-                                  espaperplay_font_style_t style)
-{
+                                  espaperplay_font_style_t style) {
     if (file_name == NULL) {
         ESP_LOGE(TAG, "font file name is NULL");
         return NULL;
@@ -136,11 +138,19 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
     }
 
     if (!from_sd) {
-        if (espaperplay_fonts_get_path(file_name, path, sizeof(path)) != ESP_OK) {
-            ESP_LOGE(TAG, "invalid font file name: %s", file_name);
+        /* Flash 字体分区仅含出厂裁剪子集（默认字体名）。所选字体不在 SD 卡时，
+         * 回退到该默认字体，避免加载不存在的字体名导致 FreeType 创建失败。 */
+        if (espaperplay_fonts_get_path(ESPAPERPLAY_FONTS_DEFAULT_NAME, path, sizeof(path)) !=
+            ESP_OK) {
+            ESP_LOGE(TAG, "default font path build failed: %s", ESPAPERPLAY_FONTS_DEFAULT_NAME);
             return NULL;
         }
     }
+
+    /* 记录实际选用的字体名（供 WebUI 判断「当前正在使用」：字体在开机建屏时
+     * 加载，选择后需重启才生效，故以实际加载为准而非 NVS 中的 selected_font）。 */
+    strlcpy(s_active_font_name, from_sd ? file_name : ESPAPERPLAY_FONTS_DEFAULT_NAME,
+            sizeof(s_active_font_name));
 
     /* 命中缓存（路径含盘符，A:/B: 天然区分来源） */
     for (int i = 0; i < ESPAPERPLAY_FONTS_CACHE_CNT; i++) {
@@ -165,8 +175,8 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
         s_font_cache[slot].font = NULL;
     }
 
-    lv_font_t *font = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
-                                              size, (lv_freetype_font_style_t)style);
+    lv_font_t *font = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, size,
+                                              (lv_freetype_font_style_t)style);
     if (font == NULL) {
         ESP_LOGE(TAG, "freetype font create failed: %s @%u (glyphs not in subset render blank)",
                  path, (unsigned)size);
@@ -177,7 +187,9 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
     s_font_cache[slot].size = size;
     s_font_cache[slot].style = style;
     s_font_cache[slot].font = font;
-    ESP_LOGI(TAG, "freetype font loaded: %s @%u style=%d (%s)", path, (unsigned)size,
-             (int)style, from_sd ? "SD full" : "Flash subset");
+    ESP_LOGI(TAG, "freetype font loaded: %s @%u style=%d (%s)", path, (unsigned)size, (int)style,
+             from_sd ? "SD full" : "Flash subset");
     return font;
 }
+
+const char *espaperplay_fonts_get_active_name(void) { return s_active_font_name; }

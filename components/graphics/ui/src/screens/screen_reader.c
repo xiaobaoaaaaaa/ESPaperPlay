@@ -9,6 +9,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 
 #include "lvgl.h"
@@ -23,7 +24,9 @@ static const char *TAG = "ESPaperPlay_UI";
  * 提供正式入口：FreeType 中文标题 + "即将推出"提示，单击按键返回主页。
  */
 
-#define READER_FONT_NAME "NotoSansSC_Regular.ttf"
+#define READER_FONT_NAME                                                                           \
+    (espaperplay_system_get_config()                                                               \
+         ->selected_font) /* 当前选用字体（SD 优先，缺则回退 Flash 子集） */
 
 /** 阅读器页构建（页面 enter：屏幕已由页面栈清空）。 */
 static void reader_enter(void) {
@@ -33,10 +36,8 @@ static void reader_enter(void) {
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "阅读器");
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_set_style_text_font(title,
-                               espaperplay_fonts_load(READER_FONT_NAME, 24,
-                                                      ESPAPERPLAY_FONT_STYLE_NORMAL),
-                               0);
+    lv_obj_set_style_text_font(
+        title, espaperplay_fonts_load(READER_FONT_NAME, 24, ESPAPERPLAY_FONT_STYLE_NORMAL), 0);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 0, lv_pct(8));
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
@@ -44,10 +45,8 @@ static void reader_enter(void) {
     lv_obj_t *hint = lv_label_create(scr);
     lv_label_set_text(hint, "即将推出\n\n单击返回");
     lv_obj_set_style_text_color(hint, lv_color_black(), 0);
-    lv_obj_set_style_text_font(hint,
-                               espaperplay_fonts_load(READER_FONT_NAME, 20,
-                                                      ESPAPERPLAY_FONT_STYLE_NORMAL),
-                               0);
+    lv_obj_set_style_text_font(
+        hint, espaperplay_fonts_load(READER_FONT_NAME, 20, ESPAPERPLAY_FONT_STYLE_NORMAL), 0);
     lv_obj_set_width(hint, LV_PCT(100));
     lv_obj_set_pos(hint, 0, lv_pct(40));
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
@@ -64,5 +63,4 @@ static void reader_on_key(const espaperplay_input_event_t *event) {
 }
 
 /** 阅读器页页面实例。 */
-const espaperplay_ui_page_t espaperplay_ui_page_reader = {reader_enter, NULL, reader_on_key,
-                                                          NULL};
+const espaperplay_ui_page_t espaperplay_ui_page_reader = {reader_enter, NULL, reader_on_key, NULL};

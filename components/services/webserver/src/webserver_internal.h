@@ -99,6 +99,12 @@ esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req);
 esp_err_t webserver_handle_weather_get(httpd_req_t *req);
 esp_err_t webserver_handle_weather_refresh_post(httpd_req_t *req);
 
+/* 字体域（webserver_handler_fonts.c）：SD 卡字体枚举 / 选择 / 上传 / 删除。 */
+esp_err_t webserver_handle_fonts_get(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_select_post(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_delete_post(httpd_req_t *req);
+
 /* 鉴权守卫（webserver_auth_guard.c）。 */
 esp_err_t webserver_require_auth(httpd_req_t *req);
 bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size);

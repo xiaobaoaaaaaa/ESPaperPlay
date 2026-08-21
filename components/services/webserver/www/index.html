@@ -154,6 +154,54 @@
             cursor: pointer;
         }
 
+        .progress {
+            margin-top: 10px;
+            height: 8px;
+            width: 100%;
+            background: var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0;
+            background: var(--accent);
+            transition: width 0.15s linear;
+        }
+
+        .link-btn {
+            background: none;
+            border: none;
+            color: var(--err);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 0 0 8px;
+        }
+
+        .font-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 8px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            margin-bottom: 4px;
+        }
+
+        .font-item.active {
+            border-color: var(--accent);
+            background: rgba(0, 0, 0, 0.04);
+        }
+
+        .font-item .tag {
+            font-size: 11px;
+            color: var(--muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+        }
+
         .checkbox {
             display: flex;
             align-items: center;
@@ -384,7 +432,8 @@
                 </div>
                 <div class="field">
                     <label>长按判定时间（毫秒，300-10000，默认 1000）</label>
-                    <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50" placeholder="1000">
+                    <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50"
+                        placeholder="1000">
                 </div>
                 <div class="actions">
                     <button type="submit" class="primary">保存</button>
@@ -396,7 +445,8 @@
             <h2>天气设置（和风天气）</h2>
             <form id="weatherForm">
                 <div class="field">
-                    <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取，留空 = 保持不变）</label>
+                    <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取，留空 =
+                        保持不变）</label>
                     <input type="password" name="weather_api_key" maxlength="47" placeholder="（未设置）"
                         autocomplete="new-password">
                     <label class="checkbox"><input type="checkbox" name="clear_weather_api_key" value="1"> 清除已保存的 API
@@ -406,13 +456,16 @@
                     <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 按公网 IP 自动定位）</label>
                     <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
                         autocomplete="off">
-                    <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1"> 清除已保存的位置（恢复自动定位）</label>
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1">
+                        清除已保存的位置（恢复自动定位）</label>
                 </div>
                 <div class="field">
-                    <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/" target="_blank" rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
-                    <input type="text" name="weather_api_host" maxlength="79" placeholder="例如 abc1234xyz.def.qweatherapi.com"
-                        autocomplete="off">
-                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的 API Host（回退到公共地址）</label>
+                    <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/" target="_blank"
+                            rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
+                    <input type="text" name="weather_api_host" maxlength="79"
+                        placeholder="例如 abc1234xyz.def.qweatherapi.com" autocomplete="off">
+                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的 API
+                        Host（回退到公共地址）</label>
                 </div>
                 <div class="actions">
                     <button type="submit" class="primary">保存</button>
@@ -420,6 +473,37 @@
                 </div>
             </form>
             <div class="grid" id="weatherInfo"></div>
+        </section>
+
+        <section>
+            <h2>字体管理</h2>
+            <p class="hint">将字体文件（.ttf / .otf / .ttc）上传到 SD 卡后，可在此选择设备使用的字体。
+                未选择或 SD 卡缺该字体时，自动回退出厂内置字体。<strong>修改后需重启设备生效。</strong></p>
+            <div class="field">
+                <label>已上传字体（SD 卡 /sdcard/system/fonts/）</label>
+                <div id="fontList" class="font-list"></div>
+                <p id="fontSdHint" class="hint"></p>
+            </div>
+            <div class="field">
+                <label>上传字体文件到 SD 卡</label>
+                <input type="file" id="fontFile" accept=".ttf,.otf,.ttc">
+                <button type="button" id="fontUploadBtn">上传</button>
+                <span id="fontUploadStatus" class="hint"></span>
+                <div class="progress" id="fontProgress" hidden>
+                    <div class="progress-bar" id="fontProgressBar"></div>
+                </div>
+            </div>
+            <div class="field">
+                <label>获取字体</label>
+                <p class="hint">可从
+                    <a href="https://fonts.google.com/noto/specimen/Noto+Sans+SC" target="_blank" rel="noopener">Google
+                        Fonts · Noto Sans SC</a>
+                    下载完整字体（建议 .ttf / .otf），上传到 SD 卡后即可选用。
+                </p>
+            </div>
+            <div class="actions">
+                <button type="button" id="fontRebootBtn">重启设备以应用</button>
+            </div>
         </section>
 
         <section>
@@ -786,7 +870,7 @@
                 $('input[name=clear_weather_api_host]').checked = false;
             } catch (e) {
                 /* 服务器暂不可达，忽略。 */
-            }
+            } loadFonts();
         }
 
         async function postForm(action, data) {
@@ -875,6 +959,200 @@
             } catch (e) {
                 toast('刷新失败：' + e, true);
             }
+        });
+
+        /* 当前选用字体（loadFonts 刷新时记录，供删除判断使用）。 */
+        let currentFont = '';
+
+        /* 加载并渲染字体列表（SD 卡字体 + 当前选用 + 下载提示）。 */
+        async function loadFonts() {
+            if (!getToken()) return; /* 未登录时不轮询 */
+            try {
+                const res = await apiFetch('/api/fonts');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                currentFont = d.active || '';
+                const list = $('#fontList');
+                list.innerHTML = '';
+                if (!d.sd_mounted) {
+                    $('#fontSdHint').textContent = 'SD 卡未挂载，无法管理字体。';
+                    return;
+                }
+                $('#fontSdHint').textContent = '';
+
+                /* 出厂内置字体（Flash 分区，不可删除，可重新选用）。 */
+                const flash = d.flash_font || '';
+                if (flash) {
+                    const fl = document.createElement('div');
+                    fl.className = 'font-item' + (flash === currentFont ? ' active' : '');
+                    const flabel = document.createElement('label');
+                    flabel.className = 'radio';
+                    const fradi = document.createElement('input');
+                    fradi.type = 'radio';
+                    fradi.name = 'font_sel';
+                    fradi.value = flash;
+                    fradi.checked = (flash === d.selected);
+                    fradi.addEventListener('change', () => selectFont(flash));
+                    flabel.appendChild(fradi);
+                    flabel.appendChild(document.createTextNode(' ' + flash + '（内置）'));
+                    fl.appendChild(flabel);
+                    const ftag = document.createElement('span');
+                    ftag.className = 'tag';
+                    ftag.textContent = '不可删除';
+                    fl.appendChild(ftag);
+                    list.appendChild(fl);
+                }
+
+                const fonts = d.fonts || [];
+                if (fonts.length === 0 && !flash) {
+                    list.innerHTML = '<p class="hint">SD 卡上暂无字体文件，请上传。</p>';
+                }
+                fonts.forEach((f) => {
+                    const nm = (typeof f === 'string') ? f : f.name;
+                    const item = document.createElement('div');
+                    item.className = 'font-item' + (nm === currentFont ? ' active' : '');
+                    const label = document.createElement('label');
+                    label.className = 'radio';
+                    const radio = document.createElement('input');
+                    radio.type = 'radio';
+                    radio.name = 'font_sel';
+                    radio.value = nm;
+                    radio.checked = (nm === d.selected);
+                    radio.addEventListener('change', () => selectFont(nm));
+                    label.appendChild(radio);
+                    let txt = ' ' + nm;
+                    if (typeof f === 'object' && f.size) {
+                        txt += (f.size >= 1048576)
+                            ? '（' + (f.size / 1048576).toFixed(1) + ' MB）'
+                            : '（' + Math.round(f.size / 1024) + ' KB）';
+                    }
+                    label.appendChild(document.createTextNode(txt));
+                    item.appendChild(label);
+
+                    const del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'link-btn';
+                    del.textContent = '删除';
+                    del.addEventListener('click', () => deleteFont(nm));
+                    item.appendChild(del);
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                /* 设备可能重启/网络切换，忽略。 */
+            }
+        }
+
+        /* 选择当前使用的字体。 */
+        async function selectFont(name) {
+            try {
+                const d = await postForm('/api/fonts/select', 'name=' + encodeURIComponent(name));
+                if (d.ok) {
+                    toast('已选择字体：' + name + '（重启后生效）');
+                    loadFonts();
+                } else {
+                    toast('选择失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('选择失败：' + e, true);
+            }
+        }
+
+        /* 删除 SD 卡上已上传的字体文件。 */
+        async function deleteFont(name) {
+            const isActive = (name === currentFont);
+            let msg = '确定删除字体文件 ' + name + ' 吗？';
+            if (isActive) {
+                msg = '「' + name + '」是当前正在使用的字体，删除后将回退出厂内置字体，' +
+                    '且需要重启设备才能生效。确定删除并重启吗？';
+            }
+            if (!confirm(msg)) return;
+            try {
+                const d = await postForm('/api/fonts/delete', 'name=' + encodeURIComponent(name));
+                if (d.ok) {
+                    toast('已删除字体：' + name);
+                    if (d.reboot) {
+                        /* 删除正在使用的字体：后端已清空选择，重启以应用回退。 */
+                        try {
+                            await apiFetch('/api/system/reboot', { method: 'POST' });
+                        } catch (e) { /* 连接会立即断开 */ }
+                        toast('正在重启以应用字体回退…');
+                        return;
+                    }
+                    loadFonts();
+                } else {
+                    toast('删除失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('删除失败：' + e, true);
+            }
+        }
+
+        /* 上传字体文件到 SD 卡（原始字节，文件名经查询参数传递）。
+         * 用 XMLHttpRequest 以便监听上传进度（fetch 不支持上传进度事件）。 */
+        $('#fontUploadBtn').addEventListener('click', () => {
+            const f = $('#fontFile').files[0];
+            if (!f) {
+                toast('请先选择字体文件', true);
+                return;
+            }
+            const name = f.name;
+            const btn = $('#fontUploadBtn');
+            const status = $('#fontUploadStatus');
+            const progress = $('#fontProgress');
+            const bar = $('#fontProgressBar');
+            btn.disabled = true;
+            status.textContent = '上传中… 0%';
+            progress.hidden = false;
+            bar.style.width = '0%';
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/fonts/upload?name=' + encodeURIComponent(name));
+            const t = getToken();
+            if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+            xhr.upload.onprogress = (ev) => {
+                if (ev.lengthComputable) {
+                    const pct = Math.round((ev.loaded / ev.total) * 100);
+                    bar.style.width = pct + '%';
+                    status.textContent = '上传中… ' + pct + '%';
+                }
+            };
+            xhr.onload = () => {
+                progress.hidden = true;
+                btn.disabled = false;
+                try {
+                    const d = xhr.status === 200 ? JSON.parse(xhr.responseText) : {};
+                    if (xhr.status === 200 && d.ok) {
+                        toast('字体已上传：' + name + '（' + (d.size || 0) + ' 字节）');
+                        $('#fontFile').value = '';
+                        status.textContent = '';
+                        loadFonts();
+                    } else {
+                        toast('上传失败：' + (d.error || ('HTTP ' + xhr.status)), true);
+                        status.textContent = '';
+                    }
+                } catch (e) {
+                    toast('上传失败：' + e, true);
+                    status.textContent = '';
+                }
+            };
+            xhr.onerror = () => {
+                progress.hidden = true;
+                btn.disabled = false;
+                status.textContent = '';
+                toast('上传失败：网络错误', true);
+            };
+            xhr.send(f);
+        });
+
+        /* 重启设备以应用字体设置。 */
+        $('#fontRebootBtn').addEventListener('click', async () => {
+            if (!confirm('确定重启设备以应用字体设置吗？')) return;
+            try {
+                await apiFetch('/api/system/reboot', { method: 'POST' });
+            } catch (e) { /* 连接会立即断开 */ }
+            toast('正在重启…');
         });
 
         /* 保存并应用设置。 */

@@ -25,6 +25,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_WEATHER_KEY "weather_key"
 #define NVS_KEY_WEATHER_LOC "weather_loc"
 #define NVS_KEY_WEATHER_HOST "weather_host"
+#define NVS_KEY_FONT_NAME "font_name"
 #define NVS_KEY_BOOT_LP_ACTION "boot_lp_action"
 #define NVS_KEY_BOOT_LP_TIME_MS "boot_lp_time_ms"
 
@@ -48,6 +49,7 @@ static espaperplay_system_config_t s_config = {
     .weather_api_key = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
     .weather_location = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
     .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
+    .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
 };
 
 static bool s_initialized = false;
@@ -161,6 +163,9 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_str(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
     }
     if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_FONT_NAME, s_config.selected_font);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -256,6 +261,8 @@ static esp_err_t system_load(void) {
     load_str_field(handle, NVS_KEY_WEATHER_LOC, s_config.weather_location,
                    sizeof(s_config.weather_location), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
                    &missing);
+    load_str_field(handle, NVS_KEY_FONT_NAME, s_config.selected_font,
+                   sizeof(s_config.selected_font), ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME, &missing);
     load_str_field(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host,
                    sizeof(s_config.weather_api_host), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
                    &missing);
@@ -365,7 +372,8 @@ esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count) {
     return save_u32_field(NVS_KEY_GUI_FORCE_AFTER, count);
 }
 
-esp_err_t espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action) {
+esp_err_t
+espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action) {
     if (action >= ESPAPERPLAY_BOOT_LONG_PRESS_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -432,12 +440,25 @@ esp_err_t espaperplay_system_set_weather_api_host(const char *host) {
     return save_str_field(NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
 }
 
+esp_err_t espaperplay_system_set_selected_font(const char *name) {
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(name) >= ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    strlcpy(s_config.selected_font, name, sizeof(s_config.selected_font));
+    return save_str_field(NVS_KEY_FONT_NAME, s_config.selected_font);
+}
+
 esp_err_t espaperplay_system_reset_defaults(void) {
     s_config.wifi_mode = ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE;
     strlcpy(s_config.sta_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_STA_SSID, sizeof(s_config.sta_ssid));
     strlcpy(s_config.sta_password, ESPAPERPLAY_SYSTEM_DEFAULT_STA_PASS,
             sizeof(s_config.sta_password));
     strlcpy(s_config.ap_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID, sizeof(s_config.ap_ssid));
+    strlcpy(s_config.selected_font, ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
+            sizeof(s_config.selected_font));
     strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
     s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
     s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;

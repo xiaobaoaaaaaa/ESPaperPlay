@@ -11,6 +11,7 @@
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
+#include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 #include "espaperplay_ui_touch.h"
 
@@ -56,26 +57,26 @@ static const char *TAG = "ESPaperPlay_UI";
 
 /** 单笔轨迹（点缓冲随笔画分配，lv_line 只持引用，删除/清空时需释放）。 */
 typedef struct {
-    lv_obj_t *line;       /*!< lv_line 对象（挂载在画板上） */
+    lv_obj_t *line;          /*!< lv_line 对象（挂载在画板上） */
     lv_point_precise_t *pts; /*!< 点缓冲（lv_line 持引用，需随对象释放） */
-    uint16_t len;         /*!< 已写入点数 */
+    uint16_t len;            /*!< 已写入点数 */
 } touch_pad_stroke_t;
 
-static lv_obj_t *s_cnt_label = NULL;       /*!< 计数器数字（48 号大字，小区域） */
-static lv_obj_t *s_bar = NULL;             /*!< 进度条（中等区域） */
-static lv_obj_t *s_block = NULL;           /*!< 大黑块（位移 -> 局刷计数） */
-static lv_obj_t *s_status_label = NULL;    /*!< 状态行 */
-static lv_obj_t *s_last_key_label = NULL;  /*!< 最近一次按键事件 */
-static lv_obj_t *s_key_count_label = NULL; /*!< 按键累计计数 */
+static lv_obj_t *s_cnt_label = NULL;         /*!< 计数器数字（48 号大字，小区域） */
+static lv_obj_t *s_bar = NULL;               /*!< 进度条（中等区域） */
+static lv_obj_t *s_block = NULL;             /*!< 大黑块（位移 -> 局刷计数） */
+static lv_obj_t *s_status_label = NULL;      /*!< 状态行 */
+static lv_obj_t *s_last_key_label = NULL;    /*!< 最近一次按键事件 */
+static lv_obj_t *s_key_count_label = NULL;   /*!< 按键累计计数 */
 static lv_obj_t *s_touch_state_label = NULL; /*!< 触摸按压状态 / 点数 / 计数 */
 static lv_obj_t *s_touch_pos_label = NULL;   /*!< 最近触摸点坐标 / 笔画数 */
-static lv_obj_t *s_pad = NULL;             /*!< 触摸画板容器（轨迹线挂载其上） */
-static lv_timer_t *s_test_timer = NULL;    /*!< 页面定时器（页面栈退出时删除） */
-static uint32_t s_tick = 0;                /*!< UI 更新计数 */
-static uint32_t s_last_tick_ms = 0;        /*!< 上次更新时刻（实测周期） */
-static uint32_t s_key_count = 0;           /*!< 按键计数（页面实例状态） */
-static uint32_t s_touch_ev = 0;            /*!< 触摸事件计数（页面收到的事件） */
-static bool s_last_touch_pressed = false;  /*!< 上次触摸按压状态（状态沿日志） */
+static lv_obj_t *s_pad = NULL;               /*!< 触摸画板容器（轨迹线挂载其上） */
+static lv_timer_t *s_test_timer = NULL;      /*!< 页面定时器（页面栈退出时删除） */
+static uint32_t s_tick = 0;                  /*!< UI 更新计数 */
+static uint32_t s_last_tick_ms = 0;          /*!< 上次更新时刻（实测周期） */
+static uint32_t s_key_count = 0;             /*!< 按键计数（页面实例状态） */
+static uint32_t s_touch_ev = 0;              /*!< 触摸事件计数（页面收到的事件） */
+static bool s_last_touch_pressed = false;    /*!< 上次触摸按压状态（状态沿日志） */
 
 /* 笔画环形管理：s_strokes[head..head+count) 为存活笔画，超限删最旧。 */
 static touch_pad_stroke_t s_strokes[TOUCH_PAD_STROKES_MAX];
@@ -198,7 +199,7 @@ static void test_enter(void) {
     lv_obj_t *title = lv_label_create(scr);
     /* FreeType 矢量字体渲染验证：标题使用 fonts 分区的 Noto Sans SC 子集，
      * 中文正常显示即证明「mmap 分区 -> LVGL FS 盘符 -> FreeType 栅格化」链路可用。 */
-    lv_font_t *ft_font = espaperplay_fonts_load("NotoSansSC_Regular.ttf", 24,
+    lv_font_t *ft_font = espaperplay_fonts_load(espaperplay_system_get_config()->selected_font, 24,
                                                 ESPAPERPLAY_FONT_STYLE_NORMAL);
     if (ft_font != NULL) {
         lv_obj_set_style_text_font(title, ft_font, 0);
@@ -393,8 +394,7 @@ static void test_on_touch(const espaperplay_input_event_t *event) {
 
     if (!pressed) {
         s_cur_stroke = NULL; /* 收笔 */
-        lv_label_set_text_fmt(s_touch_state_label, "released  ev=%u",
-                              (unsigned)s_touch_ev);
+        lv_label_set_text_fmt(s_touch_state_label, "released  ev=%u", (unsigned)s_touch_ev);
         lv_label_set_text_fmt(s_touch_pos_label, "x=- y=-  strokes=%u", s_stroke_count);
         if (s_last_touch_pressed) {
             ESP_LOGI(TAG, "touch: released (ev %u, strokes %u)", (unsigned)s_touch_ev,
@@ -419,8 +419,8 @@ static void test_on_touch(const espaperplay_input_event_t *event) {
 
         pad_stroke_add_point(&q);
 
-        lv_label_set_text_fmt(s_touch_state_label, "pressed  pts=%u  ev=%u",
-                              event->touch_points, (unsigned)s_touch_ev);
+        lv_label_set_text_fmt(s_touch_state_label, "pressed  pts=%u  ev=%u", event->touch_points,
+                              (unsigned)s_touch_ev);
         lv_label_set_text_fmt(s_touch_pos_label, "x=%u y=%u  strokes=%u", event->point.x,
                               event->point.y, s_stroke_count);
         if (!s_last_touch_pressed) {
