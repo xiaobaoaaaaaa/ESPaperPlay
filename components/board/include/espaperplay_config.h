@@ -139,6 +139,30 @@ extern "C" {
 /** SD 卡的 VFS 挂载点。 */
 #define ESPAPERPLAY_STORAGE_MOUNT_POINT "/sdcard"
 
+/**
+ * @brief SD 卡上存放系统/固件数据的顶层目录（VFS 路径，末尾无 '/'）。
+ *
+ * 与用户内容（小说 / EPUB 等阅读文件）在根目录下物理隔离：固件维护的
+ * 数据（如完整字库）统一收纳在本目录，避免与阅读文件混在一起。
+ */
+#define ESPAPERPLAY_SYSTEM_SD_DIR ESPAPERPLAY_STORAGE_MOUNT_POINT "/system"
+
+/**
+ * @brief SD 卡上存放完整字体文件的子目录（VFS 路径，末尾无 '/'）。
+ *
+ * 位于系统数据目录下（ESPAPERPLAY_SYSTEM_SD_DIR "/fonts"），当 SD 卡挂载
+ * 成功时，字体组件优先从此目录加载完整字库（而非 Flash 中的裁剪子集）。
+ */
+#define ESPAPERPLAY_FONTS_SD_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/fonts"
+
+/**
+ * @brief SD 卡字体所映射的 LVGL 文件系统盘符（大写字母）。
+ *
+ * Flash 字体分区使用 'A:'（espaperplay_fonts.h），SD 卡完整字体使用本盘符
+ * 'B:'。两者互不冲突，允许 FreeType 通过 LVGL 文件系统同时访问两处资源。
+ */
+#define ESPAPERPLAY_SD_FONT_DRIVE_LETTER 'B'
+
 /* ====================================================================
  * 物理按键（BOOT）
  * ==================================================================== */

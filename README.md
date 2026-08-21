@@ -209,6 +209,27 @@ name is silently truncated at build time (Warn only), and the runtime
 `strcmp` lookup then fails so the font cannot be opened (symptom:
 `lv_freetype_font_create` returns NULL with no useful FT error).
 
+##### Full Font from SD Card (Priority)
+
+Besides the trimmed flash subset, the device can serve a **full** font from the
+SD card when one is inserted and mounted (the flash `fonts` partition is only an
+8 MB trimmed subset; the full Noto Sans SC is ~10 MB):
+
+- When the SD card is mounted, the fonts component registers an **additional
+  LVGL filesystem drive** `B:` (`espaperplay_sd_fonts.c`) that proxies
+  `fopen`-style access to the SD directory `ESPaperPlay_FONTS_SD_DIR` (default
+  `/sdcard/system/fonts/`, under the `system` top-level dir so firmware data stays
+  separate from user content like novels/EPUB in the SD root). Registering drive
+  `B:` is a pure callback registration and is safe even when no card is present
+  at boot.
+- `espaperplay_fonts_load(name, size, style)` resolves the source per load:
+  1. If the SD card is mounted **and** `/sdcard/system/fonts/{name}` exists →
+     load it (full font, drive `B:`), logging `(SD full)`;
+  2. Otherwise fall back to the flash subset (drive `A:`), logging
+     `(Flash subset)`.
+- Putting `NotoSansSC_Regular.ttf` in `/sdcard/system/fonts/` therefore makes the
+  whole device render with the full CJK coverage instead of the GB2312 subset.
+
 #### FreeType Font Rendering
 
 Rendering is built on the **LVGL 9.5 FreeType wrapper** (`src/libs/freetype/`,

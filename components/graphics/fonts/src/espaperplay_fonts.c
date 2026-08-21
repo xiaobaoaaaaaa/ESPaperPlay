@@ -17,6 +17,7 @@
 #include "mmap_generate_fonts.h" /* 构建期由 spiffs_create_partition_assets 生成 */
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_sd_fonts.h"
 
 static const char *TAG = "ESPaperPlay_FONTS";
 
@@ -65,6 +66,13 @@ esp_err_t espaperplay_fonts_init(void)
     ESP_RETURN_ON_ERROR(esp_lv_fs_desc_init(&fs_cfg, &s_fs_handle), TAG,
                         "register LVGL FS drive '%c:' failed", ESPAPERPLAY_FONTS_DRIVE_LETTER);
 
+    /* 注册 SD 卡完整字体盘符 'B:'（POSIX 代理到 /sdcard/system/fonts）。
+     * 失败不阻断：SD 字体仅当卡已挂载且文件存在时才会被选用。 */
+    esp_err_t sd_fs_ret = espaperplay_sd_fonts_init();
+    if (sd_fs_ret != ESP_OK) {
+        ESP_LOGW(TAG, "SD font drive registration failed: %s", esp_err_to_name(sd_fs_ret));
+    }
+
     /* FreeType 引擎由 lv_init() 自动初始化（LV_USE_FREETYPE 开启时，glyph 缓存数
      * 取 Kconfig CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT），此处无需也不能重复调用。 */
 
@@ -110,13 +118,31 @@ esp_err_t espaperplay_fonts_get_path(const char *file_name, char *buf, size_t bu
 lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
                                   espaperplay_font_style_t style)
 {
-    char path[sizeof(s_font_cache[0].path)];
-    if (espaperplay_fonts_get_path(file_name, path, sizeof(path)) != ESP_OK) {
-        ESP_LOGE(TAG, "invalid font file name: %s", file_name ? file_name : "(null)");
+    if (file_name == NULL) {
+        ESP_LOGE(TAG, "font file name is NULL");
         return NULL;
     }
 
-    /* 命中缓存 */
+    /* 选择字体源（优先级从高到低）：
+     *   1. SD 卡完整字库（/sdcard/system/fonts/{file_name}，盘符 'B:'）——当卡已挂载
+     *      且该文件存在时使用，覆盖 Flash 中的裁剪子集；
+     *   2. Flash 字体分区裁剪子集（盘符 'A:'）——回退。 */
+    char path[sizeof(s_font_cache[0].path)];
+    bool from_sd = false;
+    if (espaperplay_sd_fonts_exists(file_name)) {
+        if (espaperplay_sd_fonts_get_path(file_name, path, sizeof(path)) == ESP_OK) {
+            from_sd = true;
+        }
+    }
+
+    if (!from_sd) {
+        if (espaperplay_fonts_get_path(file_name, path, sizeof(path)) != ESP_OK) {
+            ESP_LOGE(TAG, "invalid font file name: %s", file_name);
+            return NULL;
+        }
+    }
+
+    /* 命中缓存（路径含盘符，A:/B: 天然区分来源） */
     for (int i = 0; i < ESPAPERPLAY_FONTS_CACHE_CNT; i++) {
         if (s_font_cache[i].font != NULL && s_font_cache[i].size == size &&
             s_font_cache[i].style == style && strcmp(s_font_cache[i].path, path) == 0) {
@@ -151,6 +177,7 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
     s_font_cache[slot].size = size;
     s_font_cache[slot].style = style;
     s_font_cache[slot].font = font;
-    ESP_LOGI(TAG, "freetype font loaded: %s @%u style=%d", path, (unsigned)size, (int)style);
+    ESP_LOGI(TAG, "freetype font loaded: %s @%u style=%d (%s)", path, (unsigned)size,
+             (int)style, from_sd ? "SD full" : "Flash subset");
     return font;
 }
