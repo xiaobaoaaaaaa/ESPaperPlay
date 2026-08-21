@@ -6,11 +6,12 @@ idf_component_register(
          "src/icons_data.c"
          "src/qweather_icons.c"
          "src/screens/screen_reader.c"
+         "src/screens/screen_settings.c"
          "src/screens/screen_test.c"
          "src/screens/screen_weather.c"
          "src/ui_stack.c"
          "src/ui_key_input.c"
     INCLUDE_DIRS "include"
-    REQUIRES board clock epd fonts touch lvgl input weather wifi system
+    REQUIRES board clock epd fonts touch lvgl input weather wifi system storage
     PRIV_REQUIRES freertos heap esp_timer
 )

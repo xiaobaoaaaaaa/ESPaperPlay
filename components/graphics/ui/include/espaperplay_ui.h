@@ -158,6 +158,10 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_weather;
 /** 阅读器页页面实例（screen_reader.c）：占位页（FreeType 中文标题 + 即将推出提示），单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_reader;
 
+/** 设置页页面实例（screen_settings.c）：系统设置管理（数值步进 / 循环切换 /
+ * 字体选择 / 测试页入口），难以输入的配置项提示到 Web 管理页，边缘滑动或单击返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_settings;
+
 #ifdef __cplusplus
 }
 #endif

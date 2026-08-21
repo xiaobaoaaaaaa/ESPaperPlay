@@ -19,6 +19,9 @@ extern const lv_image_dsc_t icon_weather_64;
 /** 64x64 A8 图标（Iconify: reader） */
 extern const lv_image_dsc_t icon_reader_64;
 
+/** 64x64 A8 图标（Iconify: settings） */
+extern const lv_image_dsc_t icon_settings_64;
+
 /** 64x64 A8 图标（Iconify: debug） */
 extern const lv_image_dsc_t icon_debug_64;
 
