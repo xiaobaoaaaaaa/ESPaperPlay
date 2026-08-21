@@ -29,29 +29,171 @@
             line-height: 1.6;
         }
 
-        header {
-            padding: 18px 24px;
+        /* 顶部栏 */
+        .topbar {
+            padding: 14px 20px;
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: baseline;
             gap: 12px;
             flex-wrap: wrap;
+            background: var(--bg);
         }
 
-        header h1 {
-            font-size: 20px;
+        .topbar h1 {
+            font-size: 18px;
             margin: 0;
         }
 
-        header .sub {
+        .topbar .sub {
             color: var(--muted);
             font-size: 13px;
         }
 
-        main {
-            max-width: 780px;
-            margin: 24px auto;
-            padding: 0 16px;
+        #menuToggle {
+            display: none;
+            padding: 4px 10px;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        /* 布局：侧边栏 + 内容区（仿 Argon 主题） */
+        .layout {
+            display: flex;
+            align-items: stretch;
+            min-height: calc(100vh - 57px);
+        }
+
+        .sidebar {
+            width: 240px;
+            flex: 0 0 240px;
+            background: #111c33;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar .brand {
+            padding: 18px 20px;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .menu {
+            padding: 8px 0;
+            overflow-y: auto;
+        }
+
+        .menu-group {
+            margin-bottom: 2px;
+        }
+
+        .menu-group-title {
+            padding: 10px 20px 6px;
+            font-size: 11px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .menu-group-title::after {
+            content: "▾";
+            font-size: 10px;
+            transition: transform .2s;
+        }
+
+        .menu-group.collapsed .menu-group-title::after {
+            transform: rotate(-90deg);
+        }
+
+        .menu-group ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .menu-group.collapsed ul {
+            display: none;
+        }
+
+        .menu-item {
+            display: block;
+            padding: 9px 20px 9px 28px;
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 14px;
+            border-left: 3px solid transparent;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+
+        .menu-item:hover {
+            background: rgba(56, 189, 248, .08);
+            color: var(--text);
+        }
+
+        .menu-item.active {
+            color: var(--accent);
+            background: rgba(56, 189, 248, .12);
+            border-left-color: var(--accent);
+            font-weight: 600;
+        }
+
+        main.content {
+            flex: 1 1 auto;
+            max-width: none;
+            margin: 0;
+            padding: 24px;
+            min-width: 0;
+        }
+
+        .panel {
+            display: none;
+            max-width: 820px;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        /* 移动端：侧边栏抽屉化 */
+        @media (max-width: 720px) {
+            .layout {
+                position: relative;
+            }
+
+            .sidebar {
+                position: fixed;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                z-index: 20;
+                transform: translateX(-100%);
+                transition: transform .25s;
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            #menuToggle {
+                display: inline-block;
+            }
+
+            main.content {
+                padding: 16px;
+            }
         }
 
         section {
@@ -318,218 +460,263 @@
 </head>
 
 <body>
-    <header>
-        <h1>ESPaperPlay 控制台</h1>
-        <span class="sub">系统状态与网络设置</span>
+    <header class="topbar">
+        <button type="button" id="menuToggle" aria-label="菜单">☰</button>
+        <h1 id="pageTitle">系统状态</h1>
+        <span class="sub" id="pageSub">系统状态与网络设置</span>
         <button type="button" id="logoutBtn" class="hidden">退出登录</button>
     </header>
-    <div id="login">
-        <div class="login-card">
-            <h2>ESPaperPlay 控制台</h2>
-            <p class="login-sub" id="authSubtitle">请输入设备密码以继续</p>
-            <form id="setupForm" class="hidden">
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="brand">ESPaperPlay 控制台</div>
+            <nav class="menu">
+                <div class="menu-group">
+                    <div class="menu-group-title">概览</div>
+                    <ul>
+                        <li><a class="menu-item active" data-target="status" data-title="系统状态"
+                                data-sub="设备运行概览">系统状态</a></li>
+                    </ul>
+                </div>
+                <div class="menu-group">
+                    <div class="menu-group-title">系统</div>
+                    <ul>
+                        <li><a class="menu-item" data-target="wifi" data-title="WiFi 设置" data-sub="无线网络配置">WiFi 设置</a>
+                        </li>
+                        <li><a class="menu-item" data-target="fonts" data-title="字体管理" data-sub="SD 卡字体">字体管理</a></li>
+                        <li><a class="menu-item" data-target="account" data-title="账户安全" data-sub="登录密码">账户安全</a></li>
+                    </ul>
+                </div>
+                <div class="menu-group">
+                    <div class="menu-group-title">设备</div>
+                    <ul>
+                        <li><a class="menu-item" data-target="screen" data-title="屏幕设置" data-sub="电子墨水屏参数">屏幕设置</a></li>
+                        <li><a class="menu-item" data-target="boot" data-title="BOOT 键设置" data-sub="物理按键行为">BOOT 键设置</a>
+                        </li>
+                    </ul>
+                </div>
+                <div class="menu-group">
+                    <div class="menu-group-title">服务</div>
+                    <ul>
+                        <li><a class="menu-item" data-target="weather" data-title="天气设置" data-sub="和风天气配置">天气设置</a></li>
+                    </ul>
+                </div>
+            </nav>
+        </aside>
+        <main class="content">
+            <div id="login">
+                <div class="login-card">
+                    <h2>ESPaperPlay 控制台</h2>
+                    <p class="login-sub" id="authSubtitle">请输入设备密码以继续</p>
+                    <form id="setupForm" class="hidden">
+                        <div class="field">
+                            <label>设置设备密码（至少 8 位）</label>
+                            <input type="password" id="setupPassword" placeholder="新密码" minlength="8" maxlength="63"
+                                autocomplete="new-password">
+                        </div>
+                        <div class="field">
+                            <input type="password" id="setupConfirm" placeholder="确认新密码" minlength="8" maxlength="63"
+                                autocomplete="new-password">
+                        </div>
+                        <div class="actions">
+                            <button type="submit" class="primary" style="width:100%">设置密码并进入</button>
+                        </div>
+                    </form>
+                    <form id="loginForm" class="hidden">
+                        <div class="field">
+                            <input type="password" name="password" id="loginPassword" placeholder="设备密码"
+                                autocomplete="current-password">
+                        </div>
+                        <div class="actions">
+                            <button type="submit" class="primary" style="width:100%">登 录</button>
+                        </div>
+                    </form>
+                    <div id="authError" class="login-error"></div>
+                </div>
+            </div>
+            <section class="panel active" id="panel-status">
+                <h2>系统状态</h2>
+                <div class="grid" id="status">
+                    <div class="stat">
+                        <div class="label">加载中…</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel" id="panel-wifi">
+                <h2>网络设置</h2>
+                <form id="configForm">
+                    <div class="field">
+                        <label>WiFi 工作模式</label>
+                        <label class="radio"><input type="radio" name="wifi_mode" value="ap"> 热点 (AP)</label>
+                        <label class="radio"><input type="radio" name="wifi_mode" value="sta"> 站点 (STA)</label>
+                    </div>
+                    <div class="field">
+                        <label>STA SSID（要连接的路由器）</label>
+                        <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi"
+                            autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label>STA 密码（留空 = 保持不变）</label>
+                        <input type="password" name="sta_password" maxlength="63" placeholder="••••••"
+                            autocomplete="new-password">
+                        <label class="checkbox"><input type="checkbox" name="clear_sta_password" value="1"> 清除已保存的 STA
+                            密码（开放网络）</label>
+                    </div>
+                    <div class="field">
+                        <label>AP SSID（设备热点名）</label>
+                        <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP"
+                            autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label>AP 密码（留空 = 保持不变）</label>
+                        <input type="password" name="ap_password" maxlength="63" placeholder="••••••"
+                            autocomplete="new-password">
+                        <label class="checkbox"><input type="checkbox" name="clear_ap_password" value="1"> 清除已保存的 AP
+                            密码（开放网络）</label>
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="primary">保存并应用</button>
+                        <button type="button" id="wifiRestart">重新应用网络</button>
+                        <button type="button" id="reset" class="danger">恢复默认</button>
+                        <button type="button" id="reboot" class="danger">重启设备</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel" id="panel-screen">
+                <h2>屏幕设置</h2>
+                <form id="screenForm">
+                    <div class="field">
+                        <label>屏幕空闲自动睡眠（秒，0 = 关闭自动睡眠）</label>
+                        <input type="number" name="epd_idle_sleep_timeout_s" min="0" max="86400" step="1"
+                            placeholder="90">
+                    </div>
+                    <div class="field">
+                        <label>连续局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
+                        <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="10">
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="primary">保存</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel" id="panel-boot">
+                <h2>BOOT 键设置</h2>
+                <form id="bootForm">
+                    <div class="field">
+                        <label>长按动作（所有页面生效，长按阈值到达即响应一次）</label>
+                        <select name="boot_long_press_action">
+                            <option value="full_refresh">全屏刷新（清残影，默认）</option>
+                            <option value="back">返回上一页</option>
+                            <option value="none">无操作</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>长按判定时间（毫秒，300-10000，默认 1000）</label>
+                        <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50"
+                            placeholder="1000">
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="primary">保存</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel" id="panel-weather">
+                <h2>天气设置（和风天气）</h2>
+                <form id="weatherForm">
+                    <div class="field">
+                        <label>API Key（<a href="https://dev.qweather.com/" target="_blank"
+                                rel="noopener">和风天气控制台</a>获取，留空 =
+                            保持不变）</label>
+                        <input type="password" name="weather_api_key" maxlength="47" placeholder="（未设置）"
+                            autocomplete="new-password">
+                        <label class="checkbox"><input type="checkbox" name="clear_weather_api_key" value="1"> 清除已保存的
+                            API
+                            Key</label>
+                    </div>
+                    <div class="field">
+                        <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 按公网 IP 自动定位）</label>
+                        <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
+                            autocomplete="off">
+                        <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1">
+                            清除已保存的位置（恢复自动定位）</label>
+                    </div>
+                    <div class="field">
+                        <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/"
+                                target="_blank" rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
+                        <input type="text" name="weather_api_host" maxlength="79"
+                            placeholder="例如 abc1234xyz.def.qweatherapi.com" autocomplete="off">
+                        <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的
+                            API
+                            Host（回退到公共地址）</label>
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="primary">保存</button>
+                        <button type="button" id="weatherRefresh">立即刷新</button>
+                    </div>
+                </form>
+                <div class="grid" id="weatherInfo"></div>
+            </section>
+
+            <section class="panel" id="panel-fonts">
+                <h2>字体管理</h2>
+                <p class="hint">将字体文件（.ttf / .otf / .ttc）上传到 SD 卡后，可在此选择设备使用的字体。
+                    未选择或 SD 卡缺该字体时，自动回退出厂内置字体。<strong>修改后需重启设备生效。</strong></p>
                 <div class="field">
-                    <label>设置设备密码（至少 8 位）</label>
-                    <input type="password" id="setupPassword" placeholder="新密码" minlength="8" maxlength="63"
-                        autocomplete="new-password">
+                    <label>已上传字体（SD 卡 /sdcard/system/fonts/）</label>
+                    <div id="fontList" class="font-list"></div>
+                    <p id="fontSdHint" class="hint"></p>
                 </div>
                 <div class="field">
-                    <input type="password" id="setupConfirm" placeholder="确认新密码" minlength="8" maxlength="63"
-                        autocomplete="new-password">
+                    <label>上传字体文件到 SD 卡</label>
+                    <input type="file" id="fontFile" accept=".ttf,.otf,.ttc">
+                    <button type="button" id="fontUploadBtn">上传</button>
+                    <span id="fontUploadStatus" class="hint"></span>
+                    <div class="progress" id="fontProgress" hidden>
+                        <div class="progress-bar" id="fontProgressBar"></div>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>获取字体</label>
+                    <p class="hint">可从
+                        <a href="https://fonts.google.com/noto/specimen/Noto+Sans+SC" target="_blank"
+                            rel="noopener">Google
+                            Fonts · Noto Sans SC</a>
+                        下载完整字体（建议 .ttf / .otf），上传到 SD 卡后即可选用。
+                    </p>
                 </div>
                 <div class="actions">
-                    <button type="submit" class="primary" style="width:100%">设置密码并进入</button>
+                    <button type="button" id="fontRebootBtn">重启设备以应用</button>
                 </div>
-            </form>
-            <form id="loginForm" class="hidden">
-                <div class="field">
-                    <input type="password" name="password" id="loginPassword" placeholder="设备密码"
-                        autocomplete="current-password">
-                </div>
-                <div class="actions">
-                    <button type="submit" class="primary" style="width:100%">登 录</button>
-                </div>
-            </form>
-            <div id="authError" class="login-error"></div>
-        </div>
+            </section>
+
+            <section class="panel" id="panel-account">
+                <h2>账户安全</h2>
+                <form id="passwordForm">
+                    <div class="field">
+                        <label>当前密码</label>
+                        <input type="password" id="curPassword" placeholder="当前密码" maxlength="63"
+                            autocomplete="current-password">
+                    </div>
+                    <div class="field">
+                        <label>新密码（至少 8 位）</label>
+                        <input type="password" id="newPassword" placeholder="新密码" maxlength="63"
+                            autocomplete="new-password">
+                    </div>
+                    <div class="field">
+                        <input type="password" id="confirmPassword" placeholder="确认新密码" maxlength="63"
+                            autocomplete="new-password">
+                    </div>
+                    <div id="pwdError" class="login-error"></div>
+                    <div class="actions">
+                        <button type="submit" class="primary">修改密码</button>
+                    </div>
+                </form>
+            </section>
+        </main>
     </div>
-    <main>
-        <section>
-            <h2>系统状态</h2>
-            <div class="grid" id="status">
-                <div class="stat">
-                    <div class="label">加载中…</div>
-                </div>
-            </div>
-        </section>
-
-        <section>
-            <h2>网络设置</h2>
-            <form id="configForm">
-                <div class="field">
-                    <label>WiFi 工作模式</label>
-                    <label class="radio"><input type="radio" name="wifi_mode" value="ap"> 热点 (AP)</label>
-                    <label class="radio"><input type="radio" name="wifi_mode" value="sta"> 站点 (STA)</label>
-                </div>
-                <div class="field">
-                    <label>STA SSID（要连接的路由器）</label>
-                    <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi" autocomplete="off">
-                </div>
-                <div class="field">
-                    <label>STA 密码（留空 = 保持不变）</label>
-                    <input type="password" name="sta_password" maxlength="63" placeholder="••••••"
-                        autocomplete="new-password">
-                    <label class="checkbox"><input type="checkbox" name="clear_sta_password" value="1"> 清除已保存的 STA
-                        密码（开放网络）</label>
-                </div>
-                <div class="field">
-                    <label>AP SSID（设备热点名）</label>
-                    <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP" autocomplete="off">
-                </div>
-                <div class="field">
-                    <label>AP 密码（留空 = 保持不变）</label>
-                    <input type="password" name="ap_password" maxlength="63" placeholder="••••••"
-                        autocomplete="new-password">
-                    <label class="checkbox"><input type="checkbox" name="clear_ap_password" value="1"> 清除已保存的 AP
-                        密码（开放网络）</label>
-                </div>
-                <div class="actions">
-                    <button type="submit" class="primary">保存并应用</button>
-                    <button type="button" id="wifiRestart">重新应用网络</button>
-                    <button type="button" id="reset" class="danger">恢复默认</button>
-                    <button type="button" id="reboot" class="danger">重启设备</button>
-                </div>
-            </form>
-        </section>
-
-        <section>
-            <h2>屏幕设置</h2>
-            <form id="screenForm">
-                <div class="field">
-                    <label>屏幕空闲自动睡眠（秒，0 = 关闭自动睡眠）</label>
-                    <input type="number" name="epd_idle_sleep_timeout_s" min="0" max="86400" step="1" placeholder="90">
-                </div>
-                <div class="field">
-                    <label>连续局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
-                    <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="10">
-                </div>
-                <div class="actions">
-                    <button type="submit" class="primary">保存</button>
-                </div>
-            </form>
-        </section>
-
-        <section>
-            <h2>BOOT 键设置</h2>
-            <form id="bootForm">
-                <div class="field">
-                    <label>长按动作（所有页面生效，长按阈值到达即响应一次）</label>
-                    <select name="boot_long_press_action">
-                        <option value="full_refresh">全屏刷新（清残影，默认）</option>
-                        <option value="back">返回上一页</option>
-                        <option value="none">无操作</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>长按判定时间（毫秒，300-10000，默认 1000）</label>
-                    <input type="number" name="boot_long_press_time_ms" min="300" max="10000" step="50"
-                        placeholder="1000">
-                </div>
-                <div class="actions">
-                    <button type="submit" class="primary">保存</button>
-                </div>
-            </form>
-        </section>
-
-        <section>
-            <h2>天气设置（和风天气）</h2>
-            <form id="weatherForm">
-                <div class="field">
-                    <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取，留空 =
-                        保持不变）</label>
-                    <input type="password" name="weather_api_key" maxlength="47" placeholder="（未设置）"
-                        autocomplete="new-password">
-                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_key" value="1"> 清除已保存的 API
-                        Key</label>
-                </div>
-                <div class="field">
-                    <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 按公网 IP 自动定位）</label>
-                    <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
-                        autocomplete="off">
-                    <label class="checkbox"><input type="checkbox" name="clear_weather_location" value="1">
-                        清除已保存的位置（恢复自动定位）</label>
-                </div>
-                <div class="field">
-                    <label>API Host（可选，<a href="https://dev.qweather.com/docs/configuration/api-host/" target="_blank"
-                            rel="noopener">控制台-设置</a>查看；留空 = 使用公共地址）</label>
-                    <input type="text" name="weather_api_host" maxlength="79"
-                        placeholder="例如 abc1234xyz.def.qweatherapi.com" autocomplete="off">
-                    <label class="checkbox"><input type="checkbox" name="clear_weather_api_host" value="1"> 清除已保存的 API
-                        Host（回退到公共地址）</label>
-                </div>
-                <div class="actions">
-                    <button type="submit" class="primary">保存</button>
-                    <button type="button" id="weatherRefresh">立即刷新</button>
-                </div>
-            </form>
-            <div class="grid" id="weatherInfo"></div>
-        </section>
-
-        <section>
-            <h2>字体管理</h2>
-            <p class="hint">将字体文件（.ttf / .otf / .ttc）上传到 SD 卡后，可在此选择设备使用的字体。
-                未选择或 SD 卡缺该字体时，自动回退出厂内置字体。<strong>修改后需重启设备生效。</strong></p>
-            <div class="field">
-                <label>已上传字体（SD 卡 /sdcard/system/fonts/）</label>
-                <div id="fontList" class="font-list"></div>
-                <p id="fontSdHint" class="hint"></p>
-            </div>
-            <div class="field">
-                <label>上传字体文件到 SD 卡</label>
-                <input type="file" id="fontFile" accept=".ttf,.otf,.ttc">
-                <button type="button" id="fontUploadBtn">上传</button>
-                <span id="fontUploadStatus" class="hint"></span>
-                <div class="progress" id="fontProgress" hidden>
-                    <div class="progress-bar" id="fontProgressBar"></div>
-                </div>
-            </div>
-            <div class="field">
-                <label>获取字体</label>
-                <p class="hint">可从
-                    <a href="https://fonts.google.com/noto/specimen/Noto+Sans+SC" target="_blank" rel="noopener">Google
-                        Fonts · Noto Sans SC</a>
-                    下载完整字体（建议 .ttf / .otf），上传到 SD 卡后即可选用。
-                </p>
-            </div>
-            <div class="actions">
-                <button type="button" id="fontRebootBtn">重启设备以应用</button>
-            </div>
-        </section>
-
-        <section>
-            <h2>账户安全</h2>
-            <form id="passwordForm">
-                <div class="field">
-                    <label>当前密码</label>
-                    <input type="password" id="curPassword" placeholder="当前密码" maxlength="63"
-                        autocomplete="current-password">
-                </div>
-                <div class="field">
-                    <label>新密码（至少 8 位）</label>
-                    <input type="password" id="newPassword" placeholder="新密码" maxlength="63"
-                        autocomplete="new-password">
-                </div>
-                <div class="field">
-                    <input type="password" id="confirmPassword" placeholder="确认新密码" maxlength="63"
-                        autocomplete="new-password">
-                </div>
-                <div id="pwdError" class="login-error"></div>
-                <div class="actions">
-                    <button type="submit" class="primary">修改密码</button>
-                </div>
-            </form>
-        </section>
-    </main>
     <div id="toast"></div>
 
     <script>
@@ -1225,6 +1412,42 @@
                 await apiFetch('/api/system/reboot', { method: 'POST' });
             } catch (e) { /* 连接会立即断开 */ }
             toast('正在重启…');
+        });
+
+        /* ---- 侧边栏多级菜单 ---- */
+        function showPanel(target) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById('panel-' + target);
+            if (panel) panel.classList.add('active');
+            document.querySelectorAll('.menu-item').forEach(m => {
+                m.classList.toggle('active', m.dataset.target === target);
+            });
+            const item = document.querySelector('.menu-item[data-target="' + target + '"]');
+            if (item) {
+                $('#pageTitle').textContent = item.dataset.title || '';
+                $('#pageSub').textContent = item.dataset.sub || '';
+            }
+            /* 移动端点击后收起抽屉。 */
+            if (window.innerWidth <= 720) $('.sidebar').classList.remove('open');
+        }
+
+        document.querySelectorAll('.menu-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                showPanel(item.dataset.target);
+            });
+        });
+
+        /* 分组标题点击折叠/展开子菜单。 */
+        document.querySelectorAll('.menu-group-title').forEach(title => {
+            title.addEventListener('click', () => {
+                title.parentElement.classList.toggle('collapsed');
+            });
+        });
+
+        /* 移动端抽屉开关。 */
+        $('#menuToggle').addEventListener('click', () => {
+            $('.sidebar').classList.toggle('open');
         });
 
         /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
