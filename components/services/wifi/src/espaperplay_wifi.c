@@ -33,6 +33,7 @@ static esp_event_handler_instance_t s_ip_event_instance = NULL;
 static bool s_started = false;        /*!< WiFi 驱动是否已启动 */
 static bool s_connected = false;      /*!< 网络是否可用（AP：热点已开；STA：已获取 IP） */
 static bool s_auto_reconnect = false; /*!< STA 断线后是否自动重连 */
+static bool s_sleep_suppress_reconnect = false; /*!< 睡眠期间抑制自动重连（主动断开后由电源管理控制） */
 static espaperplay_wifi_mode_t s_mode = ESPAPERPLAY_WIFI_MODE_AP; /*!< 当前工作模式 */
 static char s_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = "";         /*!< 当前 SSID */
 static char s_ip[16] = "0.0.0.0";                                 /*!< 当前 IP */
@@ -210,6 +211,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGW(TAG, "STA disconnected, reason=%u", (unsigned)disc->reason);
         s_connected = false;
         strlcpy(s_ip, "0.0.0.0", sizeof(s_ip));
+
+        /* 睡眠期间主动断开：抑制自动重连，交由电源管理在唤醒后决定是否重连。 */
+        if (s_sleep_suppress_reconnect) {
+            ESP_LOGI(TAG, "STA disconnect suppressed for sleep (no auto-reconnect)");
+            break;
+        }
 
         /* 仅在主动运行状态下自动重连，避免 stop / 配置切换期间被事件触发重连。 */
         if (s_auto_reconnect && s_started) {
@@ -409,6 +416,61 @@ esp_err_t espaperplay_wifi_stop(void) {
     s_connected = false;
     strlcpy(s_ip, "0.0.0.0", sizeof(s_ip));
     ESP_LOGI(TAG, "WiFi stopped");
+    return ESP_OK;
+}
+
+/**
+ * @brief 进入浅睡眠前主动断开 STA 并抑制自动重连。
+ *
+ * 手动 esp_light_sleep_start() 期间 WiFi modem 完全断电，无法按 listen
+ * interval 收信标，AP 侧会因站点长时间无活动而解关联，唤醒后触发
+ * BEACON_TIMEOUT 被动断开 + 自动重连（约 2.5s 活跃爆发，且对仅刷新时钟
+ * 的定时器唤醒毫无必要）。本函数在睡眠前显式断开并置位抑制标志，使断开
+ * 时机可控、日志干净；唤醒后由 espaperplay_wifi_resume_after_wake() 决定
+ * 是否重连。
+ *
+ * 仅 STA 模式生效；AP 模式（热点）保持运行不处理。
+ *
+ * @return 成功返回 ESP_OK（已断开或本就未连接），否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_suspend_for_sleep(void) {
+    if (s_mode != ESPAPERPLAY_WIFI_MODE_STA || !s_started) {
+        return ESP_OK; /* AP 模式或未启动：无需处理 */
+    }
+    s_sleep_suppress_reconnect = true;
+    esp_err_t err = esp_wifi_disconnect();
+    if (err != ESP_OK) {
+        /* 未连接时断开会返回 ESP_ERR_WIFI_NOT_CONNECT，属正常情况，忽略。 */
+        ESP_LOGD(TAG, "esp_wifi_disconnect for sleep: %s", esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "WiFi suspended for sleep (STA disconnected, reconnect suppressed)");
+    return ESP_OK;
+}
+
+/**
+ * @brief 浅睡眠唤醒后恢复 STA 关联策略。
+ *
+ * @param reconnect true=清除抑制标志并立即重连（用户操作唤醒，需恢复网络）；
+ *                  false=保持断开（定时器唤醒仅刷新时钟，无需网络）。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_resume_after_wake(bool reconnect) {
+    if (s_mode != ESPAPERPLAY_WIFI_MODE_STA || !s_started) {
+        return ESP_OK; /* AP 模式或未启动：无需处理 */
+    }
+    if (reconnect) {
+        s_sleep_suppress_reconnect = false;
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            /* 已连接时重连可能返回 ESP_ERR_WIFI_STATE 等，属正常情况，忽略。 */
+            ESP_LOGD(TAG, "esp_wifi_connect after wake: %s", esp_err_to_name(err));
+        }
+        ESP_LOGI(TAG, "WiFi resumed after wake (reconnect requested)");
+    } else {
+        /* 保持断开：抑制标志维持，避免后续被动断开事件触发重连。 */
+        ESP_LOGI(TAG, "WiFi kept disconnected after timer wake");
+    }
     return ESP_OK;
 }
 

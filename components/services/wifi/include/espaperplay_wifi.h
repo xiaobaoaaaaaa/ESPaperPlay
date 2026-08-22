@@ -108,6 +108,28 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi);
  */
 bool espaperplay_wifi_is_connected(void);
 
+/**
+ * @brief 进入浅睡眠前主动断开 STA 并抑制自动重连。
+ *
+ * 手动 esp_light_sleep_start() 期间 WiFi modem 断电，无法保活关联，唤醒后
+ * 会触发 BEACON_TIMEOUT 被动断开 + 自动重连（约 2.5s 活跃爆发）。本函数在
+ * 睡眠前显式断开并抑制重连，使断开时机可控、日志干净。仅 STA 模式生效；
+ * AP 模式（热点）保持运行。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_suspend_for_sleep(void);
+
+/**
+ * @brief 浅睡眠唤醒后恢复 STA 关联策略。
+ *
+ * @param reconnect true=清除抑制标志并立即重连（用户操作唤醒，需恢复网络）；
+ *                  false=保持断开（定时器唤醒仅刷新时钟，无需网络）。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_resume_after_wake(bool reconnect);
+
 #ifdef __cplusplus
 }
 #endif
