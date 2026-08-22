@@ -112,6 +112,24 @@ esp_err_t espaperplay_input_init(void);
 esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t timeout_ms);
 
 /**
+ * @brief 获取最近一次用户活动时刻（毫秒，esp_timer 单调时钟）。
+ *
+ * 任意按键 / 触摸事件投递时刷新。电源管理据此判断"无操作"超时，
+ * 触发自动浅睡眠。返回 0 表示尚未有任何用户活动（系统启动后未交互）。
+ *
+ * @return 最近活动时刻（毫秒）。
+ */
+uint64_t espaperplay_input_get_last_activity_ms(void);
+
+/**
+ * @brief 主动标记一次用户活动（刷新活动时间戳为当前时刻）。
+ *
+ * 供电源管理在浅睡眠唤醒后调用，重置"无操作"计时，给唤醒事件
+ * （触摸 / 按键）的处理留出窗口，避免刚唤醒又立即重新睡眠。
+ */
+void espaperplay_input_mark_activity(void);
+
+/**
  * @brief 获取按键动作的字符串表示（日志 / 界面显示用）。
  *
  * @param action 按键动作。

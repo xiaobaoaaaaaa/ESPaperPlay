@@ -64,6 +64,15 @@ static uint32_t s_last_hold_ms = 0; /*!< 上次投递 HOLD 的时刻（esp_timer
 
 static uint16_t s_touch_seq = 0; /*!< 触摸帧序号（每帧递增，同帧各点共享） */
 
+/* 最近一次用户活动时刻（esp_timer 毫秒）。按键 / 触摸事件投递时刷新，
+ * 供电源管理判断"无操作"超时。非原子读写（仅用于超时比较，误差可忽略）。 */
+static uint64_t s_last_activity_ms = 0;
+
+/** 记录一次用户活动（刷新活动时间戳）。 */
+static inline void input_mark_activity(void) {
+    s_last_activity_ms = (uint64_t)(esp_timer_get_time() / 1000);
+}
+
 /**
  * @brief 将按键动作投递到按键队列。
  *
@@ -82,6 +91,9 @@ static void input_post_key_event(uint8_t key_id, espaperplay_input_key_action_t 
     if (s_key_queue == NULL) {
         return;
     }
+
+    /* 任意按键动作均视为用户活动（含按下 / 松开 / 长按保持等）。 */
+    input_mark_activity();
 
     const espaperplay_input_event_t event = {
         .type = ESPAPERPLAY_INPUT_EVENT_KEY,
@@ -114,6 +126,9 @@ static void input_post_key_event(uint8_t key_id, espaperplay_input_key_action_t 
  */
 static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_t count) {
     const uint16_t seq = ++s_touch_seq;
+
+    /* 任意触摸帧（按下 / 抬起）均视为用户活动。 */
+    input_mark_activity();
 
     if (count == 0) {
         const espaperplay_input_event_t event = {
@@ -239,7 +254,8 @@ esp_err_t espaperplay_input_init(void) {
     }
 
     /* BOOT 按键：GPIO0，按下为低电平，使能内部上拉（disable_pull = false）。
-     * enable_power_save 暂不开启：电源组件（浅睡眠唤醒）接入后再启用。
+     * enable_power_save 开启：使按键 GPIO 在浅睡眠期间保持可唤醒配置，
+     * 配合电源组件的 GPIO 唤醒源（GPIO0 低电平）实现按键唤醒。
      * 长按判定时间取系统配置（Web 可配置，NVS 持久化，默认 1000ms），
      * 覆盖驱动编译期默认值（CONFIG_BUTTON_LONG_PRESS_TIME_MS=1500）。 */
     const button_config_t btn_cfg = {
@@ -248,7 +264,7 @@ esp_err_t espaperplay_input_init(void) {
     const button_gpio_config_t btn_gpio_cfg = {
         .gpio_num = ESPAPERPLAY_PIN_KEY_BOOT,
         .active_level = ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
-        .enable_power_save = false,
+        .enable_power_save = true,
         .disable_pull = false,
     };
 
@@ -310,6 +326,14 @@ esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t
         return ESP_OK;
     }
     return ESP_ERR_TIMEOUT; /* select 返回非空后理论上必可取到 */
+}
+
+uint64_t espaperplay_input_get_last_activity_ms(void) {
+    return s_last_activity_ms;
+}
+
+void espaperplay_input_mark_activity(void) {
+    input_mark_activity();
 }
 
 const char *espaperplay_input_key_action_str(espaperplay_input_key_action_t action) {
