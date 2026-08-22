@@ -116,6 +116,17 @@ void app_main(void) {
     /* 应用级模块。 */
     ESP_ERROR_CHECK(espaperplay_input_init());
     ESP_ERROR_CHECK(espaperplay_power_init());
+    /* 电源管理：配置浅睡眠唤醒源（触摸 INT / BOOT 按键 / UART），
+     * 并启动自动浅睡眠管理任务（无用户操作超时后进入 light sleep）。 */
+    const espaperplay_wakeup_config_t wakeup_cfg = {
+        .enable_timer = false,  /*!< 默认不启用定时器唤醒（睡眠期间不服务 Web） */
+        .wakeup_timeout_ms = 0,
+        .enable_gpio = true,
+        .gpio_num = -1,
+        .gpio_level = false,
+    };
+    ESP_ERROR_CHECK(espaperplay_power_configure_wakeup(&wakeup_cfg));
+    ESP_ERROR_CHECK(espaperplay_power_start_auto_sleep());
     ESP_ERROR_CHECK(espaperplay_gui_init());
     /* 应用"连续局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
     espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);

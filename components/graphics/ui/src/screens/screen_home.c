@@ -21,6 +21,7 @@
 #include "espaperplay_ui_touch.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
+#include "espaperplay_power.h"
 #include "icons_data.h"     /* 应用图标（Iconify -> LVGL A8 位图，生成文件） */
 #include "qweather_icons.h" /* 和风天气图标（QWeather-Icons -> LVGL A8，生成文件） */
 
@@ -629,6 +630,11 @@ static void home_enter(void) {
     /* 立即刷新一次：返回主界面时即时显示时间 / 状态，不等下一个定时器周期。 */
     home_refresh();
 
+    /* 睡眠期间周期唤醒以更新时钟：对齐到分钟边界，使时钟在分钟切换时
+     * 立即刷新（而非固定相位滞后达 ~60s）。刷新后由电源管理自动重新
+     * 睡眠（不重置用户活动计时）。离开主界面时关闭。 */
+    espaperplay_power_set_periodic_wakeup_minute_aligned(true);
+
     ESP_LOGI(TAG, "home screen entered");
 }
 
@@ -638,6 +644,8 @@ static void home_exit(void) {
         lv_timer_delete(s_timer);
         s_timer = NULL;
     }
+    /* 关闭睡眠期间周期唤醒源：离开主界面后不再需要周期更新时钟。 */
+    espaperplay_power_set_periodic_wakeup_minute_aligned(false);
     ESP_LOGI(TAG, "home screen exited");
 }
 
