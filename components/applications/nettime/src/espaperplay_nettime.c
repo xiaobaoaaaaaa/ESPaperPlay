@@ -94,6 +94,9 @@ static void nettime_sync_chain(void) {
         return;
     }
 
+    /* 记录本次成功对时，初始化漂移标定模型的校正基准与测量基线。 */
+    espaperplay_clock_mark_synced();
+
     /* 输出结果：地理位置 + 时区 + 本地时间。 */
     struct tm local_time;
     char tz[ESPAPERPLAY_CLOCK_TZ_MAX_LEN];

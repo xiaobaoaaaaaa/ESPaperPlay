@@ -97,10 +97,72 @@ esp_err_t espaperplay_clock_ntp_wait_sync(uint32_t timeout_ms);
 /**
  * @brief 获取按当前时区转换的本地时间。
  *
+ * 若已测得 RTC 漂移率，则按软件漂移补偿模型校正后输出（补偿 INT_RC
+ * 慢时钟误差，无需外部 32k 晶振）；否则直接返回系统时钟读数。
+ *
  * @param local_time 输出本地时间（非空）。
  * @return ESP_OK 成功（时间可能尚未经 NTP 同步，由调用方判断）。
  */
 esp_err_t espaperplay_clock_get_local_time(struct tm *local_time);
+
+/**
+ * @brief 强制立即通过 NTP 重新对时。
+ *
+ * 停止并重新初始化 SNTP 客户端后阻塞等待一次同步（用于用户唤醒 / 周期标定
+ * 等需要即时校正的场景）。同步成功后自动更新内部校正基准。
+ *
+ * @param timeout_ms 等待同步超时（毫秒）。
+ * @return ESP_OK 已同步；ESP_ERR_TIMEOUT 超时；其他为错误码。
+ */
+esp_err_t espaperplay_clock_resync_now(uint32_t timeout_ms);
+
+/**
+ * @brief 记录一次成功的时间同步（更新校正基准）。
+ *
+ * 在任何 NTP 成功对时后调用，使软件漂移补偿的参考点保持最新。通常由本组件
+ * 内部在对时完成时自动调用，也可由外部（如 nettime 初始化对时）显式调用。
+ *
+ * @return ESP_OK 成功。
+ */
+esp_err_t espaperplay_clock_mark_synced(void);
+
+/**
+ * @brief 执行一次时钟标定：NTP 对时并测量/精修 RTC 漂移率，持久化到 NVS。
+ *
+ * 漂移率通过本次对时与上次测量基线的偏差推算。学习期（NVS 无有效值）以
+ * 较短间隔多采样本，稳定期以稀疏间隔定期精修。
+ *
+ * @param timeout_ms NTP 同步超时（毫秒）。
+ * @return ESP_OK 标定成功；否则返回错误码（网络不可用等）。
+ */
+esp_err_t espaperplay_clock_calibrate(uint32_t timeout_ms);
+
+/**
+ * @brief 判断当前是否到达时钟标定时刻。
+ *
+ * 学习期返回较短间隔、稳定期返回较长间隔；从未标定过则立即返回 true。
+ *
+ * @return true 需要标定，false 尚未到期。
+ */
+bool espaperplay_clock_is_calibration_due(void);
+
+/**
+ * @brief 获取当前测得的 RTC 漂移率（ppm，+表示偏快）。
+ *
+ * @return 漂移率（ppm）；尚未测得时返回 0。
+ */
+int32_t espaperplay_clock_get_drift_ppm(void);
+
+/**
+ * @brief 累计一次浅睡眠的测得时长（微秒），供漂移模型仅对睡眠部分补偿。
+ *
+ * 由电源管理在每次唤醒后调用，传入本次睡眠期间 RC 测得的时长
+ * （esp_timer 在睡眠前后差值，即 time(NULL) 在睡眠中推进的量）。
+ * 运行期时间由 XTAL 精确推进、不引入误差，故仅睡眠时长需计入。
+ *
+ * @param sleep_us 本次睡眠的 RC 测得时长（微秒）。
+ */
+void espaperplay_clock_account_sleep(uint64_t sleep_us);
 
 #ifdef __cplusplus
 }
