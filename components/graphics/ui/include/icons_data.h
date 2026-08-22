@@ -63,3 +63,6 @@ extern const lv_image_dsc_t icon_visibility_16;
 
 /** 16x16 A8 图标（Iconify: thermo） */
 extern const lv_image_dsc_t icon_thermo_16;
+
+/** 16x16 A8 图标（Iconify: leaf） */
+extern const lv_image_dsc_t icon_leaf_16;

@@ -15,8 +15,8 @@
 
 #include "espaperplay_clock.h"
 #include "espaperplay_geoip.h"
-#include "espaperplay_nettime.h"
 #include "espaperplay_netip.h"
+#include "espaperplay_nettime.h"
 #include "espaperplay_wifi.h"
 
 static const char *TAG = "ESPaperPlay_NETTIME";
@@ -104,8 +104,8 @@ static void nettime_sync_chain(void) {
     if (espaperplay_clock_get_local_time(&local_time) == ESP_OK) {
         char buf[64];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z (%z)", &local_time);
-        ESP_LOGI(TAG, "net time sync done: ip=%s region=\"%s\" tz=%s local=%s", geo.ip,
-                 geo.region, tz, buf);
+        ESP_LOGI(TAG, "net time sync done: ip=%s region=\"%s\" tz=%s local=%s", geo.ip, geo.region,
+                 tz, buf);
     } else {
         ESP_LOGI(TAG, "net time sync done: ip=%s region=\"%s\" tz=%s", geo.ip, geo.region, tz);
     }

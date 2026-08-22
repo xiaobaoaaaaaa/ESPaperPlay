@@ -77,12 +77,12 @@ typedef enum {
  * @brief 归一化的输入事件。
  */
 typedef struct {
-    espaperplay_input_event_type_t type;       /*!< 事件来源类型 */
-    espaperplay_touch_point_t point;           /*!< 触摸数据（type == TOUCH 时有效） */
+    espaperplay_input_event_type_t type; /*!< 事件来源类型 */
+    espaperplay_touch_point_t point;     /*!< 触摸数据（type == TOUCH 时有效） */
     uint8_t touch_pressed; /*!< 触摸是否按下（type == TOUCH 时有效；0 表示全部手指抬起） */
     uint8_t touch_points;  /*!< 本帧触摸点总数（type == TOUCH 时有效；释放帧为 0） */
     uint16_t touch_seq;    /*!< 触摸帧序号（同一帧内的各点共享，用于识别帧边界） */
-    uint8_t key_id;                            /*!< 按键标识（type == KEY 时有效） */
+    uint8_t key_id;        /*!< 按键标识（type == KEY 时有效） */
     espaperplay_input_key_action_t key_action; /*!< 按键动作（type == KEY 时有效） */
     uint16_t key_press_time_ms;                /*!< 本次按压持续时间（type == KEY 时有效） */
 } espaperplay_input_event_t;
@@ -128,6 +128,24 @@ uint64_t espaperplay_input_get_last_activity_ms(void);
  * （触摸 / 按键）的处理留出窗口，避免刚唤醒又立即重新睡眠。
  */
 void espaperplay_input_mark_activity(void);
+
+/**
+ * @brief 设置/清除"设备已进入睡眠"指示标志。
+ *
+ * 由电源管理在即将进入浅睡眠前置位、在用户唤醒后清除。UI 各页面据此在
+ * 状态栏右侧显示节能图标，提示设备处于低功耗睡眠态。标志存于 input 组件
+ * 以避免 power 与 ui 形成 REQUIRES 环（ui 已 REQUIRES power）。
+ *
+ * @param shown true=显示节能图标（设备已睡眠），false=隐藏。
+ */
+void espaperplay_input_set_sleep_indicator(bool shown);
+
+/**
+ * @brief 获取"设备已进入睡眠"指示标志当前值。
+ *
+ * @return true=应显示节能图标，false=不显示。
+ */
+bool espaperplay_input_is_sleep_indicator(void);
 
 /**
  * @brief 获取按键动作的字符串表示（日志 / 界面显示用）。

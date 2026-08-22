@@ -109,8 +109,8 @@ static uint8_t UC8179_TRES_VALUE[4];
  * ==================================================================== */
 
 /* 显示分辨率（运行时，来自 espaperplay_display；epd_init 时读取） */
-static uint16_t s_disp_w = 0; /*!< 有效显示区宽度（像素） */
-static uint16_t s_disp_h = 0; /*!< 有效显示区高度（像素） */
+static uint16_t s_disp_w = 0;          /*!< 有效显示区宽度（像素） */
+static uint16_t s_disp_h = 0;          /*!< 有效显示区高度（像素） */
 static size_t s_frame_bytes = 0;       /*!< 全屏 1bpp 帧字节数（w*h/8） */
 static size_t s_gray4_frame_bytes = 0; /*!< 4 灰阶整帧字节数（2bpp：w*h/4） */
 static size_t s_snapshot_bytes = 0;    /*!< 私有快照缓冲字节数（取各模式最大值：灰阶整帧） */
@@ -840,8 +840,7 @@ static void epd_selftest_task(void *arg) {
 
     /* 1. 全屏清白（FULL 模式，清屏样本）。 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: FULL clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -855,8 +854,7 @@ static void epd_selftest_task(void *arg) {
         goto out;
     }
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(pattern, 0, 0, s_disp_w,
-                                  s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(pattern, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: FULL pattern -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -899,8 +897,7 @@ static void epd_selftest_task(void *arg) {
     /* 5. 4 灰阶：四条纵向色带（白/浅灰/深灰/黑，各 200px 宽）。 */
     gray = malloc(s_frame_bytes * 2); /* 2bpp 整帧 */
     if (gray == NULL) {
-        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)",
-                 (unsigned)(s_frame_bytes * 2));
+        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)", (unsigned)(s_frame_bytes * 2));
         goto out;
     }
     memset(gray, 0x00, s_frame_bytes * 2); /* 默认全白（灰阶值 0） */
@@ -910,8 +907,7 @@ static void epd_selftest_task(void *arg) {
         memset(row + 400 / 4, 0xAA, 200 / 4); /* 深灰带（灰阶值 2） */
         memset(row + 600 / 4, 0xFF, 200 / 4); /* 黑带（灰阶值 3） */
     }
-    ret = espaperplay_epd_refresh(gray, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_GRAY4);
+    ret = espaperplay_epd_refresh(gray, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_GRAY4);
     ESP_LOGI(TAG, "selftest: gray4 bands -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -962,8 +958,7 @@ out:
 
     /* 性能测试完成：刷成全白（FULL 清屏，黑像素深擦除）。 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: final white clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -979,8 +974,7 @@ out:
     vTaskDelay(pdMS_TO_TICKS(8000));
     espaperplay_epd_set_idle_sleep_timeout_ms(ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS); /* 恢复默认 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: wake refresh after idle sleep -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
@@ -1265,8 +1259,8 @@ esp_err_t espaperplay_epd_init(void) {
         ret = ESP_OK;
     }
 
-    ESP_LOGI(TAG, "EPD %ux%u initialized (SPI%d, %u Hz)", s_disp_w,
-             s_disp_h, (int)ESPAPERPLAY_SPI_HOST_ID, ESPAPERPLAY_EPD_SPI_CLK_HZ);
+    ESP_LOGI(TAG, "EPD %ux%u initialized (SPI%d, %u Hz)", s_disp_w, s_disp_h,
+             (int)ESPAPERPLAY_SPI_HOST_ID, ESPAPERPLAY_EPD_SPI_CLK_HZ);
 
 #if ESPAPERPLAY_EPD_ENABLE_SELFTEST
     xTaskCreate(epd_selftest_task, "epd_selftest", 4096, NULL, 5, NULL);
@@ -1293,8 +1287,7 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
     if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
         /* 局部窗口参数校验：x/width 8 对齐，窗口在屏内。 */
         if ((x & 7) != 0 || (width & 7) != 0 || width == 0 || height == 0 ||
-            (uint32_t)x + width > s_disp_w ||
-            (uint32_t)y + height > s_disp_h) {
+            (uint32_t)x + width > s_disp_w || (uint32_t)y + height > s_disp_h) {
             ESP_LOGE(TAG, "invalid partial window: x=%u y=%u w=%u h=%u", x, y, width, height);
             return ESP_ERR_INVALID_ARG;
         }

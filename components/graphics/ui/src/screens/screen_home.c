@@ -16,12 +16,12 @@
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_fonts.h"
+#include "espaperplay_power.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 #include "espaperplay_ui_touch.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
-#include "espaperplay_power.h"
 #include "icons_data.h"     /* 应用图标（Iconify -> LVGL A8 位图，生成文件） */
 #include "qweather_icons.h" /* 和风天气图标（QWeather-Icons -> LVGL A8，生成文件） */
 
@@ -102,22 +102,21 @@ static const home_app_t s_apps[HOME_APP_CNT] = {
 /* 页面状态                                                             */
 /* ------------------------------------------------------------------ */
 
-static lv_obj_t *s_status_time = NULL;      /*!< 状态栏：时间 */
-static lv_obj_t *s_status_wifi = NULL;      /*!< 状态栏：WiFi 状态 */
-static lv_obj_t *s_page0 = NULL;            /*!< 子页 0：时钟 + 应用 */
-static lv_obj_t *s_page1 = NULL;            /*!< 子页 1：时钟信息 */
-static lv_obj_t *s_clock_h = NULL;          /*!< 页 0 时钟：时（大字） */
-static lv_obj_t *s_clock_m = NULL;          /*!< 页 0 时钟：分（大字） */
-static lv_obj_t *s_week_label = NULL;       /*!< 页 0 时钟：星期（英文缩写） */
-static lv_obj_t *s_date_label = NULL;       /*!< 页 0 时钟：日期（M/D） */
-static lv_obj_t *s_app_cards[HOME_APP_CNT]; /*!< 应用卡片（命中检测用） */
-static lv_obj_t *s_app_icons[HOME_APP_CNT]; /*!< 应用卡片图标（动态换源用） */
-static lv_obj_t *s_clock_big = NULL;        /*!< 页 1：大时钟 */
-static lv_obj_t *s_info_date = NULL;        /*!< 页 1：日期 */
-static lv_obj_t *s_info_weather = NULL;     /*!< 页 1：天气摘要 */
-static lv_obj_t *s_info_footer = NULL;      /*!< 页 1：版本 / 堆 / 提示 */
-static lv_obj_t *s_dots[HOME_PAGE_CNT];     /*!< 页面指示点 */
-static lv_timer_t *s_timer = NULL;          /*!< 周期刷新定时器 */
+static lv_obj_t *s_page0 = NULL;                  /*!< 子页 0：时钟 + 应用 */
+static lv_obj_t *s_page1 = NULL;                  /*!< 子页 1：时钟信息 */
+static espaperplay_ui_status_bar_t *s_bar = NULL; /*!< 统一状态栏 */
+static lv_obj_t *s_clock_h = NULL;                /*!< 页 0 时钟：时（大字） */
+static lv_obj_t *s_clock_m = NULL;                /*!< 页 0 时钟：分（大字） */
+static lv_obj_t *s_week_label = NULL;             /*!< 页 0 时钟：星期（英文缩写） */
+static lv_obj_t *s_date_label = NULL;             /*!< 页 0 时钟：日期（M/D） */
+static lv_obj_t *s_app_cards[HOME_APP_CNT];       /*!< 应用卡片（命中检测用） */
+static lv_obj_t *s_app_icons[HOME_APP_CNT];       /*!< 应用卡片图标（动态换源用） */
+static lv_obj_t *s_clock_big = NULL;              /*!< 页 1：大时钟 */
+static lv_obj_t *s_info_date = NULL;              /*!< 页 1：日期 */
+static lv_obj_t *s_info_weather = NULL;           /*!< 页 1：天气摘要 */
+static lv_obj_t *s_info_footer = NULL;            /*!< 页 1：版本 / 堆 / 提示 */
+static lv_obj_t *s_dots[HOME_PAGE_CNT];           /*!< 页面指示点 */
+static lv_timer_t *s_timer = NULL;                /*!< 周期刷新定时器 */
 
 static int s_page = 0;                    /*!< 当前子页索引 */
 static bool s_touch_down = false;         /*!< 手势跟踪：按下状态 */
@@ -130,7 +129,6 @@ static espaperplay_weather_snapshot_t *s_weather_snap = NULL;
 
 /* ---- 各标签「上次已显示的文本」缓存：内容未变化时不重复 set_text，
  *      避免 LVGL 无效化 -> EPD 无谓局刷（秒级轮询下尤为关键）。 ---- */
-static char s_prev_status_time[8] = "";    /*!< 状态栏时间 HH:MM */
 static char s_prev_clock_h[4] = "";        /*!< 页 0 时钟：时 */
 static char s_prev_clock_m[4] = "";        /*!< 页 0 时钟：分 */
 static char s_prev_week[8] = "";           /*!< 页 0 时钟：星期（英文缩写） */
@@ -185,32 +183,9 @@ static const char *const s_weekday_zh[] = {"日", "一", "二", "三", "四", "�
 /* 状态栏                                                               */
 /* ------------------------------------------------------------------ */
 
-/** 状态栏：白底 + 底部 2px 分隔线；左侧时间（16px），右侧 WiFi 强度图标。 */
+/** 状态栏：统一状态栏（左侧时间、右侧 WiFi/睡眠图标，无标题）。 */
 static void home_status_bar_create(lv_obj_t *scr) {
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, LV_PCT(100), HOME_STATUS_H_PX);
-    lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 分隔线 */
-    lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, HOME_STATUS_H_PX - 2);
-    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-
-    s_status_time = home_label_create(bar, "--:--", 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_pos(s_status_time, 12, 4);
-
-    /* WiFi 强度图标（16x16 A8，A8 默认黑色绘制） */
-    s_status_wifi = lv_image_create(bar);
-    lv_image_set_src(s_status_wifi, &icon_wifi_off_16);
-    lv_obj_align(s_status_wifi, LV_ALIGN_TOP_RIGHT, -12, 7);
+    s_bar = espaperplay_ui_status_bar_create(scr, HOME_STATUS_H_PX, NULL, true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -329,8 +304,7 @@ static void home_page0_create(lv_obj_t *scr) {
         app_x = 0;
         const int avail_h = scr_h - HOME_STATUS_H_PX - 2 * clock_y;
         clock_h = home_clock_area_h(avail_h);
-        app_y = clock_y + clock_h +
-                (avail_h - clock_h - grid_h) / 2;
+        app_y = clock_y + clock_h + (avail_h - clock_h - grid_h) / 2;
         if (app_y < clock_y + clock_h) {
             app_y = clock_y + clock_h;
         }
@@ -428,40 +402,9 @@ static void home_refresh(void) {
     char buf[128];
     const struct tm *tm = home_local_time();
 
-    /* 状态栏时间 */
-    if (tm != NULL) {
-        snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-    } else {
-        snprintf(buf, sizeof(buf), "--:--");
-    }
-    home_label_update(s_status_time, s_prev_status_time, sizeof(s_prev_status_time), buf);
-
-    /* 状态栏 WiFi 强度图标：AP 热点 / STA 按 RSSI 分档 / 未连接 */
-    const lv_image_dsc_t *wifi_icon = &icon_wifi_off_16;
-    espaperplay_wifi_status_t ws;
-    if (espaperplay_wifi_get_status(&ws) == ESP_OK && ws.started) {
-        if (ws.mode == ESPAPERPLAY_WIFI_MODE_AP) {
-            wifi_icon = &icon_wifi_ap_16;
-        } else if (ws.connected) {
-            int rssi = 0;
-            if (espaperplay_wifi_get_rssi(&rssi) == ESP_OK) {
-                if (rssi >= -50) {
-                    wifi_icon = &icon_wifi4_16;
-                } else if (rssi >= -60) {
-                    wifi_icon = &icon_wifi3_16;
-                } else if (rssi >= -70) {
-                    wifi_icon = &icon_wifi2_16;
-                } else {
-                    wifi_icon = &icon_wifi1_16;
-                }
-            } else {
-                wifi_icon = &icon_wifi_16; /* 已连接但 RSSI 不可得 */
-            }
-        }
-    }
-    if (lv_image_get_src(s_status_wifi) != (const void *)wifi_icon) {
-        lv_image_set_src(s_status_wifi, wifi_icon);
-    }
+    /* 统一状态栏（时间 / WiFi / 睡眠图标）由统一调度定时器周期刷新；
+     * 此处立即刷新一次，确保返回主界面时即时显示。 */
+    espaperplay_ui_status_bar_refresh(s_bar);
 
     /* 页 0 时钟区：时 / 分 / 星期 / 日期 */
     if (tm != NULL) {
@@ -612,7 +555,6 @@ static void home_enter(void) {
     }
 
     /* 标签为本次进入新建（初始占位文本）：清空文本缓存，首次刷新强制落数据。 */
-    s_prev_status_time[0] = '\0';
     s_prev_clock_h[0] = '\0';
     s_prev_clock_m[0] = '\0';
     s_prev_week[0] = '\0';

@@ -71,34 +71,32 @@ static const char *TAG = "ESPaperPlay_UI";
  * 黑字、圆角卡片（与屏幕边缘保持间距）。
  */
 
-#define SETTINGS_EDGE_PX 48       /* 边缘滑动触发宽度（物理手势，不缩放） */
-#define SETTINGS_EDGE_SWIPE_PX 70 /* 边缘向内滑动位移阈值（不缩放） */
-#define SETTINGS_SWIPE_PX 90      /* 分页切换位移阈值（不缩放） */
-#define SETTINGS_CLICK_MAX_PX 15  /* 点击允许的最大位移（防抖，不缩放） */
+#define SETTINGS_EDGE_PX 48           /* 边缘滑动触发宽度（物理手势，不缩放） */
+#define SETTINGS_EDGE_SWIPE_PX 70     /* 边缘向内滑动位移阈值（不缩放） */
+#define SETTINGS_SWIPE_PX 90          /* 分页切换位移阈值（不缩放） */
+#define SETTINGS_CLICK_MAX_PX 15      /* 点击允许的最大位移（防抖，不缩放） */
 #define SETTINGS_SWIPE_MIN_RATIO 1.2f /* 横向位移 / 纵向位移 最小比例 */
-#define SETTINGS_MARGIN 16        /* 卡片与屏幕边缘间距 */
-#define SETTINGS_UI_PERIOD_MS 5000 /* 周期刷新（Web 端改配置后同步显示） */
+#define SETTINGS_MARGIN 16            /* 卡片与屏幕边缘间距 */
+#define SETTINGS_UI_PERIOD_MS 5000    /* 周期刷新（Web 端改配置后同步显示） */
 
 /* ---- 尺寸缩放（方案 1：行高/间距按屏高缩放，支持横屏与小屏） ----
  * 基准逻辑高度 800px（本项目竖屏 480x800）。所有垂直尺寸按
  * scale = scr_h / 800 缩放并设最小下限（保证 16px 字号可读）；
  * 宽度方向本就按 scr_w 自适应。字号保持固定档位（16/20/24/32），
  * 避免 FreeType 缓存（6 项）被缩放字号挤爆。 */
-#define SETTINGS_REF_H 800 /* 基准逻辑高度（缩放参考） */
-#define SETTINGS_BAR_H 30  /* 标题栏高度（基准） */
-#define SETTINGS_SECTION_TITLE_H 32 /* 大类标题区高度（基准） */
+#define SETTINGS_REF_H 800           /* 基准逻辑高度（缩放参考） */
+#define SETTINGS_BAR_H 30            /* 标题栏高度（基准） */
+#define SETTINGS_SECTION_TITLE_H 32  /* 大类标题区高度（基准） */
 #define SETTINGS_SUBGROUP_TITLE_H 28 /* 子类标题区高度（基准） */
-#define SETTINGS_HINT_H 30        /* 页底提示区高度（基准） */
-#define SETTINGS_ROW_H 52         /* 设置行高度（基准） */
-#define SETTINGS_MIN_H 24         /* 标题/提示区最小高度（16px 字行高约 19px） */
-#define SETTINGS_MIN_ROW_H 40     /* 行最小高度 */
+#define SETTINGS_HINT_H 30           /* 页底提示区高度（基准） */
+#define SETTINGS_ROW_H 52            /* 设置行高度（基准） */
+#define SETTINGS_MIN_H 24            /* 标题/提示区最小高度（16px 字行高约 19px） */
+#define SETTINGS_MIN_ROW_H 40        /* 行最小高度 */
 
 static float s_scale = 1.0f; /*!< 屏高缩放因子（settings_enter 时按 scr_h 计算） */
 
 /** 基准值按屏高缩放（取整）。 */
-static int settings_scaled(int v) {
-    return (int)(v * s_scale);
-}
+static int settings_scaled(int v) { return (int)(v * s_scale); }
 
 /** 标题栏高度（缩放 + 下限）。 */
 static int settings_bar_h(void) {
@@ -132,8 +130,8 @@ static int settings_row_h(void) {
 
 #define SETTINGS_FONT_MAX 16 /* 字体列表上限（内置 + SD 卡） */
 
-#define SETTINGS_FONT_NAME                                                                        \
-    (espaperplay_system_get_config()                                                              \
+#define SETTINGS_FONT_NAME                                                                         \
+    (espaperplay_system_get_config()                                                               \
          ->selected_font) /* 当前选用字体（SD 优先，缺则回退 Flash 子集） */
 
 /* ------------------------------------------------------------------ */
@@ -150,18 +148,18 @@ typedef enum {
 } settings_row_type_t;
 
 typedef struct {
-    const char *name;                  /*!< 设置项名称 */
-    settings_row_type_t type;          /*!< 行类型 */
-    lv_obj_t *row_obj;                 /*!< 行对象（命中检测用，构建时填充） */
-    lv_obj_t *value_label;             /*!< 值标签（构建时填充） */
-    int32_t min, max, step;            /*!< STEPPER：范围与步进 */
-    int32_t (*get_value)(void);        /*!< STEPPER/CYCLE：读取当前值 */
-    esp_err_t (*set_value)(int32_t);   /*!< STEPPER/CYCLE：写入新值 */
+    const char *name;                                     /*!< 设置项名称 */
+    settings_row_type_t type;                             /*!< 行类型 */
+    lv_obj_t *row_obj;                                    /*!< 行对象（命中检测用，构建时填充） */
+    lv_obj_t *value_label;                                /*!< 值标签（构建时填充） */
+    int32_t min, max, step;                               /*!< STEPPER：范围与步进 */
+    int32_t (*get_value)(void);                           /*!< STEPPER/CYCLE：读取当前值 */
+    esp_err_t (*set_value)(int32_t);                      /*!< STEPPER/CYCLE：写入新值 */
     void (*fmt_value)(int32_t v, char *buf, size_t size); /*!< 格式化值显示 */
-    const char *const *options;        /*!< CYCLE：选项文本 */
-    int option_count;                  /*!< CYCLE：选项数 */
-    bool apply_wifi;                   /*!< CYCLE：切换后重新应用 WiFi（WiFi 模式） */
-    void (*on_action)(void);           /*!< ACTION：点击回调 */
+    const char *const *options;                           /*!< CYCLE：选项文本 */
+    int option_count;                                     /*!< CYCLE：选项数 */
+    bool apply_wifi;         /*!< CYCLE：切换后重新应用 WiFi（WiFi 模式） */
+    void (*on_action)(void); /*!< ACTION：点击回调 */
 } settings_row_t;
 
 /* ---- 设备组：显示 ---- */
@@ -217,8 +215,7 @@ static int32_t settings_get_boot_lp_action(void) {
 }
 
 static esp_err_t settings_set_boot_lp_action(int32_t v) {
-    return espaperplay_system_set_boot_long_press_action(
-        (espaperplay_boot_long_press_action_t)v);
+    return espaperplay_system_set_boot_long_press_action((espaperplay_boot_long_press_action_t)v);
 }
 
 static void settings_fmt_boot_lp_action(int32_t v, char *buf, size_t size) {
@@ -316,25 +313,45 @@ static void settings_fmt_weather_host(int32_t v, char *buf, size_t size) {
 /* 行定义（顺序与分页一致，见 s_pages）。 */
 static settings_row_t s_rows[] = {
     /* 设备：显示 */
-    {.name = "屏幕空闲自动睡眠", .type = SETTINGS_ROW_STEPPER, .min = 0, .max = 86400, .step = 30,
-     .get_value = settings_get_sleep_timeout, .set_value = settings_set_sleep_timeout,
+    {.name = "屏幕空闲自动睡眠",
+     .type = SETTINGS_ROW_STEPPER,
+     .min = 0,
+     .max = 86400,
+     .step = 30,
+     .get_value = settings_get_sleep_timeout,
+     .set_value = settings_set_sleep_timeout,
      .fmt_value = settings_fmt_sleep_timeout},
-    {.name = "连续局刷强制全刷", .type = SETTINGS_ROW_STEPPER, .min = 0, .max = 255, .step = 1,
-     .get_value = settings_get_full_force, .set_value = settings_set_full_force,
+    {.name = "连续局刷强制全刷",
+     .type = SETTINGS_ROW_STEPPER,
+     .min = 0,
+     .max = 255,
+     .step = 1,
+     .get_value = settings_get_full_force,
+     .set_value = settings_set_full_force,
      .fmt_value = settings_fmt_full_force},
     /* 设备：按键 */
-    {.name = "BOOT 键长按动作", .type = SETTINGS_ROW_CYCLE,
-     .get_value = settings_get_boot_lp_action, .set_value = settings_set_boot_lp_action,
-     .fmt_value = settings_fmt_boot_lp_action, .options = s_boot_lp_options,
+    {.name = "BOOT 键长按动作",
+     .type = SETTINGS_ROW_CYCLE,
+     .get_value = settings_get_boot_lp_action,
+     .set_value = settings_set_boot_lp_action,
+     .fmt_value = settings_fmt_boot_lp_action,
+     .options = s_boot_lp_options,
      .option_count = (int)(sizeof(s_boot_lp_options) / sizeof(s_boot_lp_options[0]))},
-    {.name = "BOOT 键长按判定时间", .type = SETTINGS_ROW_STEPPER,
+    {.name = "BOOT 键长按判定时间",
+     .type = SETTINGS_ROW_STEPPER,
      .min = (int32_t)ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MIN_MS,
-     .max = (int32_t)ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS, .step = 100,
-     .get_value = settings_get_boot_lp_time, .set_value = settings_set_boot_lp_time,
+     .max = (int32_t)ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS,
+     .step = 100,
+     .get_value = settings_get_boot_lp_time,
+     .set_value = settings_set_boot_lp_time,
      .fmt_value = settings_fmt_boot_lp_time},
     /* 系统：网络 */
-    {.name = "WiFi 模式", .type = SETTINGS_ROW_CYCLE, .apply_wifi = true,
-     .get_value = settings_get_wifi_mode, .set_value = NULL, .fmt_value = settings_fmt_wifi_mode,
+    {.name = "WiFi 模式",
+     .type = SETTINGS_ROW_CYCLE,
+     .apply_wifi = true,
+     .get_value = settings_get_wifi_mode,
+     .set_value = NULL,
+     .fmt_value = settings_fmt_wifi_mode,
      .options = s_wifi_mode_options,
      .option_count = (int)(sizeof(s_wifi_mode_options) / sizeof(s_wifi_mode_options[0]))},
     {.name = "WiFi 凭据", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_wifi_cred},
@@ -400,16 +417,17 @@ static int s_page_count = 0; /*!< 实际分页数 */
 /* 页面状态                                                             */
 /* ------------------------------------------------------------------ */
 
-static lv_obj_t *s_page_objs[SETTINGS_PAGE_MAX]; /*!< 分页容器 */
-static lv_obj_t *s_dots[SETTINGS_PAGE_MAX];      /*!< 页面指示点 */
-static int s_page = 0;                           /*!< 当前分页索引 */
-static lv_timer_t *s_timer = NULL;               /*!< 周期刷新定时器 */
-static lv_obj_t *s_modal = NULL;                 /*!< 模态覆盖层（NULL=未打开） */
-static settings_row_t *s_modal_row = NULL;       /*!< 模态正在编辑的行 */
-static int32_t s_modal_value = 0;                /*!< 模态编辑中的值 */
-static lv_obj_t *s_modal_value_label = NULL;     /*!< 模态中的值标签 */
-static settings_row_t *s_confirm_row = NULL;     /*!< 确认模态目标行 */
-static int32_t s_confirm_value = 0;              /*!< 确认模态目标值 */
+static lv_obj_t *s_page_objs[SETTINGS_PAGE_MAX];  /*!< 分页容器 */
+static lv_obj_t *s_dots[SETTINGS_PAGE_MAX];       /*!< 页面指示点 */
+static int s_page = 0;                            /*!< 当前分页索引 */
+static lv_timer_t *s_timer = NULL;                /*!< 周期刷新定时器 */
+static lv_obj_t *s_modal = NULL;                  /*!< 模态覆盖层（NULL=未打开） */
+static settings_row_t *s_modal_row = NULL;        /*!< 模态正在编辑的行 */
+static int32_t s_modal_value = 0;                 /*!< 模态编辑中的值 */
+static lv_obj_t *s_modal_value_label = NULL;      /*!< 模态中的值标签 */
+static settings_row_t *s_confirm_row = NULL;      /*!< 确认模态目标行 */
+static int32_t s_confirm_value = 0;               /*!< 确认模态目标值 */
+static espaperplay_ui_status_bar_t *s_bar = NULL; /*!< 统一状态栏 */
 
 /* 字体列表（模态构建时收集：出厂内置 + SD 卡）。 */
 static char s_font_names[SETTINGS_FONT_MAX][ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN];
@@ -498,6 +516,9 @@ static void settings_refresh_all(void) {
     for (int i = 0; i < SETTINGS_ROW_CNT; i++) {
         settings_row_refresh(&s_rows[i]);
     }
+    /* 统一状态栏（时间/WiFi/睡眠图标）由统一调度定时器周期刷新；此处
+     * 立即刷新一次，确保进入设置页时即时显示。 */
+    espaperplay_ui_status_bar_refresh(s_bar);
 }
 
 /** 查找指定类型的行（模态修改后刷新对应行用）。 */
@@ -531,9 +552,9 @@ typedef enum {
 } settings_op_type_t;
 
 typedef struct {
-    settings_op_type_t type; /*!< 操作类型 */
-    settings_row_t *row;     /*!< 目标行（静态数据，跨任务安全） */
-    int32_t value;           /*!< STEPPER/CYCLE/WIFI_MODE 新值 */
+    settings_op_type_t type;                              /*!< 操作类型 */
+    settings_row_t *row;                                  /*!< 目标行（静态数据，跨任务安全） */
+    int32_t value;                                        /*!< STEPPER/CYCLE/WIFI_MODE 新值 */
     char font_name[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN]; /*!< FONT：字体文件名 */
 } settings_op_t;
 
@@ -642,8 +663,7 @@ static void settings_row_create(lv_obj_t *parent, settings_row_t *row, int x, in
 }
 
 /** 大类标题：居中文字 + 两侧横线（横线分隔符形式，flex 布局）。 */
-static void settings_section_title_create(lv_obj_t *parent, const char *text, int x, int y,
-                                          int w) {
+static void settings_section_title_create(lv_obj_t *parent, const char *text, int x, int y, int w) {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_set_size(row, w, settings_section_title_h());
     lv_obj_set_pos(row, x, y);
@@ -653,8 +673,7 @@ static void settings_section_title_create(lv_obj_t *parent, const char *text, in
     lv_obj_set_style_pad_all(row, 0, 0);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     /* 左横线（flex 伸展占满剩余空间） */
     lv_obj_t *l = lv_obj_create(row);
@@ -1059,8 +1078,7 @@ static bool settings_font_ext_ok(const char *name) {
 /** 收集字体列表：出厂内置 + SD 卡（/sdcard/system/fonts/）。 */
 static void settings_font_collect(void) {
     s_font_count = 0;
-    strlcpy(s_font_names[s_font_count++], ESPAPERPLAY_FONTS_DEFAULT_NAME,
-            sizeof(s_font_names[0]));
+    strlcpy(s_font_names[s_font_count++], ESPAPERPLAY_FONTS_DEFAULT_NAME, sizeof(s_font_names[0]));
 
     if (espaperplay_storage_is_mounted()) {
         DIR *d = opendir(ESPAPERPLAY_FONTS_SD_DIR);
@@ -1169,8 +1187,7 @@ static void settings_font_modal_open(void) {
         lv_obj_set_style_pad_all(item, 0, 0);
         lv_obj_remove_flag(item, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(item, settings_font_item_cb, LV_EVENT_CLICKED,
-                            (void *)s_font_names[i]);
+        lv_obj_add_event_cb(item, settings_font_item_cb, LV_EVENT_CLICKED, (void *)s_font_names[i]);
 
         lv_obj_t *label = lv_label_create(item);
         lv_label_set_text(label, s_font_names[i]);
@@ -1303,23 +1320,8 @@ static void settings_enter(void) {
     s_scale = (float)scr_h / (float)SETTINGS_REF_H;
     const int bar_h = settings_bar_h();
 
-    /* 标题栏：设置 居中 */
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, LV_PCT(100), bar_h);
-    lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, bar_h - 2);
-    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_t *title = settings_label_create(bar, "设置", 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, 3);
+    /* 统一状态栏：左侧时间、居中"设置"、右侧 WiFi/睡眠图标 */
+    s_bar = espaperplay_ui_status_bar_create(scr, bar_h, "设置", false);
 
     /* 分页容器（标题栏下方，底部留指示点空间） */
     const int area_y = bar_h;
@@ -1347,8 +1349,7 @@ static void settings_enter(void) {
     for (int i = 0; i < s_page_count; i++) {
         s_dots[i] = lv_obj_create(scr);
         lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (s_page_count - 1) / 2) * 24 - 5,
-                       scr_h - 18);
+        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (s_page_count - 1) / 2) * 24 - 5, scr_h - 18);
         lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(s_dots[i], 1, 0);
         lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);

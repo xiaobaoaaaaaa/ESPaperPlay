@@ -33,7 +33,8 @@ static esp_event_handler_instance_t s_ip_event_instance = NULL;
 static bool s_started = false;        /*!< WiFi 驱动是否已启动 */
 static bool s_connected = false;      /*!< 网络是否可用（AP：热点已开；STA：已获取 IP） */
 static bool s_auto_reconnect = false; /*!< STA 断线后是否自动重连 */
-static bool s_sleep_suppress_reconnect = false; /*!< 睡眠期间抑制自动重连（主动断开后由电源管理控制） */
+static bool s_sleep_suppress_reconnect =
+    false; /*!< 睡眠期间抑制自动重连（主动断开后由电源管理控制） */
 static espaperplay_wifi_mode_t s_mode = ESPAPERPLAY_WIFI_MODE_AP; /*!< 当前工作模式 */
 static char s_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = "";         /*!< 当前 SSID */
 static char s_ip[16] = "0.0.0.0";                                 /*!< 当前 IP */

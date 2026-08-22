@@ -68,6 +68,11 @@ static uint16_t s_touch_seq = 0; /*!< 触摸帧序号（每帧递增，同帧各
  * 供电源管理判断"无操作"超时。非原子读写（仅用于超时比较，误差可忽略）。 */
 static uint64_t s_last_activity_ms = 0;
 
+/* "设备已进入睡眠"指示标志：电源管理在即将睡眠前置位、用户唤醒后清除。
+ * UI 各页面据此在状态栏显示节能图标。存于 input 组件以避免 power↔ui
+ * REQUIRES 环（ui 已 REQUIRES power）。 */
+static bool s_sleep_indicator = false;
+
 /** 记录一次用户活动（刷新活动时间戳）。 */
 static inline void input_mark_activity(void) {
     s_last_activity_ms = (uint64_t)(esp_timer_get_time() / 1000);
@@ -225,9 +230,9 @@ esp_err_t espaperplay_input_init(void) {
     s_key_queue = xQueueCreate(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN, sizeof(espaperplay_input_event_t));
     s_touch_queue =
         xQueueCreate(ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN, sizeof(espaperplay_input_event_t));
-    s_queue_set = xQueueCreateSet(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN +
-                                  ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN +
-                                  ESPAPERPLAY_INPUT_QUEUE_SET_SLACK);
+    s_queue_set =
+        xQueueCreateSet(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN + ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN +
+                        ESPAPERPLAY_INPUT_QUEUE_SET_SLACK);
     if (s_key_queue == NULL || s_touch_queue == NULL || s_queue_set == NULL) {
         ESP_LOGE(TAG, "failed to create input queues / queue set");
         if (s_key_queue != NULL) {
@@ -328,13 +333,13 @@ esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t
     return ESP_ERR_TIMEOUT; /* select 返回非空后理论上必可取到 */
 }
 
-uint64_t espaperplay_input_get_last_activity_ms(void) {
-    return s_last_activity_ms;
-}
+uint64_t espaperplay_input_get_last_activity_ms(void) { return s_last_activity_ms; }
 
-void espaperplay_input_mark_activity(void) {
-    input_mark_activity();
-}
+void espaperplay_input_mark_activity(void) { input_mark_activity(); }
+
+void espaperplay_input_set_sleep_indicator(bool shown) { s_sleep_indicator = shown; }
+
+bool espaperplay_input_is_sleep_indicator(void) { return s_sleep_indicator; }
 
 const char *espaperplay_input_key_action_str(espaperplay_input_key_action_t action) {
     switch (action) {

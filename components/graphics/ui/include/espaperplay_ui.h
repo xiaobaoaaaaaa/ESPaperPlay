@@ -12,6 +12,8 @@ extern "C" {
 
 #include "esp_err.h"
 
+#include "lvgl.h"
+
 #include "espaperplay_input.h"
 
 /**
@@ -58,8 +60,9 @@ void espaperplay_ui_home_show(void);
 typedef struct {
     void (*enter)(void); /*!< 进入页面：构建内容（LVGL 线程内） */
     void (*exit)(void);  /*!< 退出页面：清理资源（LVGL 线程内，可 NULL） */
-    void (*on_key)(const espaperplay_input_event_t *event);   /*!< 按键事件（LVGL 线程内，可 NULL） */
-    void (*on_touch)(const espaperplay_input_event_t *event); /*!< 触摸事件（LVGL 线程内，可 NULL） */
+    void (*on_key)(const espaperplay_input_event_t *event); /*!< 按键事件（LVGL 线程内，可 NULL） */
+    void (*on_touch)(
+        const espaperplay_input_event_t *event); /*!< 触摸事件（LVGL 线程内，可 NULL） */
 } espaperplay_ui_page_t;
 
 #define ESPAPERPLAY_UI_PAGE_MAX 8 /*!< 页面栈最大深度 */
@@ -146,13 +149,74 @@ esp_err_t espaperplay_ui_key_input_start(void);
  */
 uint8_t espaperplay_ui_page_depth(void);
 
+/**
+ * @brief 统一状态栏（顶栏）句柄（不透明）。
+ *
+ * 各页面（测试页除外）共用同一套顶栏逻辑：左侧时间、居中标题、右侧
+ * WiFi 强度图标与睡眠/节能指示图标。由 espaperplay_ui_status_bar_create()
+ * 创建，espaperplay_ui_status_bar_refresh() 刷新。睡眠图标位置随右侧图标
+ * 数量动态调整（仅 WiFi 时靠右；叠加睡眠图标时睡眠图标左移）。
+ */
+typedef struct espaperplay_ui_status_bar_t espaperplay_ui_status_bar_t;
+
+/**
+ * @brief 创建统一状态栏（顶栏）。
+ *
+ * 白底 + 底部 2px 分隔线；左侧时间（HH:MM，16px），居中标题（20px，可空），
+ * 右侧 WiFi 强度图标与睡眠/节能指示图标（默认隐藏）。睡眠图标位置随右侧
+ * 图标数量动态调整。创建后自动登记为"当前页状态栏"，由统一调度定时器
+ * 周期刷新（见 espaperplay_ui_status_bar_init）。
+ *
+ * @param scr         屏幕对象（页面 enter 时由页面栈清空后的活动屏幕）。
+ * @param height_px  状态栏高度（像素）。
+ * @param title      居中标题文本（NULL 或空串表示不显示标题，如主界面）。
+ * @param live_clock 睡眠期间时钟是否仍实时更新（true=主界面，有分钟对齐
+ *                   定时器唤醒；false=其他页面，无定时器唤醒，睡眠时时钟
+ *                   冻结，故睡眠指示期间隐藏为 "--:--" 以免误导）。
+ * @return 状态栏句柄（供刷新/设标题用），失败返回 NULL。
+ */
+espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int height_px,
+                                                              const char *title, bool live_clock);
+
+/**
+ * @brief 刷新统一状态栏（时间 / WiFi / 睡眠图标）。
+ *
+ * 内容未变化时不触发 LVGL 重绘，故不会造成无谓 EPD 局刷。睡眠图标按当前
+ * 睡眠指示标志显隐，位置随右侧图标数量动态调整。由统一调度定时器周期调用，
+ * 确保睡眠指示在标志变化后 ~1s 内更新（不受各页面自身刷新间隔影响）。
+ *
+ * @param bar 状态栏句柄（可 NULL）。
+ */
+void espaperplay_ui_status_bar_refresh(espaperplay_ui_status_bar_t *bar);
+
+/**
+ * @brief 设置/更新状态栏居中标题（内容变化时才重绘）。
+ *
+ * 供动态标题页（如天气页显示位置名）在内容就绪时调用；统一调度定时器也会
+ * 周期性重绘（内容不变则不重绘）。
+ *
+ * @param bar   状态栏句柄（可 NULL）。
+ * @param title 标题文本（NULL 视为空串）。
+ */
+void espaperplay_ui_status_bar_set_title(espaperplay_ui_status_bar_t *bar, const char *title);
+
+/**
+ * @brief 初始化统一状态栏调度（UI 初始化时调用一次）。
+ *
+ * 创建周期刷新定时器（1s）统一刷新当前页状态栏，并注册进睡前准备回调
+ * （供电源管理在进睡前触发图标绘制与 EPD 刷新等待）。须在 LVGL 启动后调用。
+ */
+void espaperplay_ui_status_bar_init(void);
+
 /** 主界面页面实例（screen_home.c）。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
 
-/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键/触摸事件显示 + 可点击返回按钮，双击旋转屏幕，长按返回。 */
+/** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键/触摸事件显示 +
+ * 可点击返回按钮，双击旋转屏幕，长按返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_test;
 
-/** 天气页页面实例（screen_weather.c）：展示和风天气快照（实时 / 3 日预报 / 空气 / 天文 / 降水 / 预警），单击返回。 */
+/** 天气页页面实例（screen_weather.c）：展示和风天气快照（实时 / 3 日预报 / 空气 / 天文 / 降水 /
+ * 预警），单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_weather;
 
 /** 阅读器页页面实例（screen_reader.c）：占位页（FreeType 中文标题 + 即将推出提示），单击返回。 */

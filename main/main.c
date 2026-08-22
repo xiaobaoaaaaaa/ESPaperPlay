@@ -119,7 +119,7 @@ void app_main(void) {
     /* 电源管理：配置浅睡眠唤醒源（触摸 INT / BOOT 按键 / UART），
      * 并启动自动浅睡眠管理任务（无用户操作超时后进入 light sleep）。 */
     const espaperplay_wakeup_config_t wakeup_cfg = {
-        .enable_timer = false,  /*!< 默认不启用定时器唤醒（睡眠期间不服务 Web） */
+        .enable_timer = false, /*!< 默认不启用定时器唤醒（睡眠期间不服务 Web） */
         .wakeup_timeout_ms = 0,
         .enable_gpio = true,
         .gpio_num = -1,
@@ -131,6 +131,8 @@ void app_main(void) {
     /* 应用"连续局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
     espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
     ESP_ERROR_CHECK(espaperplay_gui_lv_start()); /* LVGL 移植层：初始化 + 渲染任务 */
+    /* 初始化统一状态栏调度（1s 周期刷新 + 进睡前准备回调注册）。 */
+    espaperplay_ui_status_bar_init();
     /* 字体资产：映射 fonts 分区并注册 LVGL 盘符（需在 LVGL 初始化之后）。 */
     ESP_ERROR_CHECK(espaperplay_fonts_init());
     ESP_ERROR_CHECK(espaperplay_ui_page_push(&espaperplay_ui_page_home)); /* 主界面入栈 */

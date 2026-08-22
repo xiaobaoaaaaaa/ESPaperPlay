@@ -16,12 +16,12 @@
 #include "esp_sleep.h"
 #include "esp_timer.h"
 
+#include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
 #include "espaperplay_wifi.h"
-#include "espaperplay_clock.h"
 
 static const char *TAG = "ESPaperPlay_POWER";
 
@@ -48,12 +48,17 @@ static const char *TAG = "ESPaperPlay_POWER";
 /* NTP 对时/标定超时（毫秒）：用户唤醒与周期标定重连后等待 NTP 同步的最长时间。 */
 #define ESPAPERPLAY_POWER_NTP_TIMEOUT_MS 8000
 
+/* 进睡/唤醒后等待状态栏图标落屏的窗口（毫秒）：睡眠图标与 WiFi 图标走同一
+ * 局部刷新路径，由状态栏 1s 定时器驱动；进睡前置位标志、唤醒后清除标志，
+ * 各留出约 2s 让定时器把图标显隐真正绘制到屏上，再正式睡眠/重连。 */
+#define ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS 2000
+
 static uint32_t s_auto_sleep_timeout_ms = ESPAPERPLAY_POWER_AUTO_SLEEP_TIMEOUT_MS;
-static uint32_t s_periodic_wakeup_ms = 0; /*!< 周期定时器唤醒间隔（0=关闭） */
+static uint32_t s_periodic_wakeup_ms = 0;             /*!< 周期定时器唤醒间隔（0=关闭） */
 static bool s_periodic_wakeup_minute_aligned = false; /*!< 周期唤醒对齐到分钟边界 */
 static bool s_auto_sleep_started = false;
 static bool s_wakeup_configured = false;
-static bool s_wake_was_timer = false;     /*!< 上次唤醒是否由定时器触发 */
+static bool s_wake_was_timer = false; /*!< 上次唤醒是否由定时器触发 */
 
 esp_err_t espaperplay_power_init(void) {
     ESP_LOGI(TAG, "Power management init");
@@ -120,7 +125,8 @@ esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *
      * （esp_sleep_enable_timer_wakeup 为一次性，唤醒后需重设）。 */
     if (config->enable_timer && config->wakeup_timeout_ms > 0) {
         s_periodic_wakeup_ms = config->wakeup_timeout_ms;
-        ESP_LOGI(TAG, "timer wakeup configured: %u ms (periodic)", (unsigned)config->wakeup_timeout_ms);
+        ESP_LOGI(TAG, "timer wakeup configured: %u ms (periodic)",
+                 (unsigned)config->wakeup_timeout_ms);
     }
 
     s_wakeup_configured = true;
@@ -168,7 +174,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
                  * 周期定时器在边界后立刻触发 home_refresh 刷新时钟。 */
                 int sec = (int)(now % 60);
                 int ms_to_boundary = ((60 - sec) % 60) * 1000; /* 0..59000 */
-                int wake_ms = ms_to_boundary - 500;             /* -500..58500 */
+                int wake_ms = ms_to_boundary - 500;            /* -500..58500 */
                 if (wake_ms < 500) {
                     wake_ms += 60000; /* 边界临近或刚过：顺延至下一分钟 */
                 }
@@ -265,6 +271,12 @@ static void power_auto_sleep_task(void *arg) {
         if (idle_ms >= threshold) {
             ESP_LOGI(TAG, "idle %llu ms >= threshold %u ms -> light sleep", idle_ms,
                      (unsigned)threshold);
+            espaperplay_input_set_sleep_indicator(true);
+            /* 先断开 WiFi（睡眠期间 modem 断电，无法保活），再留出约 2s 窗口
+             * 让状态栏定时器把睡眠图标绘制到屏上（与 WiFi 图标同一局部刷新
+             * 路径），随后才正式进入浅睡眠（睡眠期间屏幕冻结）。 */
+            espaperplay_wifi_suspend_for_sleep();
+            vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS));
             espaperplay_power_enter_light_sleep();
 
             if (s_wake_was_timer) {
@@ -315,6 +327,10 @@ static void power_auto_sleep_task(void *arg) {
                 if (rs != ESP_OK) {
                     ESP_LOGW(TAG, "user-wake NTP resync failed: %s", esp_err_to_name(rs));
                 }
+                /* 立即清除睡眠指示：状态栏 1s 定时器随即把图标隐藏（与 WiFi
+                 * 图标同一局部刷新路径），无需额外等待，避免图标滞后数秒。
+                 * 定时器唤醒不清除，图标在睡眠期间持续显示。 */
+                espaperplay_input_set_sleep_indicator(false);
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_WAKE_GRACE_MS));
                 espaperplay_input_mark_activity();
             }

@@ -57,6 +57,7 @@ SMALL_ICONS = [
     ("mdi", "gauge", "pressure", "气压"),
     ("mdi", "eye-outline", "visibility", "能见度"),
     ("mdi", "thermometer", "thermo", "体感"),
+    ("mdi", "leaf", "leaf", "节能/睡眠指示"),
 ]
 
 

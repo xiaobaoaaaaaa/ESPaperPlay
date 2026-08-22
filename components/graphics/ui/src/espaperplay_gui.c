@@ -17,6 +17,8 @@
 #include "espaperplay_config.h"
 #include "espaperplay_display.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_input.h"
+#include "icons_data.h"
 
 static const char *TAG = "ESPaperPlay_GUI";
 
@@ -25,13 +27,13 @@ static const char *TAG = "ESPaperPlay_GUI";
  * ==================================================================== */
 
 /* 显示参数（运行时，来自 espaperplay_display；gui_init 时读取） */
-static uint16_t s_disp_w = 0; /*!< 显示区宽度（像素） */
-static uint16_t s_disp_h = 0; /*!< 显示区高度（像素） */
-static uint32_t s_fb_pixels = 0;      /*!< 全屏像素数 w*h */
-static size_t s_fb_rgb_bytes = 0;     /*!< RGB565 主帧字节数 w*h*2 */
-static size_t s_fb_bw_bytes = 0;      /*!< 1bpp 帧字节数 w*h/8 */
-static size_t s_fb_gray4_bytes = 0;   /*!< 2bpp 帧字节数 w*h/4 */
-static size_t s_stride_rgb = 0;       /*!< 主帧行字节数 w*2 */
+static uint16_t s_disp_w = 0;       /*!< 显示区宽度（像素） */
+static uint16_t s_disp_h = 0;       /*!< 显示区高度（像素） */
+static uint32_t s_fb_pixels = 0;    /*!< 全屏像素数 w*h */
+static size_t s_fb_rgb_bytes = 0;   /*!< RGB565 主帧字节数 w*h*2 */
+static size_t s_fb_bw_bytes = 0;    /*!< 1bpp 帧字节数 w*h/8 */
+static size_t s_fb_gray4_bytes = 0; /*!< 2bpp 帧字节数 w*h/4 */
+static size_t s_stride_rgb = 0;     /*!< 主帧行字节数 w*2 */
 
 /* ====================================================================
  * 内部状态
@@ -261,14 +263,12 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->force_full = false;
     } else {
         /* 无论脏区面积大小：只要连续局刷已达满阈值，本次就强制全刷清残影。 */
-        const bool do_force =
-            s_full_force_after > 0 && s_partial_count >= s_full_force_after;
+        const bool do_force = s_full_force_after > 0 && s_partial_count >= s_full_force_after;
 
         op->type = GUI_OP_FRAME;
         if (do_force) {
             /* 连续局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
-            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h,
-                           stage_bw);
+            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage_bw);
             op->stage = stage_bw;
             op->force_full = true;
             op->reset_count = true;
@@ -337,9 +337,8 @@ static esp_err_t gui_execute_op(const gui_op_t *op) {
  * 渲染端合并进另一槽的帧只会计数，不会再排队下一个 force。
  */
 static void gui_count_executed(const gui_op_t *op) {
-    const bool plain_partial = op->type == GUI_OP_FRAME &&
-                               op->color == ESPAPERPLAY_GUI_COLOR_BW && !op->force_full &&
-                               !op->reset_count;
+    const bool plain_partial = op->type == GUI_OP_FRAME && op->color == ESPAPERPLAY_GUI_COLOR_BW &&
+                               !op->force_full && !op->reset_count;
     if (plain_partial) {
         if (s_full_force_after > 0 && s_partial_count < s_full_force_after) {
             s_partial_count++;
@@ -511,13 +510,11 @@ static void gui_selftest_task(void *arg) {
     {
         int64_t t0;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
-                       s_stage_a_bw);
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h, s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw bayer full convert -> %lld ms", (esp_timer_get_time() - t0) / 1000);
         s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
-                       s_stage_a_bw);
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h, s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw threshold full convert -> %lld ms",
                  (esp_timer_get_time() - t0) / 1000);
         s_converter = ESPAPERPLAY_GUI_CONVERTER_BAYER;

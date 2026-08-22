@@ -92,8 +92,8 @@ static bool s_fast_poll = false;
 /** 快速重试计数：每 30 次（约 30s）催促一次后台刷新任务（任务刷新失败后会长时间休眠）。 */
 static uint32_t s_nudge_cnt = 0;
 
-/* ---- 标题栏 ---- */
-static lv_obj_t *s_loc_label = NULL;
+/* ---- 标题栏（统一状态栏） ---- */
+static espaperplay_ui_status_bar_t *s_bar = NULL; /*!< 统一状态栏 */
 
 /* ---- 子页容器与指示点 ---- */
 static lv_obj_t *s_subpages[WEATHER_SUBPAGE_CNT];
@@ -616,23 +616,8 @@ static void weather_enter(void) {
     weather_screen_size(&scr_w, &scr_h);
     const bool portrait = scr_w < scr_h;
 
-    /* 标题栏：位置名居中 */
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, LV_PCT(100), WEATHER_BAR_H_PX);
-    lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, WEATHER_BAR_H_PX - 2);
-    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    s_loc_label = weather_label_create(bar, "--", 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_loc_label, 0, 3);
+    /* 统一状态栏：左侧时间、居中位置名（动态）、右侧 WiFi/睡眠图标 */
+    s_bar = espaperplay_ui_status_bar_create(scr, WEATHER_BAR_H_PX, NULL, false);
 
     /* 子页容器 */
     const int area_y = WEATHER_BAR_H_PX;
@@ -729,7 +714,7 @@ static void weather_refresh(void) {
         const char *hint = configured ? "正在获取天气数据…" : "未配置 API Key，请在 Web 管理页设置";
         if (strcmp(s_hint, hint) != 0) {
             strlcpy(s_hint, hint, sizeof(s_hint));
-            lv_label_set_text(s_loc_label, "--");
+            espaperplay_ui_status_bar_set_title(s_bar, "--");
             lv_label_set_text(s_temp_label, "--");
             lv_label_set_text(s_cond_label, hint);
         }
@@ -763,8 +748,8 @@ static void weather_refresh(void) {
     const espaperplay_weather_now_t *now = &snap->now;
     char buf[256];
 
-    /* 标题栏：位置名。 */
-    lv_label_set_text(s_loc_label, snap->location_name);
+    /* 标题栏：位置名（动态，经统一状态栏标题更新）。 */
+    espaperplay_ui_status_bar_set_title(s_bar, snap->location_name);
 
     /* 温度大字 + 体感（两行） */
     lv_label_set_text(s_temp_label, now->temp[0] ? now->temp : "--");

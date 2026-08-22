@@ -9,19 +9,24 @@
 #include "esp_log.h"
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_input.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
+#include "icons_data.h"
 
 #include "lvgl.h"
 
 static const char *TAG = "ESPaperPlay_UI";
+
+static espaperplay_ui_status_bar_t *s_bar = NULL; /*!< 统一状态栏 */
 
 /* ====================================================================
  * 阅读器页（占位）
  * ====================================================================
  *
  * 阅读器核心框架尚未实现（见 components/applications/reader），本页仅
- * 提供正式入口：FreeType 中文标题 + "即将推出"提示，单击按键返回主页。
+ * 提供正式入口：统一状态栏（标题"阅读器"）+ "即将推出"提示，单击按键
+ * 返回主页。
  */
 
 #define READER_FONT_NAME                                                                           \
@@ -33,14 +38,9 @@ static void reader_enter(void) {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
 
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "阅读器");
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_set_style_text_font(
-        title, espaperplay_fonts_load(READER_FONT_NAME, 24, ESPAPERPLAY_FONT_STYLE_NORMAL), 0);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, lv_pct(8));
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    /* 统一状态栏：标题"阅读器" */
+    s_bar = espaperplay_ui_status_bar_create(scr, 30, "阅读器", false);
+    espaperplay_ui_status_bar_refresh(s_bar);
 
     lv_obj_t *hint = lv_label_create(scr);
     lv_label_set_text(hint, "即将推出\n\n单击返回");

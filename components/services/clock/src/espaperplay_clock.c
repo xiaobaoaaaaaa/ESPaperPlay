@@ -11,8 +11,8 @@
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
@@ -68,19 +68,19 @@ static bool s_sntp_started = false;
  *   ≈ e * S_meas_acc（e 很小），故 e ≈ error / S_meas_acc。
  * 仅当累计睡眠足够大（>MIN_SLEEP_US）才接受一次测量，避免运行期为主时
  * 噪声过大。 */
-#define ESPAPERPLAY_CLOCK_LEARNING_INTERVAL_S 600   /* 学习期：10 分钟 */
-#define ESPAPERPLAY_CLOCK_STEADY_INTERVAL_S   7200  /* 稳定期：2 小时 */
-#define ESPAPERPLAY_CLOCK_LEARNING_SAMPLES    3     /* 学习期采样数，达到即毕业 */
-#define ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM       20000 /* 漂移上限 ±2%，超出视为 NTP 异常 */
-#define ESPAPERPLAY_CLOCK_MIN_SLEEP_US  60000000LL  /* 单次测量所需最小累计睡眠（60s） */
+#define ESPAPERPLAY_CLOCK_LEARNING_INTERVAL_S 600 /* 学习期：10 分钟 */
+#define ESPAPERPLAY_CLOCK_STEADY_INTERVAL_S 7200  /* 稳定期：2 小时 */
+#define ESPAPERPLAY_CLOCK_LEARNING_SAMPLES 3      /* 学习期采样数，达到即毕业 */
+#define ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM 20000     /* 漂移上限 ±2%，超出视为 NTP 异常 */
+#define ESPAPERPLAY_CLOCK_MIN_SLEEP_US 60000000LL /* 单次测量所需最小累计睡眠（60s） */
 
-static int32_t  s_drift_ppm = 0;        /*!< RC 分数漂移率 e*1e6（每睡眠秒，+快/-慢） */
-static bool     s_have_drift = false;    /*!< 是否已测得有效漂移率 */
-static int64_t  s_cal_ref_rtc = 0;       /*!< 参考点：上次对时时刻的 raw 读数（仅日志） */
-static int64_t  s_cal_ref_true = 0;      /*!< 参考点：上次对时时刻的真实时间（仅日志） */
-static int64_t  s_sleep_measured = 0;    /*!< 自上次对时累计的 RC 测得睡眠时长（微秒） */
-static int64_t  s_cal_done_rtc = 0;      /*!< 上次标定完成时刻（墙钟，用于判断到期） */
-static uint8_t  s_cal_count = 0;         /*!< 已完成的标定采样数 */
+static int32_t s_drift_ppm = 0;                /*!< RC 分数漂移率 e*1e6（每睡眠秒，+快/-慢） */
+static bool s_have_drift = false;              /*!< 是否已测得有效漂移率 */
+static int64_t s_cal_ref_rtc = 0;              /*!< 参考点：上次对时时刻的 raw 读数（仅日志） */
+static int64_t s_cal_ref_true = 0;             /*!< 参考点：上次对时时刻的真实时间（仅日志） */
+static int64_t s_sleep_measured = 0;           /*!< 自上次对时累计的 RC 测得睡眠时长（微秒） */
+static int64_t s_cal_done_rtc = 0;             /*!< 上次标定完成时刻（墙钟，用于判断到期） */
+static uint8_t s_cal_count = 0;                /*!< 已完成的标定采样数 */
 static SemaphoreHandle_t s_drift_mutex = NULL; /*!< 保护漂移模型（UI 读 / 标定写） */
 
 /* 前向声明：漂移模型辅助函数（定义见文件后部）。 */
@@ -269,11 +269,9 @@ static void clock_sntp_sync_cb(struct timeval *tv) {
 
 /** 初始化并启动 SNTP 客户端（内部复用，不检查 s_sntp_started）。 */
 static esp_err_t clock_sntp_init_start(void) {
-    esp_sntp_config_t config =
-        ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(ESPAPERPLAY_CLOCK_NTP_SERVER_COUNT,
-                                               ESP_SNTP_SERVER_LIST(s_ntp_servers[0],
-                                                                    s_ntp_servers[1],
-                                                                    s_ntp_servers[2]));
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+        ESPAPERPLAY_CLOCK_NTP_SERVER_COUNT,
+        ESP_SNTP_SERVER_LIST(s_ntp_servers[0], s_ntp_servers[1], s_ntp_servers[2]));
     config.sync_cb = clock_sntp_sync_cb;
     esp_err_t err = esp_netif_sntp_init(&config);
     if (err != ESP_OK) {
@@ -326,8 +324,8 @@ esp_err_t espaperplay_clock_init(void) {
 }
 
 esp_err_t espaperplay_clock_set_timezone(const char *tz_name) {
-    const char *tz = (tz_name == NULL || tz_name[0] == '\0') ? ESPAPERPLAY_CLOCK_DEFAULT_TZ
-                                                             : tz_name;
+    const char *tz =
+        (tz_name == NULL || tz_name[0] == '\0') ? ESPAPERPLAY_CLOCK_DEFAULT_TZ : tz_name;
     if (strlen(tz) >= sizeof(s_tz_name)) {
         ESP_LOGE(TAG, "timezone name too long: \"%s\"", tz);
         return ESP_ERR_INVALID_ARG;
@@ -406,8 +404,8 @@ static void clock_load_drift(void) {
         s_cal_count = u;
     }
     nvs_close(h);
-    ESP_LOGI(TAG, "drift model loaded: drift=%ld ppm have=%d samples=%u",
-             (long)s_drift_ppm, s_have_drift, s_cal_count);
+    ESP_LOGI(TAG, "drift model loaded: drift=%ld ppm have=%d samples=%u", (long)s_drift_ppm,
+             s_have_drift, s_cal_count);
 }
 
 /** 持久化漂移标定模型到 NVS。 */
@@ -434,8 +432,8 @@ esp_err_t espaperplay_clock_mark_synced(void) {
     clock_lock();
     s_cal_ref_rtc = t;
     s_cal_ref_true = t;
-    s_sleep_measured = 0;  /* 重置累计睡眠，作为新测量窗口起点 */
-    s_cal_done_rtc = t;    /* 刷新标定到期计时，使首次标定等满一个学习间隔 */
+    s_sleep_measured = 0; /* 重置累计睡眠，作为新测量窗口起点 */
+    s_cal_done_rtc = t;   /* 刷新标定到期计时，使首次标定等满一个学习间隔 */
     clock_persist_drift();
     clock_unlock();
     return ESP_OK;
@@ -485,8 +483,8 @@ esp_err_t espaperplay_clock_calibrate(uint32_t timeout_ms) {
         s_cal_done_rtc = (int64_t)time(NULL);
         clock_persist_drift();
         clock_unlock();
-        ESP_LOGD(TAG, "calibration skipped: sleep %lld us < min %lld us",
-                 (long long)sleep_snap, (long long)ESPAPERPLAY_CLOCK_MIN_SLEEP_US);
+        ESP_LOGD(TAG, "calibration skipped: sleep %lld us < min %lld us", (long long)sleep_snap,
+                 (long long)ESPAPERPLAY_CLOCK_MIN_SLEEP_US);
         return ESP_OK;
     }
 
@@ -501,8 +499,8 @@ esp_err_t espaperplay_clock_calibrate(uint32_t timeout_ms) {
     int64_t error_us = (raw_before - T) * 1000000LL;
     double e = (double)error_us / (double)sleep_snap;
     int32_t ppm = (int32_t)(e * 1e6);
-    bool valid = (ppm >= -ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM &&
-                  ppm <= ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM);
+    bool valid =
+        (ppm >= -ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM && ppm <= ESPAPERPLAY_CLOCK_MAX_DRIFT_PPM);
 
     clock_lock();
     if (valid) {
@@ -531,8 +529,8 @@ bool espaperplay_clock_is_calibration_due(void) {
         return true; /* 从未标定 -> 立即开始学习 */
     }
     bool learning = (!s_have_drift) || (s_cal_count < ESPAPERPLAY_CLOCK_LEARNING_SAMPLES);
-    int64_t interval = learning ? ESPAPERPLAY_CLOCK_LEARNING_INTERVAL_S
-                                : ESPAPERPLAY_CLOCK_STEADY_INTERVAL_S;
+    int64_t interval =
+        learning ? ESPAPERPLAY_CLOCK_LEARNING_INTERVAL_S : ESPAPERPLAY_CLOCK_STEADY_INTERVAL_S;
     return (now - s_cal_done_rtc) >= interval;
 }
 
