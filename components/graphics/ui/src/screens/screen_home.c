@@ -217,21 +217,39 @@ static void home_status_bar_create(lv_obj_t *scr) {
 /* ------------------------------------------------------------------ */
 
 /** 页 0 时钟区：时/分大字（80px）+ 星期缩写 + 日期（20px），左对齐右侧留白。
- * 内容高约 HOME_CLOCK_AREA_H_PX（时钟区顶部起）。 */
-#define HOME_CLOCK_AREA_H_PX 250
+ * 内容高约 HOME_CLOCK_AREA_H_BASE（800 高竖屏基准）；矮面板按可用高度压缩
+ * 并同步收缩行距，见 home_clock_area_h() / home_clock_area_create()。 */
+#define HOME_CLOCK_AREA_H_BASE 250
+/* 时钟区内部行距（基准 250px 高）：时(0) 分(90) 周(196) 日(224)。 */
+#define HOME_CLOCK_MIN_H 240 /* 内容最小高度：分(80px)与周(20px)不重叠、日期行底不裁切的下限 */
 
-static void home_clock_area_create(lv_obj_t *scr, int x, int y) {
+/** 时钟区实际占用高度：基准值与「可用高度 45%」取小，且不低于内容最小高度。
+ * 防止矮竖屏面板上应用区 app_y 计算为负、与时钟区重叠。 */
+static int home_clock_area_h(int32_t avail_h) {
+    int h = HOME_CLOCK_AREA_H_BASE;
+    const int cap = (int)(avail_h * 45 / 100);
+    if (h > cap) {
+        h = cap;
+    }
+    if (h < HOME_CLOCK_MIN_H) {
+        h = HOME_CLOCK_MIN_H;
+    }
+    return h;
+}
+
+/** 时钟区构建：行距按实际占用高度相对基准等比收缩。 */
+static void home_clock_area_create(lv_obj_t *scr, int x, int y, int area_h) {
     s_clock_h = home_label_create(scr, "--", 80, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_clock_h, x, y);
 
     s_clock_m = home_label_create(scr, "--", 80, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_pos(s_clock_m, x, y + 90);
+    lv_obj_set_pos(s_clock_m, x, y + area_h * 90 / HOME_CLOCK_AREA_H_BASE);
 
     s_week_label = home_label_create(scr, "---", 20, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_pos(s_week_label, x + 2, y + 196);
+    lv_obj_set_pos(s_week_label, x + 2, y + area_h * 196 / HOME_CLOCK_AREA_H_BASE);
 
     s_date_label = home_label_create(scr, "--/--", 20, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_pos(s_date_label, x + 2, y + 224);
+    lv_obj_set_pos(s_date_label, x + 2, y + area_h * 224 / HOME_CLOCK_AREA_H_BASE);
 }
 
 /** 应用卡片：图标框（边框只框图标，圆角）+ 框下方悬浮文字。 */
@@ -300,24 +318,32 @@ static void home_page0_create(lv_obj_t *scr) {
     const int grid_h = rows * HOME_APP_CARD_H + (rows - 1) * gap;
 
     int clock_x, clock_y, app_x, app_y;
+    int clock_h;
 
     if (portrait) {
-        /* 竖屏：时钟区顶部左对齐（右侧留白）；应用区在时钟区与屏幕底之间居中 */
+        /* 竖屏：时钟区顶部左对齐（右侧留白）；应用区在时钟区与屏幕底之间居中。
+         * 时钟区高度按可用高度压缩（矮面板防重叠），应用区钳制在不早于时钟区底。 */
         clock_x = 24;
         clock_y = 16;
         app_x = 0;
-        app_y = clock_y + HOME_CLOCK_AREA_H_PX +
-                (scr_h - HOME_STATUS_H_PX - clock_y - HOME_CLOCK_AREA_H_PX - grid_h) / 2;
+        const int avail_h = scr_h - HOME_STATUS_H_PX - 2 * clock_y;
+        clock_h = home_clock_area_h(avail_h);
+        app_y = clock_y + clock_h +
+                (avail_h - clock_h - grid_h) / 2;
+        if (app_y < clock_y + clock_h) {
+            app_y = clock_y + clock_h;
+        }
     } else {
         /* 横屏：时钟区左侧；应用区右侧垂直居中 */
         clock_x = 24;
         clock_y = 60;
         app_x = 260;
         app_y = (scr_h - HOME_STATUS_H_PX - grid_h) / 2;
+        clock_h = home_clock_area_h(scr_h - HOME_STATUS_H_PX - clock_y);
     }
 
     /* 时钟区（挂在页容器上，与应用区无重叠） */
-    home_clock_area_create(s_page0, clock_x, clock_y);
+    home_clock_area_create(s_page0, clock_x, clock_y, clock_h);
 
     /* 应用网格：从左到右按统一间距排布（边缘间距 = 应用间间距 = gap） */
     for (int i = 0; i < HOME_APP_CNT; i++) {

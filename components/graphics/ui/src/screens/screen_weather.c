@@ -458,12 +458,17 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
         s_daily_lo[i] = lo;
     }
 
-    /* 次要信息：湿度 / 风 / 降水 / 气压 / 能见度 / 体感（卡片网格） */
+    /* 次要信息：湿度 / 风 / 降水 / 气压 / 能见度 / 体感（卡片网格）。
+     * 列数按剩余高度约束（避免横屏两行超出容器底部）：
+     * 两行放得下 -> 竖屏 2 列 x3 行 / 横屏 3 列 x2 行；否则单行 6 列。 */
     const int margin = WEATHER_MARGIN;
     const int gap = 12;
     const int info_y = card_y + card_h + 14;
-    const int cols = portrait ? 2 : 3;
-    const int cw = portrait ? (w - 2 * margin - gap) / 2 : (w - 2 * margin - 2 * gap) / 3;
+    const int avail_info_h = h - info_y; /* 子页容器内剩余高度 */
+    /* 竖屏 2 列需 3 行、横屏 3 列需 2 行；放不下则压缩为单行 6 列。 */
+    const int need_info_h = portrait ? 3 * 66 + 2 * gap : 2 * 66 + gap;
+    int cols = (avail_info_h >= need_info_h) ? (portrait ? 2 : 3) : 6;
+    const int cw = (w - 2 * margin - (cols - 1) * gap) / cols;
     const int ch = 66;
     static const struct {
         const lv_image_dsc_t *icon;
@@ -559,11 +564,15 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
     s_arc_geom[3] = moon_base;
     s_arc_geom[4] = radius;
 
-    /* 指数：洗车等（卡片网格） */
+    /* 指数：洗车等（卡片网格）。列数按剩余高度约束（同次要信息网格）：
+     * 横屏 3 列需 3 行会超出容器底部，放不下两行时压缩为 4 列两行。 */
     const int gap = 12;
     const int idx_y = arc_y + arc_h + 14;
-    const int cols = portrait ? 2 : 3;
-    const int cw = portrait ? (w - 2 * margin - gap) / 2 : (w - 2 * margin - 2 * gap) / 3;
+    const int avail_idx_h = h - idx_y;
+    const int rows_fit = avail_idx_h / (56 + gap); /* 可完整容纳的行数 */
+    /* 2 列恒需 4 行（竖/横皆同）；放得下 2 行则 4 列，否则 8 列单行。 */
+    const int cols = (rows_fit >= 4) ? 2 : ((rows_fit >= 2) ? 4 : 8);
+    const int cw = (w - 2 * margin - (cols - 1) * gap) / cols;
     const int ch = 56;
     for (int i = 0; i < 8; i++) {
         const int r = i / cols;
