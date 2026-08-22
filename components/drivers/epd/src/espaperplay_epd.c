@@ -122,6 +122,9 @@ static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠
 static bool s_needs_full_after_wake = false; /*!< 从深度睡眠唤醒后首次局刷需强制 DTM1 反写新帧 */
 static uint8_t *s_snapshot =
     NULL; /*!< 私有帧快照：SPI 传输只读此缓冲，杜绝并发改写源缓冲导致错位 */
+static uint8_t *s_last_frame =
+    NULL; /*!< 整屏当前显示帧（1bpp 整帧）：deep sleep 唤醒后初次局刷写入 DTM1
+              作为旧平面，避免强制反相翻转伤屏；每次成功刷新后维护为整屏显示 */
 static espaperplay_epd_mode_t s_last_mode =
     ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode =
@@ -645,17 +648,31 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 从深度睡眠唤醒后首次局刷：DTM1 = ~新窗口数据（强制窗口内全像素翻转，
-     * 走 K2W/W2K 深波形建立干净基线；N2OCP 拷贝后后续差分照常工作）。
-     * 从灰阶切回黑白同理：窗口内灰阶残留须通过翻转清除。 */
+    /* 从深度睡眠唤醒后首次局刷：DTM1 = 整屏当前显示帧（s_last_frame，非反相）
+     * 作为旧平面，再写新窗口数据到 DTM2，走正常 {旧,新} 差分波形（不强制
+     * 翻转），避免频繁浅睡唤醒反复触发全像素深波形伤屏。N2OCP 拷贝后后续
+     * 差分照常工作。从灰阶切回黑白同理：窗口内灰阶残留须通过翻转清除，
+     * 故灰阶分支仍用反相写入。 */
     if (s_needs_full_after_wake || s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
         s_needs_full_after_wake = false;
         ret = epd_write_cmd(UC8179_CMD_DTM1);
         ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
-        if (image_buf == NULL) {
-            ret = epd_write_fill(0x00, window_bytes);
+        if (s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+            /* 灰阶残留：DTM1 = ~新窗口数据，强制翻转清除中间灰。 */
+            if (image_buf == NULL) {
+                ret = epd_write_fill(0x00, window_bytes);
+            } else {
+                ret = epd_write_inverted(image_buf, window_bytes);
+            }
         } else {
-            ret = epd_write_inverted(image_buf, window_bytes);
+            /* 唤醒：DTM1 = 整屏当前显示帧（旧平面），正常差分。 */
+            if (image_buf == NULL) {
+                ret = epd_write_fill(0xFF, s_frame_bytes);
+            } else if (s_last_frame != NULL) {
+                ret = epd_write_data(s_last_frame, s_frame_bytes);
+            } else {
+                ret = epd_write_fill(0xFF, s_frame_bytes);
+            }
         }
         if (ret != ESP_OK) {
             return ret;
@@ -1128,6 +1145,21 @@ esp_err_t espaperplay_epd_init(void) {
         }
     }
 
+    /* 整屏当前显示帧（1bpp 整帧）：deep sleep 唤醒后初次局刷作为旧平面写入
+     * DTM1，避免强制反相翻转伤屏。初始全白（与初始化清白基线一致）。 */
+    if (s_last_frame == NULL) {
+        s_last_frame = heap_caps_malloc(s_frame_bytes, MALLOC_CAP_SPIRAM);
+        if (s_last_frame == NULL) {
+            s_last_frame = heap_caps_malloc(s_frame_bytes, MALLOC_CAP_8BIT);
+        }
+        if (s_last_frame == NULL) {
+            ESP_LOGE(TAG, "last frame buffer alloc failed (%u bytes)", (unsigned)s_frame_bytes);
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+        memset(s_last_frame, 0xFF, s_frame_bytes); /* 全白 */
+    }
+
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
     /* 空闲自动睡眠定时器（一次性，由每次刷新重新武装）。创建失败仅告警：
      * 保底失效不影响正常功能（上层仍可显式调用 espaperplay_epd_sleep()）。 */
@@ -1312,6 +1344,32 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
         s_last_mode = (mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) ? ESPAPERPLAY_EPD_MODE_FULL : mode;
         s_controller_mode = s_last_mode;
         s_asleep = false; /* 刷新完成后面板保持上电 */
+
+        /* 维护整屏当前显示帧（供 deep sleep 唤醒后初次局刷作为旧平面）。
+         * FULL/FAST：整帧即显示内容（清屏=全白）；PARTIAL：仅窗口更新，
+         * 把窗口数据合并进整屏；GRAY4：2bpp 无法以 1bpp 表示，跳过维护
+         * （灰阶切回黑白走反相清除，不依赖本帧）。 */
+        if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
+            if (image_buf == NULL) {
+                memset(s_last_frame + (size_t)y * (s_disp_w / 8) + x / 8, 0xFF,
+                       (size_t)width * height / 8);
+            } else if (s_snapshot != NULL) {
+                const uint8_t *src = (const uint8_t *)s_snapshot;
+                uint8_t *dst = s_last_frame + (size_t)y * (s_disp_w / 8) + x / 8;
+                const size_t row_bytes = (size_t)width / 8;
+                for (size_t r = 0; r < height; r++) {
+                    memcpy(dst + r * (s_disp_w / 8), src + r * row_bytes, row_bytes);
+                }
+            }
+        } else if (mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+            /* 不维护（见上）；保持上次黑白帧，灰阶切回时由反相清除。 */
+        } else { /* FULL / FULL_FORCE / FAST：整帧 */
+            if (image_buf == NULL) {
+                memset(s_last_frame, 0xFF, s_frame_bytes);
+            } else if (s_snapshot != NULL) {
+                memcpy(s_last_frame, s_snapshot, s_frame_bytes);
+            }
+        }
     } else {
         s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
     }
