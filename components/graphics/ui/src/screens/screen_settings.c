@@ -71,7 +71,7 @@ static const char *TAG = "ESPaperPlay_UI";
  * 黑字、圆角卡片（与屏幕边缘保持间距）。
  */
 
-#define SETTINGS_EDGE_PX 48           /* 边缘滑动触发宽度（物理手势，不缩放） */
+#define SETTINGS_EDGE_PX 24           /* 边缘滑动触发宽度（物理手势，不缩放） */
 #define SETTINGS_EDGE_SWIPE_PX 70     /* 边缘向内滑动位移阈值（不缩放） */
 #define SETTINGS_SWIPE_PX 90          /* 分页切换位移阈值（不缩放） */
 #define SETTINGS_CLICK_MAX_PX 15      /* 点击允许的最大位移（防抖，不缩放） */

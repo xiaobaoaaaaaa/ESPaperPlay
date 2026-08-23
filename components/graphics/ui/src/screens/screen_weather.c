@@ -65,7 +65,7 @@ static const char *TAG = "ESPaperPlay_UI";
 #define WEATHER_UI_PERIOD_MS 30000 /* 页面定时器刷新周期 */
 #define WEATHER_UI_RETRY_MS 1000   /* 快照还不可用时（启动初期/刷新失败）的快速重试周期 */
 #define WEATHER_BAR_H_PX 30        /* 标题栏高度 */
-#define WEATHER_EDGE_PX 48         /* 边缘滑动触发宽度 */
+#define WEATHER_EDGE_PX 24         /* 边缘滑动触发宽度 */
 #define WEATHER_EDGE_SWIPE_PX 70   /* 边缘向内滑动位移阈值 */
 #define WEATHER_SWIPE_PX 90        /* 子页切换位移阈值 */
 #define WEATHER_MARGIN 24          /* 卡片与屏幕边缘间距 */
