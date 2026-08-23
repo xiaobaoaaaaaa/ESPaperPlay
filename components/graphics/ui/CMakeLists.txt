@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "src/espaperplay_gui.c"
          "src/lvgl_port.c"
          "src/lvgl_touch.c"
+         "src/screens/screen_boot.c"
          "src/screens/screen_home.c"
          "src/icons_data.c"
          "src/qweather_icons.c"

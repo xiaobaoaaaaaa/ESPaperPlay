@@ -226,6 +226,29 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_reader;
  * 字体选择 / 测试页入口），难以输入的配置项提示到 Web 管理页，边缘滑动或单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_settings;
 
+/**
+ * @brief 显示开机日志屏（不经页面栈，直接绘制在活动屏幕上）。
+ *
+ * 供并行启动流程在 LVGL 就绪后立即调用：后续各服务初始化步骤经
+ * espaperplay_ui_boot_logf() 把进度逐行显示到屏幕上。主界面入栈时随清屏
+ * 自然移除。须在 espaperplay_gui_lv_start() 与 espaperplay_fonts_init()
+ * 之后调用。
+ *
+ * @return ESP_OK 成功；LVGL 移植层未启动或投递超时返回相应错误码。
+ */
+esp_err_t espaperplay_ui_boot_show(void);
+
+/**
+ * @brief 向开机日志屏追加一行日志（跨线程安全）。
+ *
+ * 屏幕尚未构建时仅写入环形缓冲（构建时统一回放，不丢行）；已构建则触发
+ * 一次局部重绘。启动完成、屏幕被主界面替换后调用为空操作（缓冲继续
+ * 覆盖写入，无副作用）。
+ *
+ * @param fmt printf 风格格式串（建议带换行结尾的短句，单行截断于 96 字节）。
+ */
+void espaperplay_ui_boot_logf(const char *fmt, ...);
+
 #ifdef __cplusplus
 }
 #endif
