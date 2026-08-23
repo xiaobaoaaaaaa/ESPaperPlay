@@ -67,10 +67,17 @@ extern "C" {
 esp_err_t espaperplay_sd_init(void);
 
 /**
- * @brief 反初始化 MicroSD 卡（SDIO/SDMMC）。
+ * @brief 反初始化 MicroSD 卡（SDIO/SDMMC），执行完整下电序列。
  *
- * 释放槽位与主机，并关闭电源轨。调用前必须确保文件系统已卸载
- * （espaperplay_storage_unmount() 负责在卸载 VFS/FAT 后调用本函数）。
+ * 下电顺序（模拟断电 → 真实断电平滑过渡）：
+ *  1. CMD0（GO_IDLE_STATE）：卡片复位到 idle 态——协议级"模拟断电"，
+ *     确保卡片不再持有任何事务状态（前提：所有写操作已完成）；
+ *  2. sdmmc_host_deinit()：停止 SDMMC 主机时钟并释放引脚；
+ *  3. 电源轨下电：板级未配负载开关时为空操作（卡片保持供电但处于 idle
+ *     态），接入负载开关后自动变为真实断电。
+ *
+ * 调用前必须确保文件系统已卸载（espaperplay_storage_unmount() 负责在
+ * 卸载 VFS/FAT 后调用本函数）。
  *
  * @return 成功返回 ESP_OK，否则返回对应错误码。
  */

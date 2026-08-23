@@ -336,8 +336,7 @@ static void power_auto_sleep_task(void *arg) {
                     /* 天气到期：触发后台任务拉取并等待完成（各 API 受 TTL
                      * 约束，未过期项不重复请求）。 */
                     espaperplay_weather_request_refresh();
-                    if (!espaperplay_weather_wait_refresh_done(
-                            ESPAPERPLAY_POWER_WEATHER_WAIT_MS)) {
+                    if (!espaperplay_weather_wait_refresh_done(ESPAPERPLAY_POWER_WEATHER_WAIT_MS)) {
                         ESP_LOGW(TAG, "weather refresh wait timeout (%d ms)",
                                  ESPAPERPLAY_POWER_WEATHER_WAIT_MS);
                     }
