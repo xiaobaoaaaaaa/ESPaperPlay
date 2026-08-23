@@ -490,6 +490,8 @@
                     <div class="menu-group-title">设备</div>
                     <ul>
                         <li><a class="menu-item" data-target="screen" data-title="屏幕设置" data-sub="电子墨水屏参数">屏幕设置</a></li>
+                        <li><a class="menu-item" data-target="power" data-title="电源设置" data-sub="自动浅睡眠">电源设置</a>
+                        </li>
                         <li><a class="menu-item" data-target="boot" data-title="BOOT 键设置" data-sub="物理按键行为">BOOT 键设置</a>
                         </li>
                     </ul>
@@ -594,6 +596,22 @@
                     <div class="field">
                         <label>连续局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
                         <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="10">
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="primary">保存</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel" id="panel-power">
+                <h2>电源设置</h2>
+                <p class="hint">设备空闲（无触摸 / 按键操作）超过该时长后进入浅睡眠，触摸或按键即唤醒。
+                    实际生效阈值不低于「屏幕设置」中的屏幕空闲睡眠超时 + 5 秒，保证屏幕先休眠、设备再浅睡。</p>
+                <form id="powerForm">
+                    <div class="field">
+                        <label>设备自动浅睡眠（秒，0 = 关闭自动睡眠）</label>
+                        <input type="number" name="auto_sleep_timeout_s" min="0" max="86400" step="1"
+                            placeholder="30">
                     </div>
                     <div class="actions">
                         <button type="submit" class="primary">保存</button>
@@ -1042,6 +1060,8 @@
                 $('input[name=clear_ap_password]').checked = false;
                 $('input[name=epd_idle_sleep_timeout_s]').value = d.epd_idle_sleep_timeout_s != null
                     ? d.epd_idle_sleep_timeout_s : '';
+                $('input[name=auto_sleep_timeout_s]').value = d.auto_sleep_timeout_s != null
+                    ? d.auto_sleep_timeout_s : '';
                 $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
                     ? d.gui_full_force_after : '';
                 $('select[name=boot_long_press_action]').value = d.boot_long_press_action || 'full_refresh';
@@ -1080,6 +1100,27 @@
                 const d = await postForm('/api/config', body);
                 if (d.ok) {
                     toast('屏幕设置已保存');
+                    loadConfig();
+                } else {
+                    toast('保存失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (err) {
+                toast('保存失败：' + err, true);
+            }
+            btn.disabled = false;
+        });
+
+        /* 保存电源设置（仅提交本表单字段，后端按字段出现与否部分更新）。 */
+        $('#powerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fd = new FormData($('#powerForm'));
+            const body = new URLSearchParams(fd).toString();
+            const btn = $('#powerForm button[type=submit]');
+            btn.disabled = true;
+            try {
+                const d = await postForm('/api/config', body);
+                if (d.ok) {
+                    toast('电源设置已保存');
                     loadConfig();
                 } else {
                     toast('保存失败：' + (d.error || '未知错误'), true);

@@ -55,6 +55,13 @@ extern "C" {
 /** 出厂默认屏幕空闲自动睡眠超时（毫秒；与 ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS 一致，0=关闭）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS 90000
 
+/** 出厂默认设备自动浅睡眠超时（毫秒；与 ESPAPERPLAY_POWER_AUTO_SLEEP_TIMEOUT_MS 一致，0=关闭）。
+ *  实际生效阈值取 max(本值, 屏幕空闲超时 + 5s)，保证面板先睡、ESP32 再浅睡。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS 30000
+
+/** 设备自动浅睡眠超时上限（毫秒，24 小时）。 */
+#define ESPAPERPLAY_SYSTEM_AUTO_SLEEP_TIMEOUT_MAX_MS 86400000u
+
 /** 出厂默认"连续局刷 N 次后强制全刷"阈值（0=禁用，只局刷）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER 10
 
@@ -113,6 +120,7 @@ typedef struct {
     char ap_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< AP 模式 SSID */
     char ap_password[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];  /*!< AP 模式密码 */
     uint32_t epd_idle_sleep_timeout_ms;                 /*!< 屏幕空闲自动睡眠超时（毫秒，0=关闭） */
+    uint32_t auto_sleep_timeout_ms;                     /*!< 设备自动浅睡眠超时（毫秒，0=关闭） */
     uint32_t gui_full_force_after;                      /*!< 连续局刷后强制全刷阈值（0=禁用） */
     espaperplay_boot_long_press_action_t boot_long_press_action; /*!< BOOT 键长按默认动作 */
     uint32_t boot_long_press_time_ms;                            /*!< BOOT 键长按判定时间（毫秒） */
@@ -181,6 +189,19 @@ esp_err_t espaperplay_system_set_ap_credentials(const char *ssid, const char *pa
  *         NVS 写入失败返回错误码。
  */
 esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms);
+
+/**
+ * @brief 设置设备自动浅睡眠超时（毫秒，0=关闭）并持久化。
+ *
+ * 无用户操作（按键 / 触摸）超过该时长后设备进入浅睡眠。实际生效阈值取
+ * max(本值, 屏幕空闲超时 + 5s)；修改后可调用
+ * espaperplay_power_set_auto_sleep_timeout_ms() 立即生效（无需重启）。
+ *
+ * @param timeout_ms 超时毫秒数（0 表示关闭自动睡眠）。
+ * @return 成功返回 ESP_OK；超过 24 小时（86400000）返回 ESP_ERR_INVALID_ARG；
+ *         NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_auto_sleep_timeout_ms(uint32_t timeout_ms);
 
 /**
  * @brief 设置"连续局刷 N 次后强制全刷"阈值（0=禁用）并持久化。

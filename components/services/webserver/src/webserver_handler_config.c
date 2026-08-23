@@ -16,6 +16,7 @@
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
+#include "espaperplay_power.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -84,6 +85,9 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     /* 屏幕空闲自动睡眠超时（秒，0=关闭）。 */
     cJSON_AddNumberToObject(root, "epd_idle_sleep_timeout_s",
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
+    /* 设备自动浅睡眠超时（秒，0=关闭）。 */
+    cJSON_AddNumberToObject(root, "auto_sleep_timeout_s",
+                            (double)(cfg->auto_sleep_timeout_ms / 1000));
     /* 连续局刷后强制全刷阈值（0=禁用，只局刷）。 */
     cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
     /* BOOT 键长按的全局默认动作（全屏刷新 / 返回上一页 / 无操作）。 */
@@ -152,6 +156,9 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
     const bool has_epd_idle = webserver_form_get_field(body, "epd_idle_sleep_timeout_s",
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
+    char auto_sleep_s[16] = {0}; /* 设备自动浅睡眠超时（秒，0=关闭） */
+    const bool has_auto_sleep =
+        webserver_form_get_field(body, "auto_sleep_timeout_s", auto_sleep_s, sizeof(auto_sleep_s));
     const bool has_gui_force = webserver_form_get_field(
         body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
     const bool has_boot_lp = webserver_form_get_field(body, "boot_long_press_action",
@@ -256,6 +263,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         if (err == ESP_OK) {
             /* 立即应用到驱动（不必等重启）。 */
             err = espaperplay_epd_set_idle_sleep_timeout_ms(ms);
+        }
+    }
+    /* 设备自动浅睡眠超时（秒 -> 毫秒，0=关闭）；字段缺失 = 保持不变。 */
+    if (err == ESP_OK && has_auto_sleep) {
+        char *end = NULL;
+        long secs = strtol(auto_sleep_s, &end, 10);
+        if (end == auto_sleep_s || *end != '\0' || secs < 0 || secs > 86400) {
+            webserver_send_json_err(req, "无效的设备睡眠超时（0-86400 秒）");
+            return ESP_FAIL;
+        }
+        const uint32_t ms = (uint32_t)secs * 1000;
+        err = espaperplay_system_set_auto_sleep_timeout_ms(ms);
+        if (err == ESP_OK) {
+            /* 立即应用到电源管理（不必等重启）。 */
+            err = espaperplay_power_set_auto_sleep_timeout_ms(ms);
         }
     }
     /* 连续局刷后强制全刷阈值（0=禁用，0-255）；字段缺失 = 保持不变。 */
@@ -386,6 +408,8 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     /* 恢复默认后同步应用到驱动。 */
     espaperplay_epd_set_idle_sleep_timeout_ms(
         espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
+    espaperplay_power_set_auto_sleep_timeout_ms(
+        espaperplay_system_get_config()->auto_sleep_timeout_ms);
 
     /* 先返回成功响应，再延时重启 WiFi（恢复默认可能切回 AP 模式并改变 IP）。 */
     cJSON *root = cJSON_CreateObject();

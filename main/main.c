@@ -209,6 +209,9 @@ void app_main(void) {
         .gpio_level = false,
     };
     ESP_ERROR_CHECK(espaperplay_power_configure_wakeup(&wakeup_cfg));
+    /* 设备自动浅睡眠超时（Web 可配置，NVS 持久化）。 */
+    (void)espaperplay_power_set_auto_sleep_timeout_ms(
+        espaperplay_system_get_config()->auto_sleep_timeout_ms);
     ESP_ERROR_CHECK(espaperplay_power_start_auto_sleep());
 
     BOOT_LOGF("WiFi 启动…");

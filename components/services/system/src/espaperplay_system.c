@@ -21,6 +21,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_AP_SSID "ap_ssid"
 #define NVS_KEY_AP_PASS "ap_pass"
 #define NVS_KEY_EPD_IDLE_MS "epd_idle_ms"
+#define NVS_KEY_AUTO_SLEEP_MS "auto_sleep_ms"
 #define NVS_KEY_GUI_FORCE_AFTER "gui_force_after"
 #define NVS_KEY_WEATHER_KEY "weather_key"
 #define NVS_KEY_WEATHER_LOC "weather_loc"
@@ -43,6 +44,7 @@ static espaperplay_system_config_t s_config = {
     .ap_ssid = ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID,
     .ap_password = ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS,
     .epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS,
+    .auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS,
     .gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER,
     .boot_long_press_action = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION,
     .boot_long_press_time_ms = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS,
@@ -145,6 +147,9 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_u32(handle, NVS_KEY_EPD_IDLE_MS, s_config.epd_idle_sleep_timeout_ms);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u32(handle, NVS_KEY_AUTO_SLEEP_MS, s_config.auto_sleep_timeout_ms);
+    }
+    if (err == ESP_OK) {
         err = nvs_set_u32(handle, NVS_KEY_GUI_FORCE_AFTER, s_config.gui_full_force_after);
     }
     if (err == ESP_OK) {
@@ -215,6 +220,18 @@ static esp_err_t system_load(void) {
             ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_EPD_IDLE_MS, esp_err_to_name(err));
         }
         s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
+        missing = true;
+    }
+
+    uint32_t auto_sleep_ms = 0;
+    err = nvs_get_u32(handle, NVS_KEY_AUTO_SLEEP_MS, &auto_sleep_ms);
+    if (err == ESP_OK && auto_sleep_ms <= ESPAPERPLAY_SYSTEM_AUTO_SLEEP_TIMEOUT_MAX_MS) {
+        s_config.auto_sleep_timeout_ms = auto_sleep_ms;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_AUTO_SLEEP_MS, esp_err_to_name(err));
+        }
+        s_config.auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS;
         missing = true;
     }
 
@@ -364,6 +381,14 @@ esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms) 
     return save_u32_field(NVS_KEY_EPD_IDLE_MS, timeout_ms);
 }
 
+esp_err_t espaperplay_system_set_auto_sleep_timeout_ms(uint32_t timeout_ms) {
+    if (timeout_ms > ESPAPERPLAY_SYSTEM_AUTO_SLEEP_TIMEOUT_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config.auto_sleep_timeout_ms = timeout_ms;
+    return save_u32_field(NVS_KEY_AUTO_SLEEP_MS, timeout_ms);
+}
+
 esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count) {
     if (count > ESPAPERPLAY_SYSTEM_GUI_FULL_FORCE_AFTER_MAX) {
         return ESP_ERR_INVALID_ARG;
@@ -461,6 +486,7 @@ esp_err_t espaperplay_system_reset_defaults(void) {
             sizeof(s_config.selected_font));
     strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
     s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
+    s_config.auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS;
     s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
     s_config.boot_long_press_action = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION;
     s_config.boot_long_press_time_ms = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS;
