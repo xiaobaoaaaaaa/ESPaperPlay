@@ -56,9 +56,10 @@ static const char *TAG = "ESPaperPlay_UI";
  * 保持间距）、白底黑字。除图表滚动容器外，所有对象禁用 LVGL 滚动。
  *
  * 数据：weather 服务内存快照（后台任务周期刷新），页面定时器 30s 刷新，
- * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）；快照尚不可用
- * （启动初期 / 刷新失败）时页面切到秒级快速轮询并周期性催促后台任务，
- * 天气数据获取成功后即刻更新页面。
+ * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）；「最近更新」
+ * 提示按 10 分钟 / 小时 / 天档位量化后随时间推进单独刷新。
+ * 快照尚不可用（启动初期 / 刷新失败）时页面切到秒级快速轮询并周期性
+ * 催促后台任务，天气数据获取成功后即刻更新页面。
  */
 
 #define WEATHER_UI_PERIOD_MS 30000 /* 页面定时器刷新周期 */
@@ -84,6 +85,8 @@ static const char *TAG = "ESPaperPlay_UI";
 
 /** 数据是否变化才更新标签（EPD 上避免无谓刷新）。 */
 static char s_last_update[32] = "";
+/** 「最近更新」标签当前文本（档位变化才刷新，避免 EPD 无谓重绘）。 */
+static char s_last_ago_text[32] = "";
 
 /** 快照不可用时的状态（避免秒级轮询重复刷新同一提示文本 / 无谓 EPD 刷新）。 */
 static char s_hint[80] = "";
@@ -112,6 +115,7 @@ static lv_obj_t *s_warn_desc = NULL;
 static lv_obj_t *s_hourly_card = NULL;                                      /*!< 24h 卡片 */
 static lv_obj_t *s_hourly_scroll = NULL;                                    /*!< 24h 横向滚动容器 */
 static lv_obj_t *s_hourly_chart = NULL;                                     /*!< 24h 温度曲线 */
+static lv_obj_t *s_updated_label = NULL; /*!< 「最近更新：xx前」 */
 static lv_obj_t *s_hourly_vals[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL];  /*!< 温度标注 */
 static lv_obj_t *s_hourly_icons[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL]; /*!< 图标行 */
 
@@ -260,6 +264,59 @@ static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
         }
     }
     return ts != NULL ? ts : "--";
+}
+
+/** 解析快照 update_time（"YYYY-MM-DD HH:MM" 或 ISO "YYYY-MM-DDTHH:MM…"），
+ * 返回距今的分钟数；解析失败返回 -1，未来时间按 0 处理。 */
+static int weather_update_time_to_min(const char *ts) {
+    struct tm tm = {0};
+    if (ts == NULL || sscanf(ts, "%d-%d-%d%*c%d:%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                             &tm.tm_hour, &tm.tm_min) < 5) {
+        return -1;
+    }
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    tm.tm_isdst = -1;
+    time_t t = mktime(&tm);
+    if (t == (time_t)-1) {
+        return -1;
+    }
+    time_t now;
+    time(&now);
+    const long diff_min = (long)difftime(now, t) / 60;
+    return diff_min >= 0 ? (int)diff_min : 0;
+}
+
+/** 更新距今描述：按 10 分钟 / 小时 / 天档位量化（档位变化才触发 EPD 刷新）。 */
+static void weather_ago_text(int diff_min, char *buf, size_t buf_size) {
+    if (diff_min < 10) {
+        snprintf(buf, buf_size, "刚刚");
+    } else if (diff_min < 60) {
+        snprintf(buf, buf_size, "%d 分钟前", diff_min / 10 * 10);
+    } else if (diff_min < 24 * 60) {
+        snprintf(buf, buf_size, "%d 小时前", diff_min / 60);
+    } else {
+        snprintf(buf, buf_size, "%d 天前", diff_min / (24 * 60));
+    }
+}
+
+/** 刷新「最近更新：xx前」标签：文本变化才写标签（EPD 避免无谓刷新）。 */
+static void weather_updated_refresh(void) {
+    if (s_last_update[0] == '\0' || s_updated_label == NULL) {
+        return;
+    }
+    const int diff = weather_update_time_to_min(s_last_update);
+    if (diff < 0) {
+        return;
+    }
+    char ago[32];
+    weather_ago_text(diff, ago, sizeof(ago));
+    char text[sizeof(ago) + 16];
+    snprintf(text, sizeof(text), "最近更新：%s", ago);
+    if (strcmp(s_last_ago_text, text) != 0) {
+        strlcpy(s_last_ago_text, text, sizeof(s_last_ago_text));
+        lv_label_set_text(s_updated_label, text);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -636,6 +693,11 @@ static void weather_enter(void) {
     weather_page1_create(s_subpages[1], scr_w, area_h, portrait);
     weather_page2_create(s_subpages[2], scr_w, area_h, portrait);
 
+    /* 「最近更新：xx前」（状态栏下方左上角，三个子页共用、全程可见；
+     * 在子页之后创建保证不被白底子页容器遮挡） */
+    s_updated_label = weather_label_create(scr, "", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(s_updated_label, 12, WEATHER_BAR_H_PX + 4);
+
     /* 指示点 */
     for (int i = 0; i < WEATHER_SUBPAGE_CNT; i++) {
         s_dots[i] = lv_obj_create(scr);
@@ -667,6 +729,7 @@ static void weather_enter(void) {
     lv_obj_set_pos(s_warn_desc, 4, 40);
 
     s_last_update[0] = '\0';
+    s_last_ago_text[0] = '\0';
     s_hint[0] = '\0';
     s_fast_poll = false;
     s_nudge_cnt = 0;
@@ -740,10 +803,13 @@ static void weather_refresh(void) {
 
     /* 更新时变化才刷新标签（EPD 局部刷新省电）。 */
     if (strcmp(s_last_update, snap->update_time) == 0) {
+        /* 数据没变，但「最近更新」随时间推进仍需更新（档位变化才真正写标签）。 */
+        weather_updated_refresh();
         free(snap);
         return;
     }
     strlcpy(s_last_update, snap->update_time, sizeof(s_last_update));
+    weather_updated_refresh();
 
     const espaperplay_weather_now_t *now = &snap->now;
     char buf[256];
