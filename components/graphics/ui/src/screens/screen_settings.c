@@ -411,7 +411,10 @@ static const settings_section_t s_sections[] = {
 /* 运行时分页分组：每页包含若干大类（settings_enter 按可用高度构建）。 */
 static const settings_section_t *s_page_sections[SETTINGS_PAGE_MAX][SETTINGS_SECTION_CNT];
 static int s_page_section_cnt[SETTINGS_PAGE_MAX];
-static int s_page_count = 0; /*!< 实际分页数 */
+static int s_page_count = 0;  /*!< 实际分页数 */
+static bool s_page_built[SETTINGS_PAGE_MAX]; /*!< 分页控件是否已构建（隐藏页惰性构建） */
+static int s_area_y = 0;      /*!< 分页容器顶部 y（enter 时计算，惰性构建用） */
+static int s_area_h = 0;      /*!< 分页容器高度 */
 
 /* ------------------------------------------------------------------ */
 /* 页面状态                                                             */
@@ -1279,13 +1282,46 @@ static settings_row_t *settings_hit_row(const lv_point_t *p) {
     return NULL;
 }
 
+/** 分页容器顶部 y / 高度（enter 时计算，惰性构建复用）。 */
+static int settings_area_y(void) { return s_area_y; }
+static int settings_area_h(void) { return s_area_h; }
+
+/** 构建一个分页的全部控件（卡片 + 大类 + 行）。首次显示该页时调用。 */
+static void settings_page_build(int idx) {
+    if (idx < 0 || idx >= s_page_count || s_page_built[idx]) {
+        return;
+    }
+    s_page_objs[idx] = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_page_objs[idx], lv_display_get_horizontal_resolution(lv_display_get_default()),
+                    settings_area_h());
+    lv_obj_set_pos(s_page_objs[idx], 0, settings_area_y());
+    lv_obj_set_style_bg_color(s_page_objs[idx], lv_color_white(), 0);
+    lv_obj_set_style_border_width(s_page_objs[idx], 0, 0);
+    lv_obj_set_style_radius(s_page_objs[idx], 0, 0);
+    lv_obj_set_style_pad_all(s_page_objs[idx], 0, 0);
+    lv_obj_remove_flag(s_page_objs[idx], LV_OBJ_FLAG_SCROLLABLE);
+    settings_page_create(s_page_objs[idx], s_page_sections[idx], s_page_section_cnt[idx], 8);
+    /* 新建的分页默认盖在当前页之上：非当前页立即隐藏。 */
+    if (idx != s_page) {
+        lv_obj_add_flag(s_page_objs[idx], LV_OBJ_FLAG_HIDDEN);
+    }
+    s_page_built[idx] = true;
+}
+
 /** 切换分页：容器显隐 + 指示点刷新（LVGL 线程内）。 */
 static void settings_show_page(int idx) {
     if (idx < 0 || idx >= s_page_count || idx == s_page) {
         return;
     }
+    settings_page_build(idx); /* 惰性构建：首次显示才创建控件 */
     s_page = idx;
     for (int i = 0; i < s_page_count; i++) {
+        /* 未构建的分页没有控件（指针无效），跳过显隐操作。 */
+        if (!s_page_built[i]) {
+            lv_obj_set_style_bg_color(s_dots[i],
+                                      i == idx ? lv_color_black() : lv_color_white(), 0);
+            continue;
+        }
         if (i == idx) {
             lv_obj_remove_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -1323,27 +1359,19 @@ static void settings_enter(void) {
     /* 统一状态栏：左侧时间、居中"设置"、右侧 WiFi/睡眠图标 */
     s_bar = espaperplay_ui_status_bar_create(scr, bar_h, "设置", false);
 
-    /* 分页容器（标题栏下方，底部留指示点空间） */
-    const int area_y = bar_h;
-    const int area_h = scr_h - area_y - 24;
-
     /* 动态分页：按可用高度把大类分组到各页（空间够则同页多类）。 */
     for (int i = 0; i < SETTINGS_PAGE_MAX; i++) {
         s_page_section_cnt[i] = 0;
+        s_page_built[i] = false;
     }
-    settings_build_pages(area_h - 8); /* 卡片顶部留 8px 边距 */
+    s_area_y = bar_h;
+    s_area_h = scr_h - s_area_y - 24;
+    settings_build_pages(s_area_h - 8); /* 卡片顶部留 8px 边距 */
 
-    for (int i = 0; i < s_page_count; i++) {
-        s_page_objs[i] = lv_obj_create(scr);
-        lv_obj_set_size(s_page_objs[i], scr_w, area_h);
-        lv_obj_set_pos(s_page_objs[i], 0, area_y);
-        lv_obj_set_style_bg_color(s_page_objs[i], lv_color_white(), 0);
-        lv_obj_set_style_border_width(s_page_objs[i], 0, 0);
-        lv_obj_set_style_radius(s_page_objs[i], 0, 0);
-        lv_obj_set_style_pad_all(s_page_objs[i], 0, 0);
-        lv_obj_remove_flag(s_page_objs[i], LV_OBJ_FLAG_SCROLLABLE);
-        settings_page_create(s_page_objs[i], s_page_sections[i], s_page_section_cnt[i], 8);
-    }
+    /* 惰性构建：仅立即构建第 0 页，其余分页首次显示时才创建控件
+     * （设置页控件量大，全量构建明显拖慢进入速度）。 */
+    s_page = 0;
+    settings_page_build(0);
 
     /* 指示点 */
     for (int i = 0; i < s_page_count; i++) {
@@ -1355,11 +1383,8 @@ static void settings_enter(void) {
         lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
         lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
     }
-    s_page = 0;
+    /* 未构建的分页没有控件，仅指示点需要着色（当前页黑、其余白）。 */
     for (int i = 0; i < s_page_count; i++) {
-        if (i != 0) {
-            lv_obj_add_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
-        }
         lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
 
