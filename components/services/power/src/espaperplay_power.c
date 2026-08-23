@@ -21,6 +21,7 @@
 #include "espaperplay_epd.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
+#include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
 
 static const char *TAG = "ESPaperPlay_POWER";
@@ -47,6 +48,10 @@ static const char *TAG = "ESPaperPlay_POWER";
 
 /* NTP 对时/标定超时（毫秒）：用户唤醒与周期标定重连后等待 NTP 同步的最长时间。 */
 #define ESPAPERPLAY_POWER_NTP_TIMEOUT_MS 8000
+
+/* 睡眠期间天气刷新等待超时（毫秒）：天气到期时借定时器唤醒重连拉取，
+ * 等待后台任务完成整体刷新的最长时间（重连后 TLS 拉取全部 API 约 5~10s）。 */
+#define ESPAPERPLAY_POWER_WEATHER_WAIT_MS 20000
 
 /* 进睡/唤醒后等待状态栏图标落屏的窗口（毫秒）：睡眠图标与 WiFi 图标走同一
  * 局部刷新路径，由状态栏 1s 定时器驱动；进睡前置位标志、唤醒后清除标志，
@@ -239,6 +244,22 @@ esp_err_t espaperplay_power_set_periodic_wakeup_minute_aligned(bool enable) {
 }
 
 /**
+ * @brief 等待 STA 连接就绪（最多约 3s）。
+ *
+ * 重连是异步的（约 2.5s）；后续的 NTP / 天气操作需要连接已建立才能成功。
+ * 超时返回后各操作仍按自身超时执行（网络不可用时快速失败，不影响流程）。
+ */
+static void power_wait_wifi_connected(void) {
+    for (int i = 0; i < 15; i++) {
+        espaperplay_wifi_status_t st;
+        if (espaperplay_wifi_get_status(&st) == ESP_OK && st.connected) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+/**
  * @brief 自动浅睡眠管理任务。
  *
  * 每 1s 检查最近一次用户活动时刻：若空闲时长超过阈值（取
@@ -281,18 +302,27 @@ static void power_auto_sleep_task(void *arg) {
 
             if (s_wake_was_timer) {
                 /* 定时器唤醒（周期刷新时钟）：默认不重连、保持断开，
-                 * 留刷新窗口后由下一轮循环立即重新睡眠。但若刷新窗口内
+                 * 留刷新窗口后由下一轮循环立即重新睡眠。时钟标定与天气
+                 * 刷新共用同一个联网窗口——任一到期才重连一次，窗口内
+                 * 依次完成，尽量减少 WiFi 重连次数以省电。若刷新窗口内
                  * 发生用户操作（触摸/按键），则升级为用户唤醒：重连并
                  * 保持唤醒，避免"刚唤醒刷新完又立刻睡、忽略用户操作"。 */
                 const uint64_t activity_at_wake = espaperplay_input_get_last_activity_ms();
-                bool cal_reconnected = false;
-                /* 到标定时刻：重连 WiFi 并 NTP 标定（测量/精修漂移率），
-                 * 使本次刷新即显示校正后时间。仅主界面分钟对齐唤醒会走到
-                 * 这里；非标定时刻则保持断开、纯刷新。 */
-                if (espaperplay_clock_is_calibration_due()) {
-                    ESP_LOGI(TAG, "timer wake: clock calibration due, reconnecting for NTP");
+                const bool cal_due = espaperplay_clock_is_calibration_due();
+                const bool weather_due = espaperplay_weather_is_refresh_due();
+                bool connected = false;
+
+                if (cal_due || weather_due) {
+                    ESP_LOGI(TAG, "timer wake: reconnecting (%s%s%s)",
+                             cal_due ? "clock-calibration" : "",
+                             cal_due && weather_due ? " + " : "",
+                             weather_due ? "weather-refresh" : "");
                     espaperplay_wifi_resume_after_wake(true);
-                    cal_reconnected = true;
+                    power_wait_wifi_connected();
+                    connected = true;
+                }
+                if (cal_due && connected) {
+                    /* NTP 标定（测量/精修漂移率），使本次刷新即显示校正后时间。 */
                     esp_err_t cal = espaperplay_clock_calibrate(ESPAPERPLAY_POWER_NTP_TIMEOUT_MS);
                     if (cal != ESP_OK) {
                         ESP_LOGW(TAG, "clock calibration failed: %s (retry later)",
@@ -302,35 +332,44 @@ static void power_auto_sleep_task(void *arg) {
                                  (long)espaperplay_clock_get_drift_ppm());
                     }
                 }
+                if (weather_due && connected) {
+                    /* 天气到期：触发后台任务拉取并等待完成（各 API 受 TTL
+                     * 约束，未过期项不重复请求）。 */
+                    espaperplay_weather_request_refresh();
+                    if (!espaperplay_weather_wait_refresh_done(
+                            ESPAPERPLAY_POWER_WEATHER_WAIT_MS)) {
+                        ESP_LOGW(TAG, "weather refresh wait timeout (%d ms)",
+                                 ESPAPERPLAY_POWER_WEATHER_WAIT_MS);
+                    }
+                }
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_REFRESH_GRACE_MS));
                 if (espaperplay_input_get_last_activity_ms() > activity_at_wake) {
-                    /* 升级为用户唤醒：保持连接（若仅为标定而重连则补一次重连）。 */
-                    if (!cal_reconnected) {
+                    /* 升级为用户唤醒：保持连接。 */
+                    if (!connected) {
                         espaperplay_wifi_resume_after_wake(true);
                     }
                     espaperplay_input_mark_activity();
                 } else {
-                    /* 无用户操作：若仅为标定重连过，则断开以省电
-                     * （避免下一轮睡眠再触发 BEACON 被动断连）。 */
-                    if (cal_reconnected) {
+                    /* 无用户操作：断开以省电（避免下一轮睡眠再触发 BEACON
+                     * 被动断连）；未重连过则保持断开，下一轮立即重新睡眠。 */
+                    if (connected) {
                         espaperplay_wifi_suspend_for_sleep();
                     }
-                    /* 否则保持断开，下一轮循环立即重新睡眠。 */
                 }
             } else {
-                /* 用户/串口唤醒：重连 WiFi 并强制 NTP 对时（立即校正时钟，
-                 * 消除标定残差），再标记活动避免立即重新睡眠。重连约 2.5s；
-                 * 期间若再有用户操作，输入路径会持续刷新活动时间戳，设备
-                 * 保持唤醒，重连与对时独立进行、互不冲突。 */
+                /* 用户/串口唤醒：立即清除睡眠指示（须在重连/NTP 等阻塞调用
+                 * 之前，否则状态栏 1s 定时器要等数秒才能把图标局刷隐藏）。
+                 * 定时器唤醒不清除，图标在睡眠期间持续显示。 */
+                espaperplay_input_set_sleep_indicator(false);
+                /* 重连 WiFi 并强制 NTP 对时（立即校正时钟，消除标定残差），
+                 * 再标记活动避免立即重新睡眠。重连约 2.5s；期间若再有用户
+                 * 操作，输入路径会持续刷新活动时间戳，设备保持唤醒，重连与
+                 * 对时独立进行、互不冲突。 */
                 espaperplay_wifi_resume_after_wake(true);
                 esp_err_t rs = espaperplay_clock_resync_now(ESPAPERPLAY_POWER_NTP_TIMEOUT_MS);
                 if (rs != ESP_OK) {
                     ESP_LOGW(TAG, "user-wake NTP resync failed: %s", esp_err_to_name(rs));
                 }
-                /* 立即清除睡眠指示：状态栏 1s 定时器随即把图标隐藏（与 WiFi
-                 * 图标同一局部刷新路径），无需额外等待，避免图标滞后数秒。
-                 * 定时器唤醒不清除，图标在睡眠期间持续显示。 */
-                espaperplay_input_set_sleep_indicator(false);
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_WAKE_GRACE_MS));
                 espaperplay_input_mark_activity();
             }

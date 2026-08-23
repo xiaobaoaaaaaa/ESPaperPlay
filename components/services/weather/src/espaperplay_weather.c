@@ -12,6 +12,7 @@
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -140,6 +141,15 @@ static const char *weather_data_host(void) {
 static SemaphoreHandle_t s_lock = NULL; /*!< 缓存 / 快照 / 状态访问互斥锁 */
 static TaskHandle_t s_task = NULL;      /*!< 后台刷新任务句柄（NULL=未运行） */
 static volatile uint32_t s_refresh_interval_ms = ESPAPERPLAY_WEATHER_REFRESH_INTERVAL_MS;
+
+/*!< 上次成功整体刷新的时刻（esp_timer，毫秒；0=从未成功）。用于电源管理
+ * 判定睡眠期间天气是否过期（到期则借定时器唤醒重连拉取）。 */
+static volatile int64_t s_last_refresh_ok_ms = 0;
+/*!< 上次真实发起整体刷新的时刻（含失败；失败退避用，避免持续失败时
+ * 每次分钟唤醒都白白重连 WiFi）。 */
+static volatile int64_t s_last_refresh_try_ms = 0;
+/*!< 刷新完成信号（每次刷新尝试结束置位，供外部等待完成）。 */
+static EventGroupHandle_t s_refresh_done = NULL;
 
 static espaperplay_weather_snapshot_t s_snapshot;   /*!< 数据快照 */
 static espaperplay_weather_status_t s_status;       /*!< 运行状态（含最近错误） */
@@ -1859,6 +1869,7 @@ esp_err_t espaperplay_weather_refresh(void) {
         weather_record_error(0, "和风天气 API Key 未配置");
         return ESP_ERR_INVALID_STATE;
     }
+    s_last_refresh_try_ms = esp_timer_get_time() / 1000LL;
 
     /* 1. 解析 / 复用位置。 */
     char loc_id[16];
@@ -2116,9 +2127,15 @@ static void weather_task(void *arg) {
     }
 
     while (1) {
+        /* 清除完成信号后刷新，结束时置位：供电源管理等外部方同步等待。 */
+        if (s_refresh_done != NULL) {
+            xEventGroupClearBits(s_refresh_done, BIT(0));
+        }
         if (weather_wifi_sta_online()) {
             esp_err_t err = espaperplay_weather_refresh();
-            if (err != ESP_OK) {
+            if (err == ESP_OK) {
+                s_last_refresh_ok_ms = esp_timer_get_time() / 1000LL;
+            } else {
                 ESP_LOGW(TAG, "weather refresh failed: %s", esp_err_to_name(err));
             }
             /* 监控任务栈余量（TLS 握手等路径的栈占用），便于发现潜在溢出。 */
@@ -2127,6 +2144,9 @@ static void weather_task(void *arg) {
         } else {
             ESP_LOGD(TAG, "no STA network, skip weather refresh");
         }
+        if (s_refresh_done != NULL) {
+            xEventGroupSetBits(s_refresh_done, BIT(0));
+        }
         /* 等待周期或立即刷新通知（通知返回 pdTRUE，立即进入下一轮）。 */
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(s_refresh_interval_ms));
     }
@@ -2134,6 +2154,9 @@ static void weather_task(void *arg) {
 
 esp_err_t espaperplay_weather_start(void) {
     weather_lock_ensure();
+    if (s_refresh_done == NULL) {
+        s_refresh_done = xEventGroupCreate();
+    }
     if (s_task != NULL) {
         return ESP_OK; /* 幂等 */
     }
@@ -2176,4 +2199,27 @@ void espaperplay_weather_config_changed(void) {
     ESP_LOGI(TAG, "weather config changed, clearing caches and requesting refresh");
     espaperplay_weather_cache_clear();
     espaperplay_weather_request_refresh();
+}
+
+bool espaperplay_weather_is_refresh_due(void) {
+    const espaperplay_system_config_t *cfg = espaperplay_system_get_config();
+    if (cfg->weather_api_key[0] == '\0') {
+        return false; /* 未配置 Key：永不因天气到期而触发联网 */
+    }
+    const int64_t now_ms = esp_timer_get_time() / 1000LL;
+    const int64_t interval = (int64_t)s_refresh_interval_ms;
+    if (now_ms - s_last_refresh_ok_ms < interval) {
+        return false;
+    }
+    /* 数据已过期，但距上次真实尝试不足一周期时仍等待（失败退避）。 */
+    return (now_ms - s_last_refresh_try_ms) >= interval;
+}
+
+bool espaperplay_weather_wait_refresh_done(uint32_t timeout_ms) {
+    EventGroupHandle_t done = s_refresh_done;
+    if (done == NULL || s_task == NULL) {
+        return true; /* 任务未运行：无在途刷新可等 */
+    }
+    EventBits_t bits = xEventGroupWaitBits(done, BIT(0), pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
+    return (bits & BIT(0)) != 0;
 }

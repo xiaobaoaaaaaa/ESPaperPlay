@@ -295,6 +295,26 @@ void espaperplay_weather_config_changed(void);
 esp_err_t espaperplay_weather_refresh(void);
 
 /**
+ * @brief 判断天气数据是否已过期且值得发起联网刷新。
+ *
+ * 数据距上次成功刷新超过刷新周期，且距上次真实尝试（含失败）也已超过
+ * 一周期（失败退避：持续失败时不会每次唤醒都触发重连）。API Key 未配置
+ * 时恒为 false。供电源管理在定时器唤醒时判定是否借本次唤醒重连拉取；
+ * 刷新周期同 espaperplay_weather_set_refresh_interval_ms()。
+ */
+bool espaperplay_weather_is_refresh_due(void);
+
+/**
+ * @brief 等待在途的整体刷新结束（最多 timeout_ms）。
+ *
+ * 后台任务未运行或无在途刷新时立即返回 true；超时返回 false。
+ * 与 espaperplay_weather_request_refresh() 配合使用可同步等待一次刷新完成。
+ *
+ * @return true=刷新已结束（成功与否需另行查询）；false=等待超时。
+ */
+bool espaperplay_weather_wait_refresh_done(uint32_t timeout_ms);
+
+/**
  * @brief 获取天气数据快照（当前缓存数据的拷贝）。
  *
  * @param out 输出快照（非空；结构较大，建议调用方在堆上分配）。
