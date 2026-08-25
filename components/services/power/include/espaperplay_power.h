@@ -156,6 +156,17 @@ esp_err_t espaperplay_power_set_periodic_wakeup_ms(uint32_t timeout_ms);
  */
 esp_err_t espaperplay_power_set_periodic_wakeup_minute_aligned(bool enable);
 
+/**
+ * @brief 记录一次外部活动（任意线程可调用）。
+ *
+ * 供输入子系统之外的活动源使用，当前为 Web 控制台心跳：管理页面打开时
+ * 前端周期调用 POST /api/heartbeat，服务端转调本函数。自动睡眠管理任务
+ * 在最近一次外部活动后的保持唤醒窗口内（70s，覆盖浏览器后台标签页的
+ * 定时器节流）不进入浅睡眠；窗口内心跳持续到达即持续唤醒，客户端关闭 /
+ * 断网后设备在窗口超时后自然恢复自动睡眠。
+ */
+void espaperplay_power_note_external_activity(void);
+
 #ifdef __cplusplus
 }
 #endif

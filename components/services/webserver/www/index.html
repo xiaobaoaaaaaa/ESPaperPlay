@@ -483,7 +483,8 @@
                         <li><a class="menu-item" data-target="wifi" data-title="WiFi 设置" data-sub="无线网络配置">WiFi 设置</a>
                         </li>
                         <li><a class="menu-item" data-target="fonts" data-title="字体管理" data-sub="SD 卡字体">字体管理</a></li>
-                        <li><a class="menu-item" data-target="files" data-title="文件管理" data-sub="SD 卡文件浏览与管理">文件管理</a></li>
+                        <li><a class="menu-item" data-target="files" data-title="文件管理" data-sub="SD 卡文件浏览与管理">文件管理</a>
+                        </li>
                         <li><a class="menu-item" data-target="account" data-title="账户安全" data-sub="登录密码">账户安全</a></li>
                     </ul>
                 </div>
@@ -611,8 +612,7 @@
                 <form id="powerForm">
                     <div class="field">
                         <label>设备自动浅睡眠（秒，0 = 关闭自动睡眠）</label>
-                        <input type="number" name="auto_sleep_timeout_s" min="0" max="86400" step="1"
-                            placeholder="30">
+                        <input type="number" name="auto_sleep_timeout_s" min="0" max="86400" step="1" placeholder="30">
                     </div>
                     <div class="actions">
                         <button type="submit" class="primary">保存</button>
@@ -1742,10 +1742,21 @@
             $('.sidebar').classList.toggle('open');
         });
 
+        /* 心跳：告知设备控制台仍在线，设备侧据此抑制自动浅睡眠
+         * （服务端保持唤醒窗口 70s，覆盖浏览器后台标签页的定时器节流）。 */
+        async function sendHeartbeat() {
+            if (!getToken()) return;
+            try {
+                await apiFetch('/api/heartbeat', { method: 'POST' });
+            } catch (e) { /* 设备可能睡眠/重启，忽略 */ }
+        }
+
         /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
         checkAuth();
         setInterval(loadStatus, 5000);
         setInterval(loadWeather, 15000);
+        setInterval(sendHeartbeat, 15000);
+        sendHeartbeat();
     </script>
 </body>
 

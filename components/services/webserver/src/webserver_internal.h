@@ -88,6 +88,7 @@ esp_err_t webserver_handle_root_get(httpd_req_t *req);
 esp_err_t webserver_handle_favicon_get(httpd_req_t *req);
 esp_err_t webserver_handle_status_get(httpd_req_t *req);
 esp_err_t webserver_handle_reboot_post(httpd_req_t *req);
+esp_err_t webserver_handle_heartbeat_post(httpd_req_t *req);
 
 /* 配置域（webserver_handler_config.c）。 */
 esp_err_t webserver_handle_config_get(httpd_req_t *req);

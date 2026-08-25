@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_power.h"
 #include "espaperplay_storage.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
@@ -35,6 +36,30 @@ esp_err_t webserver_handle_root_get(httpd_req_t *req) {
 esp_err_t webserver_handle_favicon_get(httpd_req_t *req) {
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
+ * POST /api/heartbeat —— Web 控制台心跳。
+ *
+ * 管理页面打开时前端周期调用；记录一次外部活动，自动睡眠管理任务在
+ * 保持唤醒窗口内不进入浅睡眠（见 espaperplay_power_note_external_activity）。
+ * 需鉴权：仅已登录的控制台可抑制睡眠，会话过期后设备自然恢复休眠。
+ */
+esp_err_t webserver_handle_heartbeat_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    espaperplay_power_note_external_activity();
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
     return ESP_OK;
 }
 

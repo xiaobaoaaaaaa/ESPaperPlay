@@ -58,12 +58,31 @@ static const char *TAG = "ESPaperPlay_POWER";
  * 各留出约 2s 让定时器把图标显隐真正绘制到屏上，再正式睡眠/重连。 */
 #define ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS 2000
 
+/* 外部活动保持唤醒窗口（毫秒）：最近一次外部活动（如 Web 控制台心跳）
+ * 在本窗口内则不进入自动浅睡眠。窗口需大于前端心跳间隔（15s）并覆盖
+ * 浏览器后台标签页的定时器节流（隐藏页最坏 ~60s/次），取 70s。 */
+#define ESPAPERPLAY_POWER_EXT_ACTIVITY_WINDOW_MS 70000
+
 static uint32_t s_auto_sleep_timeout_ms = ESPAPERPLAY_POWER_AUTO_SLEEP_TIMEOUT_MS;
 static uint32_t s_periodic_wakeup_ms = 0;             /*!< 周期定时器唤醒间隔（0=关闭） */
 static bool s_periodic_wakeup_minute_aligned = false; /*!< 周期唤醒对齐到分钟边界 */
 static bool s_auto_sleep_started = false;
 static bool s_wakeup_configured = false;
-static bool s_wake_was_timer = false; /*!< 上次唤醒是否由定时器触发 */
+static bool s_wake_was_timer = false;           /*!< 上次唤醒是否由定时器触发 */
+static volatile uint64_t s_ext_activity_ms = 0; /*!< 上次外部活动时刻（0=尚无） */
+
+void espaperplay_power_note_external_activity(void) {
+    s_ext_activity_ms = (uint64_t)(esp_timer_get_time() / 1000);
+}
+
+/** 外部活动是否仍在保持唤醒窗口内。 */
+static bool power_ext_activity_fresh(void) {
+    if (s_ext_activity_ms == 0) {
+        return false;
+    }
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    return now_ms < s_ext_activity_ms + ESPAPERPLAY_POWER_EXT_ACTIVITY_WINDOW_MS;
+}
 
 esp_err_t espaperplay_power_init(void) {
     ESP_LOGI(TAG, "Power management init");
@@ -290,6 +309,11 @@ static void power_auto_sleep_task(void *arg) {
         const uint64_t idle_ms = (now_ms > last) ? (now_ms - last) : 0;
 
         if (idle_ms >= threshold) {
+            /* 外部活动（Web 客户端心跳）保持唤醒：窗口内跳过本轮睡眠判定
+             * （WiFi 保持连接，心跳可持续到达）。 */
+            if (power_ext_activity_fresh()) {
+                continue;
+            }
             ESP_LOGI(TAG, "idle %llu ms >= threshold %u ms -> light sleep", idle_ms,
                      (unsigned)threshold);
             espaperplay_input_set_sleep_indicator(true);
@@ -342,7 +366,10 @@ static void power_auto_sleep_task(void *arg) {
                     }
                 }
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_REFRESH_GRACE_MS));
-                if (espaperplay_input_get_last_activity_ms() > activity_at_wake) {
+                /* 刷新窗口内若有用户操作或 Web 心跳到达（借重连窗口），均升级
+                 * 为保持唤醒：维持连接并重置活动计时，避免刚刷新完又睡。 */
+                if (espaperplay_input_get_last_activity_ms() > activity_at_wake ||
+                    power_ext_activity_fresh()) {
                     /* 升级为用户唤醒：保持连接。 */
                     if (!connected) {
                         espaperplay_wifi_resume_after_wake(true);
