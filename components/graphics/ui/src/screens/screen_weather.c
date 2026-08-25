@@ -112,9 +112,9 @@ static lv_obj_t *s_warn_bar = NULL;    /*!< 预警长条（点击弹详情） */
 static lv_obj_t *s_warn_detail = NULL; /*!< 预警详情卡片（覆盖层） */
 static lv_obj_t *s_warn_title = NULL;
 static lv_obj_t *s_warn_desc = NULL;
-static lv_obj_t *s_hourly_card = NULL;                                      /*!< 24h 卡片 */
-static lv_obj_t *s_hourly_scroll = NULL;                                    /*!< 24h 横向滚动容器 */
-static lv_obj_t *s_hourly_chart = NULL;                                     /*!< 24h 温度曲线 */
+static lv_obj_t *s_hourly_card = NULL;   /*!< 24h 卡片 */
+static lv_obj_t *s_hourly_scroll = NULL; /*!< 24h 横向滚动容器 */
+static lv_obj_t *s_hourly_chart = NULL;  /*!< 24h 温度曲线 */
 static lv_obj_t *s_updated_label = NULL; /*!< 「最近更新：xx前」 */
 static lv_obj_t *s_hourly_vals[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL];  /*!< 温度标注 */
 static lv_obj_t *s_hourly_icons[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL]; /*!< 图标行 */
@@ -800,6 +800,14 @@ static void weather_refresh(void) {
     }
     s_nudge_cnt = 0;
     s_hint[0] = '\0';
+
+    /* 数据已过期（刷新周期到期）：催促后台任务立即拉取。兜底覆盖非主界面
+     * 睡眠场景——用户唤醒路径不做天气强刷，后台任务倒计时在浅睡眠期间
+     * 冻结，仅靠其自身周期可能长时间等不到刷新。到期判定自带失败退避
+     * （距上次真实尝试不足一周期时返回 false），不会造成重复请求。 */
+    if (espaperplay_weather_is_refresh_due()) {
+        espaperplay_weather_request_refresh();
+    }
 
     /* 更新时变化才刷新标签（EPD 局部刷新省电）。 */
     if (strcmp(s_last_update, snap->update_time) == 0) {
