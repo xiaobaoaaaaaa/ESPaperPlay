@@ -109,6 +109,30 @@ static esp_err_t register_handlers(httpd_handle_t server) {
          .method = HTTP_POST,
          .handler = webserver_handle_fonts_delete_post,
          .user_ctx = NULL},
+        {.uri = "/api/files",
+         .method = HTTP_GET,
+         .handler = webserver_handle_files_get,
+         .user_ctx = NULL},
+        {.uri = "/api/files/download",
+         .method = HTTP_GET,
+         .handler = webserver_handle_files_download_get,
+         .user_ctx = NULL},
+        {.uri = "/api/files/upload",
+         .method = HTTP_POST,
+         .handler = webserver_handle_files_upload_post,
+         .user_ctx = NULL},
+        {.uri = "/api/files/mkdir",
+         .method = HTTP_POST,
+         .handler = webserver_handle_files_mkdir_post,
+         .user_ctx = NULL},
+        {.uri = "/api/files/rename",
+         .method = HTTP_POST,
+         .handler = webserver_handle_files_rename_post,
+         .user_ctx = NULL},
+        {.uri = "/api/files/delete",
+         .method = HTTP_POST,
+         .handler = webserver_handle_files_delete_post,
+         .user_ctx = NULL},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
@@ -141,7 +165,7 @@ static esp_err_t start_https_server(void) {
     /* HTTPS 主服务器（443）：承载全部业务路由。 */
     httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
     conf.httpd.stack_size = 10240; /* TLS 握手需要较大栈 */
-    conf.httpd.max_uri_handlers = 24;
+    conf.httpd.max_uri_handlers = 28;
     conf.servercert = cert;
     conf.servercert_len = cert_len;
     conf.prvtkey_pem = key;

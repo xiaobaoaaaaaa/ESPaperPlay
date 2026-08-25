@@ -483,6 +483,7 @@
                         <li><a class="menu-item" data-target="wifi" data-title="WiFi 设置" data-sub="无线网络配置">WiFi 设置</a>
                         </li>
                         <li><a class="menu-item" data-target="fonts" data-title="字体管理" data-sub="SD 卡字体">字体管理</a></li>
+                        <li><a class="menu-item" data-target="files" data-title="文件管理" data-sub="SD 卡文件浏览与管理">文件管理</a></li>
                         <li><a class="menu-item" data-target="account" data-title="账户安全" data-sub="登录密码">账户安全</a></li>
                     </ul>
                 </div>
@@ -707,6 +708,30 @@
                 </div>
                 <div class="actions">
                     <button type="button" id="fontRebootBtn">重启设备以应用</button>
+                </div>
+            </section>
+
+            <section class="panel" id="panel-files">
+                <h2>文件管理</h2>
+                <p class="hint">浏览与管理 SD 卡中的文件。点击目录名进入；<strong>删除文件夹会递归删除其全部内容，不可恢复。</strong></p>
+                <div class="field">
+                    <label id="filePathLabel">当前目录：/</label>
+                    <div class="actions">
+                        <button type="button" id="filesUpBtn">上一级</button>
+                        <button type="button" id="filesRefreshBtn">刷新</button>
+                        <button type="button" id="filesMkdirBtn">新建文件夹</button>
+                    </div>
+                    <div id="fileList" class="font-list"></div>
+                    <p id="filesHint" class="hint"></p>
+                </div>
+                <div class="field">
+                    <label>上传文件到当前目录</label>
+                    <input type="file" id="fileUploadInput">
+                    <button type="button" id="filesUploadBtn">上传</button>
+                    <span id="filesUploadStatus" class="hint"></span>
+                    <div class="progress" id="filesProgress" hidden>
+                        <div class="progress-bar" id="filesProgressBar"></div>
+                    </div>
                 </div>
             </section>
 
@@ -1455,6 +1480,230 @@
             toast('正在重启…');
         });
 
+        /* ---- 文件管理（SD 卡浏览 / 上传 / 下载 / 新建 / 重命名 / 删除） ---- */
+        let filesCwd = '/';
+        let filesEntries = []; /* 当前目录条目（上传覆盖确认用） */
+
+        function filesJoin(base, name) {
+            return base === '/' ? '/' + name : base + '/' + name;
+        }
+
+        /* 加载当前目录列表（目录优先，由后端保证；点击目录名进入）。 */
+        async function loadFiles() {
+            if (!getToken()) return; /* 未登录时不加载 */
+            try {
+                const res = await apiFetch('/api/files?path=' + encodeURIComponent(filesCwd));
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const d = await res.json();
+                $('#filePathLabel').textContent = '当前目录：' + d.path;
+                const list = $('#fileList');
+                list.innerHTML = '';
+                if (!d.sd_mounted) {
+                    $('#filesHint').textContent = 'SD 卡未挂载，无法浏览文件。';
+                    return;
+                }
+                $('#filesHint').textContent = d.truncated ? '条目过多，仅显示前一部分。' : '';
+                const entries = d.entries || [];
+                filesEntries = entries;
+                if (entries.length === 0) {
+                    list.innerHTML = '<p class="hint">空目录。</p>';
+                    return;
+                }
+                entries.forEach((e) => {
+                    const item = document.createElement('div');
+                    item.className = 'font-item';
+                    const label = document.createElement('label');
+                    label.className = 'radio';
+                    label.textContent = e.dir
+                        ? '📁 ' + e.name + '/'
+                        : '📄 ' + e.name + '（' + fmtBytes(e.size || 0) + '）';
+                    if (e.dir) {
+                        label.style.cursor = 'pointer';
+                        label.title = '点击进入';
+                        label.addEventListener('click', () => {
+                            filesCwd = filesJoin(d.path, e.name);
+                            loadFiles();
+                        });
+                    }
+                    item.appendChild(label);
+
+                    if (!e.dir) {
+                        const dl = document.createElement('button');
+                        dl.type = 'button';
+                        dl.className = 'link-btn';
+                        dl.textContent = '下载';
+                        dl.addEventListener('click', () => downloadFile(e.name));
+                        item.appendChild(dl);
+                    }
+
+                    const ren = document.createElement('button');
+                    ren.type = 'button';
+                    ren.className = 'link-btn';
+                    ren.textContent = '重命名';
+                    ren.addEventListener('click', () => renameFile(e.name, e.dir));
+                    item.appendChild(ren);
+
+                    const del = document.createElement('button');
+                    del.type = 'button';
+                    del.className = 'link-btn';
+                    del.textContent = '删除';
+                    del.addEventListener('click', () => deleteFile(e.name, e.dir));
+                    item.appendChild(del);
+
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                /* 设备可能重启/网络切换，忽略。 */
+            }
+        }
+
+        $('#filesUpBtn').addEventListener('click', () => {
+            if (filesCwd === '/') return;
+            filesCwd = filesCwd.slice(0, filesCwd.lastIndexOf('/')) || '/';
+            loadFiles();
+        });
+        $('#filesRefreshBtn').addEventListener('click', loadFiles);
+        $('#filesMkdirBtn').addEventListener('click', async () => {
+            const name = prompt('新文件夹名称：');
+            if (!name) return;
+            try {
+                const d = await postForm('/api/files/mkdir',
+                    'path=' + encodeURIComponent(filesCwd) + '&name=' + encodeURIComponent(name));
+                if (d.ok) {
+                    toast('已创建文件夹：' + name);
+                    loadFiles();
+                } else {
+                    toast('创建失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('创建失败：' + e, true);
+            }
+        });
+
+        /* 下载文件：经 apiFetch 携带鉴权头取回 Blob，再触发浏览器保存
+         * （直接 <a href> 无法带 Authorization 头）。 */
+        async function downloadFile(name) {
+            try {
+                toast('开始下载：' + name);
+                const res = await apiFetch('/api/files/download?path=' +
+                    encodeURIComponent(filesCwd) + '&name=' + encodeURIComponent(name));
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                toast('下载失败：' + e, true);
+            }
+        }
+
+        /* 上传文件到当前目录（原始字节，文件名经查询参数传递；XHR 以监听进度）。
+         * 默认拒绝覆盖：目标已存在时先经用户确认再带 overwrite=1。 */
+        $('#filesUploadBtn').addEventListener('click', () => {
+            const input = $('#fileUploadInput');
+            const f = input.files && input.files[0];
+            if (!f) {
+                toast('请先选择文件', true);
+                return;
+            }
+            if (filesEntries.some((e) => e.name === f.name) &&
+                !confirm('当前目录已存在「' + f.name + '」，确定覆盖吗？')) {
+                return;
+            }
+            const btn = $('#filesUploadBtn');
+            const status = $('#filesUploadStatus');
+            const progress = $('#filesProgress');
+            const bar = $('#filesProgressBar');
+            btn.disabled = true;
+            status.textContent = '上传中… 0%';
+            progress.hidden = false;
+            bar.style.width = '0%';
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/files/upload?path=' + encodeURIComponent(filesCwd) +
+                '&name=' + encodeURIComponent(f.name) + '&overwrite=1');
+            const t = getToken();
+            if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+            xhr.upload.onprogress = (ev) => {
+                if (ev.lengthComputable) {
+                    const pct = Math.round((ev.loaded / ev.total) * 100);
+                    bar.style.width = pct + '%';
+                    status.textContent = '上传中… ' + pct + '%';
+                }
+            };
+            xhr.onload = () => {
+                progress.hidden = true;
+                btn.disabled = false;
+                try {
+                    const d = xhr.status === 200 ? JSON.parse(xhr.responseText) : {};
+                    if (xhr.status === 200 && d.ok) {
+                        toast('已上传：' + f.name + '（' + fmtBytes(d.size || 0) + '）');
+                        input.value = '';
+                        status.textContent = '';
+                        loadFiles();
+                    } else {
+                        toast('上传失败：' + (d.error || ('HTTP ' + xhr.status)), true);
+                        status.textContent = '';
+                    }
+                } catch (e) {
+                    toast('上传失败：' + e, true);
+                    status.textContent = '';
+                }
+            };
+            xhr.onerror = () => {
+                progress.hidden = true;
+                btn.disabled = false;
+                status.textContent = '';
+                toast('上传失败：网络错误', true);
+            };
+            xhr.send(f);
+        });
+
+        async function renameFile(name, isDir) {
+            const newName = prompt(
+                (isDir ? '重命名文件夹「' : '重命名文件「') + name + '」为：', name);
+            if (!newName || newName === name) return;
+            try {
+                const d = await postForm('/api/files/rename',
+                    'path=' + encodeURIComponent(filesCwd) +
+                    '&from=' + encodeURIComponent(name) + '&to=' + encodeURIComponent(newName));
+                if (d.ok) {
+                    toast('已重命名为：' + newName);
+                    loadFiles();
+                } else {
+                    toast('重命名失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('重命名失败：' + e, true);
+            }
+        }
+
+        async function deleteFile(name, isDir) {
+            const msg = isDir
+                ? '确定删除文件夹「' + name + '」及其全部内容吗？此操作不可恢复！'
+                : '确定删除文件「' + name + '」吗？此操作不可恢复！';
+            if (!confirm(msg)) return;
+            try {
+                const d = await postForm('/api/files/delete',
+                    'path=' + encodeURIComponent(filesCwd) + '&name=' + encodeURIComponent(name));
+                if (d.ok) {
+                    toast('已删除：' + name);
+                    loadFiles();
+                } else {
+                    toast('删除失败：' + (d.error || '未知错误'), true);
+                }
+            } catch (e) {
+                toast('删除失败：' + e, true);
+            }
+        }
+
         /* ---- 侧边栏多级菜单 ---- */
         function showPanel(target) {
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -1470,6 +1719,8 @@
             }
             /* 移动端点击后收起抽屉。 */
             if (window.innerWidth <= 720) $('.sidebar').classList.remove('open');
+            /* 文件管理面板按需加载目录列表。 */
+            if (target === 'files') loadFiles();
         }
 
         document.querySelectorAll('.menu-item').forEach(item => {

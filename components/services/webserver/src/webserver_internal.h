@@ -105,6 +105,15 @@ esp_err_t webserver_handle_fonts_select_post(httpd_req_t *req);
 esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req);
 esp_err_t webserver_handle_fonts_delete_post(httpd_req_t *req);
 
+/* 文件域（webserver_handler_files.c）：SD 卡文件浏览 / 上传 / 下载 /
+ * 新建文件夹 / 重命名 / 删除。 */
+esp_err_t webserver_handle_files_get(httpd_req_t *req);
+esp_err_t webserver_handle_files_download_get(httpd_req_t *req);
+esp_err_t webserver_handle_files_upload_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_rename_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_delete_post(httpd_req_t *req);
+
 /* 鉴权守卫（webserver_auth_guard.c）。 */
 esp_err_t webserver_require_auth(httpd_req_t *req);
 bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size);
