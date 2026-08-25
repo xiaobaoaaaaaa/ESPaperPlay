@@ -226,6 +226,10 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_reader;
  * 字体选择 / 测试页入口），难以输入的配置项提示到 Web 管理页，边缘滑动或单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_settings;
 
+/** 文件管理页页面实例（screen_files.c）：SD 卡基本文件操作（浏览 / 新建文件夹 /
+ * 重命名 / 删除），敏感操作二次确认，长按条目弹菜单，边缘滑动或单击返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_files;
+
 /**
  * @brief 显示开机日志屏（不经页面栈，直接绘制在活动屏幕上）。
  *

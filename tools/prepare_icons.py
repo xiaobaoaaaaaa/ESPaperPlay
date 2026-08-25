@@ -38,6 +38,7 @@ ICONS = [
     ("mdi", "weather-partly-cloudy", "weather", "天气：多云转晴"),
     ("mdi", "book-open-page-variant", "reader", "阅读器：打开的书"),
     ("mdi", "cog", "settings", "设置：齿轮"),
+    ("mdi", "folder-multiple-outline", "files", "文件管理：多文件夹"),
     ("mdi", "bug", "debug", "测试/调试：bug"),
 ]
 

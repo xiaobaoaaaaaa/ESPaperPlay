@@ -8,6 +8,7 @@ idf_component_register(
          "src/qweather_icons.c"
          "src/screens/screen_reader.c"
          "src/screens/screen_settings.c"
+         "src/screens/screen_files.c"
          "src/screens/screen_test.c"
          "src/screens/screen_weather.c"
          "src/ui_stack.c"

@@ -65,7 +65,7 @@ static const char *TAG = "ESPaperPlay_UI";
 #define HOME_SWIPE_MIN_RATIO 1.2f /* 横向位移 / 纵向位移 最小比例 */
 #define HOME_UI_PERIOD_MS 1000    /* 时间/状态轮询周期（秒级响应；内容未变不刷新 EPD） */
 
-#define HOME_APP_CNT 3  /* 应用数量 */
+#define HOME_APP_CNT 4  /* 应用数量 */
 #define HOME_PAGE_CNT 2 /* 主区域子页数 */
 
 #define HOME_APP_ICON_PX 64                      /* 图标位图尺寸（A8，Iconify 生成） */
@@ -94,6 +94,7 @@ typedef struct {
 static const home_app_t s_apps[HOME_APP_CNT] = {
     {"天气", &icon_weather_64, &espaperplay_ui_page_weather},
     {"阅读器", &icon_reader_64, NULL},
+    {"文件", &icon_files_64, &espaperplay_ui_page_files},
     {"设置", &icon_settings_64, &espaperplay_ui_page_settings},
     /* 测试页不放在主界面：经设置页「开发者」组进入（页面实例保留在 ui.h）。 */
 };
