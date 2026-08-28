@@ -1176,8 +1176,10 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     const int status_h = 22;
     const int bh = files_btn_h();
     const int kb_h = files_scaled(240) < 170 ? 170 : files_scaled(240);
-    const int panel_h = pad + title_h + 6 + ta_h + 4 + status_h + 6 + bh + 8 + kb_h + pad;
-    const int panel_y = scr_h - panel_h - 6;
+    /* 面板仅含标题/输入框/提示/按钮（不含键盘，键盘单独挂全屏 modal 贴底，避免被面板裁剪）。 */
+    const int panel_h = pad + title_h + 6 + ta_h + 4 + status_h + 6 + bh + pad;
+    const int kb_y = scr_h - kb_h - 6;       /* 键盘贴底 */
+    const int panel_y = kb_y - panel_h - 6;  /* 面板位于键盘上方 */
 
     lv_obj_t *panel = lv_obj_create(s_modal);
     lv_obj_set_size(panel, panel_w, panel_h);
@@ -1209,6 +1211,10 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     lv_obj_set_style_border_width(ta, 2, 0);
     lv_obj_set_style_radius(ta, 6, 0);
     lv_obj_set_style_pad_left(ta, 8, 0);
+    /* 墨水屏：光标闪烁会触发连续局部刷新，禁用（anim_duration=0 即不闪烁）。
+     * 默认主题在 LV_PART_CURSOR|LV_STATE_FOCUSED 上设了 400ms，故默认态与聚焦态都要覆盖。 */
+    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR);
+    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
 
     /* 校验提示（默认空） */
     lv_obj_t *status = files_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
@@ -1223,10 +1229,10 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     files_card_button(panel, "取消", pad, btn_y, bw, bh, false, files_kb_cancel_cb, NULL);
     files_card_button(panel, "确定", pad + bw + 12, btn_y, bw, bh, true, files_kb_ok_cb, NULL);
 
-    /* 键盘（占面板剩余高度） */
-    lv_obj_t *kb = lv_keyboard_create(panel);
-    lv_obj_set_size(kb, panel_w - 2 * pad, kb_h);
-    lv_obj_set_pos(kb, pad, btn_y + bh + 8);
+    /* 键盘直接挂在全屏 modal 上并贴底，避免被面板裁剪（面板仅含标题/输入框/提示/按钮）。 */
+    lv_obj_t *kb = lv_keyboard_create(s_modal);
+    lv_obj_set_size(kb, panel_w, kb_h);
+    lv_obj_align(kb, LV_ALIGN_TOP_LEFT, FILES_MARGIN, kb_y);
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(kb, ta);
 
