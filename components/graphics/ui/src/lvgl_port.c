@@ -175,9 +175,7 @@ static void espaperplay_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area,
 }
 
 /** LVGL tick 源：esp_timer 单调毫秒时钟（1ms 分辨率，uint32 回绕由 LVGL 处理）。 */
-static uint32_t espaperplay_lvgl_tick_ms(void) {
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
+static uint32_t espaperplay_lvgl_tick_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 /**
  * LVGL 渲染任务：周期调用 lv_timer_handler（渲染 + 触发 flush 回调链）。
@@ -193,43 +191,16 @@ static void espaperplay_lvgl_task(void *arg) {
         /* 先执行投递的 UI 操作（在 LVGL 线程内、渲染周期之外，安全）。 */
         espaperplay_lv_call_item_t item;
         if (xQueueReceive(s_lv_call_queue, &item, 0) == pdTRUE) {
-            const uint32_t call_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            const UBaseType_t q_remain = uxQueueMessagesWaiting(s_lv_call_queue);
-            ESP_LOGD(TAG,
-                     "lv_call: dequeue fn=%p arg=%p seq=%u need_done=%d q_remain=%u tick=%u",
-                     (void *)item.fn, item.arg, (unsigned)item.seq, (int)item.need_done,
-                     (unsigned)q_remain, (unsigned)call_start_ms);
             if (item.fn != NULL) {
                 item.fn(item.arg);
             }
-            const uint32_t call_cost_ms =
-                (uint32_t)(esp_timer_get_time() / 1000) - call_start_ms;
             if (item.need_done) {
                 s_lv_call_done_seq = item.seq; /* 先发布序号再给信号量 */
                 xSemaphoreGive(s_lv_call_done);
             }
-            if (call_cost_ms > 50) {
-                ESP_LOGW(TAG,
-                         "lv_call: fn=%p cost %u ms (q_remain=%u) — LVGL 线程阻塞过长，"
-                         "可能导致后续 dispatch 超时",
-                         (void *)item.fn, (unsigned)call_cost_ms, (unsigned)q_remain);
-            } else {
-                ESP_LOGD(TAG, "lv_call: fn=%p done cost %u ms", (void *)item.fn,
-                         (unsigned)call_cost_ms);
-            }
         }
 
-        const uint32_t handler_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         uint32_t next = lv_timer_handler();
-        const uint32_t handler_cost_ms =
-            (uint32_t)(esp_timer_get_time() / 1000) - handler_start_ms;
-        if (handler_cost_ms > 30) {
-            ESP_LOGW(TAG, "lv_timer_handler cost %u ms (next=%u ms) — 渲染/布局耗时过长",
-                     (unsigned)handler_cost_ms, (unsigned)next);
-        } else {
-            ESP_LOGD(TAG, "lv_timer_handler cost %u ms next %u ms", (unsigned)handler_cost_ms,
-                     (unsigned)next);
-        }
         if (next == 0 || next > 100) {
             next = 100; /* 无定时器就绪（LV_NO_TIMER_READY）或异常值：兜底 */
         }
@@ -239,75 +210,20 @@ static void espaperplay_lvgl_task(void *arg) {
 
 esp_err_t espaperplay_gui_lv_call(espaperplay_gui_lv_call_fn_t fn, void *arg, uint32_t timeout_ms) {
     if (s_lv_call_queue == NULL || s_lv_call_done == NULL) {
-        ESP_LOGW(TAG, "lv_call: invalid state fn=%p (queue/done not ready)", (void *)fn);
         return ESP_ERR_INVALID_STATE; /* 移植层未启动 */
     }
-    const uint32_t call_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    const UBaseType_t q_free = uxQueueSpacesAvailable(s_lv_call_queue);
-    const UBaseType_t q_waiting = uxQueueMessagesWaiting(s_lv_call_queue);
-    ESP_LOGD(TAG, "lv_call: enqueue fn=%p arg=%p timeout=%u ms q_free=%u q_waiting=%u",
-             (void *)fn, arg, (unsigned)timeout_ms, (unsigned)q_free, (unsigned)q_waiting);
     const uint32_t seq = ++s_lv_call_seq_counter;
     const espaperplay_lv_call_item_t item = {fn, arg, seq, true};
     if (xQueueSend(s_lv_call_queue, &item, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-        const UBaseType_t q_free2 = uxQueueSpacesAvailable(s_lv_call_queue);
-        const UBaseType_t q_wait2 = uxQueueMessagesWaiting(s_lv_call_queue);
-        ESP_LOGW(TAG,
-                 "lv_call: enqueue timeout fn=%p after %u ms q_free=%u q_waiting=%u "
-                 "— 队列满或 LVGL 任务未消费",
-                 (void *)fn, (unsigned)timeout_ms, (unsigned)q_free2, (unsigned)q_wait2);
         return ESP_ERR_TIMEOUT; /* 队列满 */
     }
-    const uint32_t enqueue_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - call_start_ms;
-    if (enqueue_cost_ms > 10) {
-        ESP_LOGW(TAG, "lv_call: enqueue fn=%p blocked %u ms (q was full)", (void *)fn,
-                 (unsigned)enqueue_cost_ms);
-    }
-    /* 等待「自己的 seq」被执行完成（10ms 唤醒粒度轮询）。异步投递的项不发
-     * 完成信号，不会污染本等待。 */
+    /* 等待「自己的 seq」被执行完成（10ms 唤醒粒度轮询）。 */
     uint32_t waited = 0;
     while (s_lv_call_done_seq != seq && waited < timeout_ms) {
         xSemaphoreTake(s_lv_call_done, pdMS_TO_TICKS(10));
         waited += 10;
-        if ((waited % 100) == 0 && waited != 0 && s_lv_call_done_seq != seq) {
-            ESP_LOGD(TAG, "lv_call: waiting fn=%p seq=%u %u/%u ms done_seq=%u q_waiting=%u",
-                     (void *)fn, (unsigned)seq, (unsigned)waited, (unsigned)timeout_ms,
-                     (unsigned)s_lv_call_done_seq,
-                     (unsigned)uxQueueMessagesWaiting(s_lv_call_queue));
-        }
     }
     if (s_lv_call_done_seq != seq) {
-        const UBaseType_t q_wait3 = uxQueueMessagesWaiting(s_lv_call_queue);
-        ESP_LOGW(TAG,
-                 "lv_call: wait done timeout fn=%p seq=%u after %u ms q_waiting=%u "
-                 "done_seq=%u enqueue_cost=%u ms — LVGL 任务可能阻塞在 lv_timer_handler/flush",
-                 (void *)fn, (unsigned)seq, (unsigned)waited, (unsigned)q_wait3,
-                 (unsigned)s_lv_call_done_seq, (unsigned)enqueue_cost_ms);
-        return ESP_ERR_TIMEOUT;
-    }
-    const uint32_t total_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - call_start_ms;
-    ESP_LOGD(TAG, "lv_call: fn=%p seq=%u done total %u ms (enqueue %u ms + wait %u ms)", (void *)fn,
-             (unsigned)seq, (unsigned)total_cost_ms, (unsigned)enqueue_cost_ms, (unsigned)waited);
-    if (total_cost_ms > 200) {
-        ESP_LOGW(TAG, "lv_call: fn=%p total cost %u ms 超过 200ms，需关注 LVGL 渲染耗时",
-                 (void *)fn, (unsigned)total_cost_ms);
-    }
-    return ESP_OK;
-}
-
-esp_err_t espaperplay_gui_lv_post(espaperplay_gui_lv_call_fn_t fn, void *arg) {
-    if (s_lv_call_queue == NULL) {
-        return ESP_ERR_INVALID_STATE; /* 移植层未启动 */
-    }
-    /* 异步投递：不等待执行完成（fire-and-forget）。用于高频、展示型的
-     * 触摸批转发——LVGL 线程被渲染占用时投递失败仅丢展示帧，不阻塞
-     * 调用方（输入分发任务），触摸队列不会因等待而堆积。 */
-    const espaperplay_lv_call_item_t item = {fn, arg, 0, false};
-    if (xQueueSend(s_lv_call_queue, &item, 0) != pdTRUE) {
-        const UBaseType_t q_wait = uxQueueMessagesWaiting(s_lv_call_queue);
-        ESP_LOGW(TAG,
-                 "lv_post: queue full fn=%p q_waiting=%u — LVGL 线程繁忙，本次投递被丢弃",
-                 (void *)fn, (unsigned)q_wait);
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
@@ -371,13 +287,13 @@ esp_err_t espaperplay_gui_lv_start(void) {
      * 栈放 PSRAM：32KB 内部 RAM 分配会失败（WiFi/Web 已占大量内部堆），
      * PSRAM 栈是官方支持做法（esp_lvgl_adapter 的 LVGL_THREAD_STACK_IN_PSRAM）。 */
     static TaskHandle_t s_lvgl_task = NULL;
-    if (xTaskCreateWithCaps(espaperplay_lvgl_task, "gui_lvgl", 32768, NULL, 5,
-                            &s_lvgl_task, MALLOC_CAP_SPIRAM) != pdPASS) {
+    if (xTaskCreateWithCaps(espaperplay_lvgl_task, "gui_lvgl", 32768, NULL, 5, &s_lvgl_task,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "LVGL task create failed");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "LVGL %d.%d.%d started (%ux%u, draw buf %uB, partial mode)",
-             LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH, disp_w, disp_h,
+    ESP_LOGI(TAG, "LVGL %d.%d.%d started (%ux%u, draw buf %uB, partial mode)", LVGL_VERSION_MAJOR,
+             LVGL_VERSION_MINOR, LVGL_VERSION_PATCH, disp_w, disp_h,
              (unsigned)(disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
     return ESP_OK;
 }

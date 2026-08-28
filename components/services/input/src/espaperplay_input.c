@@ -20,31 +20,20 @@
 static const char *TAG = "ESPaperPlay_INPUT";
 
 /**
- * 事件队列设计：按键与触摸物理隔离为两个队列，经 FreeRTOS Queue Set
- * 合并消费（espaperplay_input_get_event() 阻塞等待任一队列）——
+ * 事件队列设计：按键与触摸物理隔离为两个独立队列，由 LVGL 线程分别
+ * 直读（按键经按键泵 lv_timer 排空、触摸经 indev read_cb 排空，见 ui
+ * 组件）——
  *
  *   - 按键队列（16 深）：稀疏、事件型（单击/双击/长按等语义动作），
  *     投递到队首（xQueueSendToFront），满时挤掉最旧，按键永不丢失；
  *   - 触摸队列（32 深）：高频、状态型（中断触发读取的坐标流，轨迹绘制
- *     需要中间点，不能只留最新一帧）。满时丢弃新事件——注意不能用
- *     xQueueReceive 挤旧：成员队列被直接读出时其 Queue Set 容器通知不
- *     会同步移除，陈旧通知会撑爆容器触发 FreeRTOS assert 崩溃。
+ *     需要中间点，不能只留最新一帧）。满时丢弃新事件，触摸洪泛不阻塞
+ *     读取任务；LVGL 线程每次 read 周期（~30ms）全量排空，积压有限。
  *
  * 两个队列互不干扰：长按 HOLD 节流（500ms）后按键速率 ~2/秒。
  */
 #define ESPAPERPLAY_INPUT_KEY_QUEUE_LEN 16   /*!< 按键事件队列长度（条） */
 #define ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN 32 /*!< 触摸事件队列长度（条） */
-
-/**
- * Queue Set 容器余量（条）。
- *
- * Queue Set 容器容量必须大于成员队列深度之和：恰好相等时，两队列同时
- * 装满的边界条件下，下一次成员队列投递会触发 FreeRTOS assert
- * （prvNotifyQueueSetContainer 崩溃）。余量同时吸收按键"挤旧"（直接
- * xQueueReceive 成员队列）在容器中留下的陈旧通知——成员队列被直接
- * 读出时其容器通知不会同步移除，需要余量 + 消费时自然清空。
- */
-#define ESPAPERPLAY_INPUT_QUEUE_SET_SLACK 16
 
 /**
  * LONG_PRESS_HOLD 事件的最小投递间隔（毫秒）。
@@ -56,9 +45,8 @@ static const char *TAG = "ESPaperPlay_INPUT";
  */
 #define ESPAPERPLAY_INPUT_HOLD_MIN_INTERVAL_MS 500
 
-static QueueHandle_t s_key_queue;    /*!< 按键事件队列 */
-static QueueHandle_t s_touch_queue;  /*!< 触摸事件队列 */
-static QueueSetHandle_t s_queue_set; /*!< 双队列合并等待（容量 = 两队列深度之和） */
+static QueueHandle_t s_key_queue;   /*!< 按键事件队列 */
+static QueueHandle_t s_touch_queue; /*!< 触摸事件队列 */
 static button_handle_t s_boot_button;
 static uint32_t s_last_hold_ms = 0; /*!< 上次投递 HOLD 的时刻（esp_timer 毫秒） */
 
@@ -131,33 +119,21 @@ static void input_post_key_event(uint8_t key_id, espaperplay_input_key_action_t 
  */
 static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_t count) {
     const uint16_t seq = ++s_touch_seq;
-    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     /* 任意触摸帧（按下 / 抬起）均视为用户活动。 */
     input_mark_activity();
 
     if (count == 0) {
-        ESP_LOGD(TAG, "touch cb: seq=%u release frame @%u ms q_free=%u q_waiting=%u", seq,
-                 (unsigned)now_ms, (unsigned)uxQueueSpacesAvailable(s_touch_queue),
-                 (unsigned)uxQueueMessagesWaiting(s_touch_queue));
         const espaperplay_input_event_t event = {
             .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
             .touch_pressed = 0,
             .touch_points = 0,
             .touch_seq = seq,
         };
-        const esp_err_t ret = espaperplay_input_post_event(&event);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "touch cb: post release seq=%u failed: %s", seq, esp_err_to_name(ret));
-        }
+        (void)espaperplay_input_post_event(&event);
         return;
     }
 
-    ESP_LOGD(TAG,
-             "touch cb: seq=%u press frame points=%u @%u ms p0=(%u,%u) q_free=%u q_waiting=%u",
-             seq, count, (unsigned)now_ms, points[0].x, points[0].y,
-             (unsigned)uxQueueSpacesAvailable(s_touch_queue),
-             (unsigned)uxQueueMessagesWaiting(s_touch_queue));
     for (uint8_t i = 0; i < count; i++) {
         const espaperplay_input_event_t event = {
             .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
@@ -166,14 +142,7 @@ static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_
             .touch_points = count,
             .touch_seq = seq,
         };
-        const esp_err_t ret = espaperplay_input_post_event(&event);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "touch cb: post point %u/%u seq=%u failed: %s", (unsigned)i,
-                     (unsigned)count, seq, esp_err_to_name(ret));
-        } else {
-            ESP_LOGD(TAG, "touch cb: posted point %u/%u seq=%u (%u,%u) id=%u", (unsigned)i,
-                     (unsigned)count, seq, points[i].x, points[i].y, points[i].id);
-        }
+        (void)espaperplay_input_post_event(&event);
     }
 }
 
@@ -245,29 +214,21 @@ static esp_err_t register_button_event(button_handle_t button, button_event_t ev
 }
 
 esp_err_t espaperplay_input_init(void) {
-    /* 双队列 + Queue Set（容量必须 >= 成员队列深度之和，否则投递会失败）。 */
+    /* 双队列（按键 / 触摸物理隔离，LVGL 线程分别直读）。 */
     s_key_queue = xQueueCreate(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN, sizeof(espaperplay_input_event_t));
     s_touch_queue =
         xQueueCreate(ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN, sizeof(espaperplay_input_event_t));
-    s_queue_set =
-        xQueueCreateSet(ESPAPERPLAY_INPUT_KEY_QUEUE_LEN + ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN +
-                        ESPAPERPLAY_INPUT_QUEUE_SET_SLACK);
-    if (s_key_queue == NULL || s_touch_queue == NULL || s_queue_set == NULL) {
-        ESP_LOGE(TAG, "failed to create input queues / queue set");
+    if (s_key_queue == NULL || s_touch_queue == NULL) {
+        ESP_LOGE(TAG, "failed to create input queues");
         if (s_key_queue != NULL) {
             vQueueDelete(s_key_queue);
         }
         if (s_touch_queue != NULL) {
             vQueueDelete(s_touch_queue);
         }
-        if (s_queue_set != NULL) {
-            vQueueDelete(s_queue_set);
-        }
-        s_key_queue = s_touch_queue = s_queue_set = NULL;
+        s_key_queue = s_touch_queue = NULL;
         return ESP_ERR_NO_MEM;
     }
-    xQueueAddToSet(s_key_queue, s_queue_set);
-    xQueueAddToSet(s_touch_queue, s_queue_set);
 
     /* 触摸源接入：GT911 帧回调 -> 触摸队列（须在 espaperplay_touch_init()
      * 之后调用本函数）。touch 驱动未就绪时仅告警，按键输入不受影响。 */
@@ -296,10 +257,9 @@ esp_err_t espaperplay_input_init(void) {
     if (ret != ESP_OK || s_boot_button == NULL) {
         ESP_LOGE(TAG, "failed to create BOOT button on GPIO%d (ret: %s)", ESPAPERPLAY_PIN_KEY_BOOT,
                  esp_err_to_name(ret));
-        vQueueDelete(s_queue_set);
         vQueueDelete(s_touch_queue);
         vQueueDelete(s_key_queue);
-        s_queue_set = s_touch_queue = s_key_queue = NULL;
+        s_touch_queue = s_key_queue = NULL;
         return (ret != ESP_OK) ? ret : ESP_FAIL;
     }
 
@@ -313,43 +273,39 @@ esp_err_t espaperplay_input_init(void) {
         if (ret != ESP_OK) {
             iot_button_delete(s_boot_button);
             s_boot_button = NULL;
-            vQueueDelete(s_queue_set);
             vQueueDelete(s_touch_queue);
             vQueueDelete(s_key_queue);
-            s_queue_set = s_touch_queue = s_key_queue = NULL;
+            s_touch_queue = s_key_queue = NULL;
             return ret;
         }
     }
 
     ESP_LOGI(TAG,
              "Input subsystem ready: BOOT key on GPIO%d (active level %d), "
-             "key queue %d + touch queue %d via queue set",
+             "key queue %d + touch queue %d (read by LVGL thread)",
              ESPAPERPLAY_PIN_KEY_BOOT, ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
              ESPAPERPLAY_INPUT_KEY_QUEUE_LEN, ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN);
     return ESP_OK;
 }
 
-esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t timeout_ms) {
-    if (event == NULL || s_queue_set == NULL) {
+esp_err_t espaperplay_input_try_get_key(espaperplay_input_event_t *event) {
+    if (event == NULL || s_key_queue == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    /* 按键优先：非阻塞先查按键队列（按键稀疏、延迟敏感；触摸事件稍候）。 */
     if (xQueueReceive(s_key_queue, event, 0) == pdTRUE) {
         return ESP_OK;
     }
+    return ESP_ERR_TIMEOUT;
+}
 
-    /* 阻塞等待任一队列（Queue Set 合并：按键 / 触摸）。 */
-    const TickType_t ticks =
-        (timeout_ms == portMAX_DELAY) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    const QueueSetMemberHandle_t member = xQueueSelectFromSet(s_queue_set, ticks);
-    if (member == NULL) {
-        return ESP_ERR_TIMEOUT;
+esp_err_t espaperplay_input_try_get_touch(espaperplay_input_event_t *event) {
+    if (event == NULL || s_touch_queue == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
-    if (xQueueReceive(member, event, 0) == pdTRUE) {
+    if (xQueueReceive(s_touch_queue, event, 0) == pdTRUE) {
         return ESP_OK;
     }
-    return ESP_ERR_TIMEOUT; /* select 返回非空后理论上必可取到 */
+    return ESP_ERR_TIMEOUT;
 }
 
 uint64_t espaperplay_input_get_last_activity_ms(void) { return s_last_activity_ms; }
@@ -391,59 +347,24 @@ esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event) {
 
     if (event->type == ESPAPERPLAY_INPUT_EVENT_KEY) {
         /* 按键：队首 + 满时挤最旧（与按键回调投递策略一致）。 */
-        const UBaseType_t q_free_before = uxQueueSpacesAvailable(s_key_queue);
         if (xQueueSendToFront(s_key_queue, event, 0) != pdTRUE) {
             espaperplay_input_event_t dropped;
             if (xQueueReceive(s_key_queue, &dropped, 0) == pdTRUE) {
                 (void)xQueueSendToFront(s_key_queue, event, 0);
-                ESP_LOGW(TAG,
-                         "key queue full (free %u before), dropped oldest key id=%u action=%s "
-                         "to enqueue new id=%u action=%s",
-                         (unsigned)q_free_before, dropped.key_id,
-                         espaperplay_input_key_action_str(dropped.key_action), event->key_id,
-                         espaperplay_input_key_action_str(event->key_action));
             } else {
-                ESP_LOGW(TAG, "key event queue full, key event dropped id=%u action=%s",
-                         event->key_id, espaperplay_input_key_action_str(event->key_action));
+                ESP_LOGW(TAG, "key event queue full, injected key event dropped");
             }
-        } else {
-            ESP_LOGD(TAG, "post key: id=%u action=%s press=%u ms q_free_before=%u",
-                     event->key_id, espaperplay_input_key_action_str(event->key_action),
-                     event->key_press_time_ms, (unsigned)q_free_before);
         }
     } else {
         /* 触摸：普通投递；满时丢弃新事件（轨迹中间点，短暂过载只丢最新，
-         * 顺序不乱）。严禁 xQueueReceive 挤旧——成员队列被直接读出时其
-         * Queue Set 容器通知不会同步移除，陈旧通知会撑满容器并触发
-         * FreeRTOS assert 崩溃（prvNotifyQueueSetContainer）。 */
+         * 顺序不乱）。LVGL 线程每个 read 周期全量排空，正常不积压。 */
         static uint32_t s_touch_drop_log_ms = 0;
-        static uint32_t s_touch_drop_count = 0;
-        const UBaseType_t q_free_before = uxQueueSpacesAvailable(s_touch_queue);
-        const UBaseType_t q_wait_before = uxQueueMessagesWaiting(s_touch_queue);
         if (xQueueSend(s_touch_queue, event, 0) != pdTRUE) {
-            s_touch_drop_count++;
             const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (now_ms - s_touch_drop_log_ms >= 1000) {
                 s_touch_drop_log_ms = now_ms;
-                ESP_LOGW(TAG,
-                         "touch queue full, dropping newest touch event seq=%u pressed=%u "
-                         "(%u,%u) q_free=%u q_waiting=%u dropped_in_window=%u",
-                         event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
-                         (unsigned)q_free_before, (unsigned)q_wait_before,
-                         (unsigned)s_touch_drop_count);
-                s_touch_drop_count = 0;
-            } else {
-                ESP_LOGD(TAG,
-                         "touch queue drop seq=%u pressed=%u (%u,%u) q_free=%u total_dropped=%u",
-                         event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
-                         (unsigned)q_free_before, (unsigned)s_touch_drop_count);
+                ESP_LOGW(TAG, "touch queue full, dropping newest touch event");
             }
-        } else {
-            ESP_LOGD(TAG,
-                     "post touch: seq=%u pressed=%u (%u,%u) points=%u q_free_before=%u "
-                     "q_wait_before=%u",
-                     event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
-                     event->touch_points, (unsigned)q_free_before, (unsigned)q_wait_before);
         }
     }
     return ESP_OK;

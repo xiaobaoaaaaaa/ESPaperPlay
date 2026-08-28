@@ -22,11 +22,10 @@ extern "C" {
  * @file espaperplay_ui_touch.h
  * @brief LVGL 触摸指针（indev）接入层。
  *
- * 把输入服务的 TOUCH 事件桥接到 LVGL 指针输入设备：
+ * 把输入服务的触摸队列桥接到 LVGL 指针输入设备：
  *   - espaperplay_ui_touch_init() 创建 LV_INDEV_TYPE_POINTER 输入设备，
- *     注册 read_cb（由 LVGL 周期调用读取按压状态与坐标）；
- *   - espaperplay_ui_touch_update() 由输入分发任务调用（任意线程，
- *     内部临界区保护），把最新触摸帧写入共享状态；
+ *     注册 read_cb（LVGL 线程周期调用：排空 input 触摸队列，逐条转发
+ *     页面 on_touch 并推进按压状态机）；
  *   - read_cb 上报**面板物理坐标**：LVGL 内核（indev_pointer_proc）会
  *     按显示旋转自动调用 lv_display_rotate_point() 换算为逻辑坐标，
  *     read_cb 严禁再手动换算（否则双重旋转导致控件命中错位）。
@@ -45,16 +44,6 @@ extern "C" {
  * @return 成功返回 ESP_OK；indev 分配失败返回 ESP_ERR_NO_MEM。
  */
 esp_err_t espaperplay_ui_touch_init(void);
-
-/**
- * @brief 更新触摸指针状态（任意线程，临界区保护）。
- *
- * 按下帧取本帧第一个触摸点（touch_seq 相同的后续点忽略，避免多指
- * 时指针在手指间跳动）；释放帧（touch_pressed == 0）立即置释放。
- *
- * @param event 输入事件（type == TOUCH）。
- */
-void espaperplay_ui_touch_update(const espaperplay_input_event_t *event);
 
 /**
  * @brief 把面板物理坐标换算为 LVGL 逻辑坐标（LVGL 线程内调用）。

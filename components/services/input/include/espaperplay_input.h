@@ -21,16 +21,16 @@ extern "C" {
  * @brief 输入事件管理。
  *
  * 将所有人机输入源（触摸控制器、物理按键）聚合为统一的事件流。
- * 应用程序通过 espaperplay_input_get_event() 消费事件，不直接与触摸或
- * GPIO 驱动交互。
+ * 消费方（LVGL 线程）通过 espaperplay_input_try_get_key() /
+ * espaperplay_input_try_get_touch() 分别非阻塞读取两类事件，不直接与
+ * 触摸或 GPIO 驱动交互。
  *
- * 内部为双队列设计（按键 / 触摸物理隔离，经 FreeRTOS Queue Set 合并
- * 消费）：
+ * 内部为双队列设计（按键 / 触摸物理隔离，两个独立 FreeRTOS 队列）：
  *   - 按键队列：稀疏、事件型（单击/双击/长按等语义动作），队首投递 +
  *     满时挤最旧，按键永不丢失；
  *   - 触摸队列：高频、状态型（GT911 中断唤醒读取的坐标流，轨迹绘制
- *     需要中间点），满时丢弃新事件（顺序不乱、Queue Set 通知计数一致），
- *     触摸洪泛不挤占按键队列。
+ *     需要中间点），满时丢弃新事件（顺序不乱），触摸洪泛不挤占按键
+ *     队列；LVGL 线程每个 indev read 周期（~30ms）全量排空。
  * 触摸中断接入方式：GT911 的 I2C 读取不能在 ISR 内执行，由中断唤醒
  * 触摸任务，任务内读取坐标后经 espaperplay_input_post_event() 投递到
  * 触摸队列。
@@ -101,15 +101,24 @@ typedef struct {
 esp_err_t espaperplay_input_init(void);
 
 /**
- * @brief 等待下一个输入事件。
+ * @brief 非阻塞读取一个按键事件（LVGL 线程按键泵调用）。
  *
- * @param[out] event      接收下一个输入事件。
- * @param[in]  timeout_ms 最长等待时间（毫秒）。0 表示非阻塞；较大的值
- *                        （接近 portMAX_DELAY）表示无限阻塞。
+ * @param[out] event 接收按键事件。
  *
- * @return 收到事件返回 ESP_OK，超时返回 ESP_ERR_TIMEOUT。
+ * @return 收到事件返回 ESP_OK；队列空返回 ESP_ERR_TIMEOUT；
+ *         未初始化返回 ESP_ERR_INVALID_STATE。
  */
-esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t timeout_ms);
+esp_err_t espaperplay_input_try_get_key(espaperplay_input_event_t *event);
+
+/**
+ * @brief 非阻塞读取一个触摸事件（LVGL indev read_cb 调用，循环排空）。
+ *
+ * @param[out] event 接收触摸事件。
+ *
+ * @return 收到事件返回 ESP_OK；队列空返回 ESP_ERR_TIMEOUT；
+ *         未初始化返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_input_try_get_touch(espaperplay_input_event_t *event);
 
 /**
  * @brief 获取最近一次用户活动时刻（毫秒，esp_timer 单调时钟）。

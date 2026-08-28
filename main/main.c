@@ -105,7 +105,8 @@ static void boot_display_task(void *arg) {
         vTaskDelete(NULL);
     }
     /* 应用"连续局刷后强制全刷"阈值（Web 可配置，NVS 持久化）。 */
-    (void)espaperplay_gui_set_full_force_after(espaperplay_system_get_config()->gui_full_force_after);
+    (void)espaperplay_gui_set_full_force_after(
+        espaperplay_system_get_config()->gui_full_force_after);
 
     err = espaperplay_gui_lv_start();
     if (err != ESP_OK) {
@@ -234,9 +235,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_weather_start());
 
     /* ---- 汇合：等显示链路就绪后推主界面并启动按键分发。 ---- */
-    const EventBits_t bits =
-        xEventGroupWaitBits(s_boot_events, BOOT_DISPLAY_READY_BIT, pdFALSE, pdTRUE,
-                            pdMS_TO_TICKS(15000));
+    const EventBits_t bits = xEventGroupWaitBits(s_boot_events, BOOT_DISPLAY_READY_BIT, pdFALSE,
+                                                 pdTRUE, pdMS_TO_TICKS(15000));
     if (!(bits & BOOT_DISPLAY_READY_BIT)) {
         ESP_LOGE(TAG, "timeout waiting for display pipeline (continuing headless)");
     } else if (!espaperplay_system_is_setup_done()) {
@@ -254,7 +254,7 @@ void app_main(void) {
                  (double)(esp_timer_get_time() / 10000) / 100.0);
     }
 
-    ESP_ERROR_CHECK(espaperplay_ui_key_input_start()); /* 按键分发：input 队列 -> GUI 页面 */
+    ESP_ERROR_CHECK(espaperplay_ui_input_start()); /* 输入消费：input 双队列 -> LVGL 线程直读 */
     ESP_ERROR_CHECK(espaperplay_reader_init());
 
     /* 创建任务。 */

@@ -291,8 +291,9 @@ component (the real libfreetype 2.14.3, registry dependency):
 #### Input: Physical Keys & Event Queues
 
 The input service (`components/services/input`) aggregates all human input
-sources (physical keys, touch to come) into a unified event stream consumed
-through `espaperplay_input_get_event()`.
+sources (physical keys, touch) into a unified event stream. The LVGL thread
+consumes each queue directly via `espaperplay_input_try_get_key()` /
+`espaperplay_input_try_get_touch()`.
 
 **Physical key** — the on-board **BOOT button** (GPIO0, active low, internal
 pull-up) is driven by the official
@@ -304,28 +305,24 @@ duration). `LONG_PRESS_HOLD` is throttled to one event per 500 ms — the driver
 default fires every 20 ms, which would flood the event pipeline and make
 `LONG_PRESS_UP` get dropped.
 
-**Dual queues (key / touch isolated)** — internally two physical queues are
-merged by a FreeRTOS Queue Set:
+**Dual queues (key / touch isolated)** — two independent FreeRTOS queues:
 
 | Queue | Depth | Policy |
 | ----- | ----- | ------ |
 | Key | 16 | `xQueueSendToFront` + evict-oldest when full — key events are never lost |
 | Touch | 32 | `xQueueSend` drop-newest when full — intermediate points for trajectory drawing are preserved |
 
-`espaperplay_input_get_event()` polls the key queue first (lowest key latency),
-then blocks on the Queue Set for either queue. Touch is interrupt-driven
-(GT911 INT wakes a task — I2C cannot run in an ISR — which reads coordinates and
-posts them to the touch queue), so high-rate touch traffic can never crowd out
-key events. Evicting via a direct `xQueueReceive` on a set-member queue is
-forbidden: it leaks stale notifications into the set container and eventually
-trips the FreeRTOS `prvNotifyQueueSetContainer` assert — the Queue Set is sized
-with slack and the touch queue drops incoming events instead of evicting.
+Touch is interrupt-driven (GT911 INT wakes a task — I2C cannot run in an ISR —
+which reads coordinates and posts them to the touch queue), so high-rate touch
+traffic can never crowd out key events. The LVGL thread drains the touch queue
+every indev read period (~30 ms), so backlog stays bounded.
 
-**GUI input dispatch** — a dispatcher task (`espaperplay_ui_key_input_start()`)
-blocks on the input queue and routes events:
+**GUI input consumption** — both queues are read inside the LVGL thread
+(`espaperplay_ui_input_start()`), no dispatcher task and no cross-thread
+posting:
 
-- **Keys** are forwarded one-by-one into the LVGL thread, where the page stack
-  routes them to the top page's optional `on_key` hook (extended
+- **Keys** are drained by a key-pump `lv_timer` (20 ms period) and routed
+  one-by-one to the top page's optional `on_key` hook (extended
   `espaperplay_ui_page_t`). Navigation decisions belong to pages.
 - **Default long-press action** — the BOOT key's `LONG_PRESS_START` is caught
   globally (in the page-stack key funnel, before page hooks) and triggers a
@@ -337,11 +334,12 @@ blocks on the input queue and routes events:
   The long-press trigger time itself is also configurable
   (`boot_long_press_time_ms`, default 1000 ms, range 300-10000 ms, applied to
   the button driver at boot and re-applied live from the Web console).
-- **Touch** updates the LVGL pointer indev state directly (critical-section
-  guarded, no LVGL round-trip), so all LVGL widgets respond to touch. Events
-  are also batched per ~30 ms window and forwarded to the top page's optional
-  `on_touch` hook — every intermediate coordinate survives for trajectory
-  drawing.
+- **Touch** is drained by the pointer indev's `read_cb` (see `lvgl_touch.c`):
+  every queued event is forwarded to the top page's optional `on_touch` hook
+  (every intermediate coordinate survives for trajectory drawing), and the
+  press state machine drives LVGL widgets. A click-latch FIFO replays
+  press+release pairs that arrived entirely while the LVGL thread was busy
+  rendering, so rapid taps are never swallowed.
 
 - Home: single click → push the **Test page**;
 - Test page (partial-refresh stress test + live key/touch display): a touch
@@ -836,8 +834,9 @@ tools/prepare_qweather_icons.py` 把 API 图标代码（昼夜、雨/雪/雾各�
 
 #### 输入：物理按键与事件队列
 
-输入服务（`components/services/input`）把人机输入源（物理按键、未来触摸）
-聚合为统一事件流，通过 `espaperplay_input_get_event()` 消费。
+输入服务（`components/services/input`）把人机输入源（物理按键、触摸）
+聚合为统一事件流，LVGL 线程经 `espaperplay_input_try_get_key()` /
+`espaperplay_input_try_get_touch()` 分别直读两类队列。
 
 **物理按键** —— 板载 **BOOT 键**（GPIO0，按下低电平，内部上拉）由官方
 [`espressif/button`](https://components.espressif.com/components/espressif/button)
@@ -847,26 +846,22 @@ DOUBLE_CLICK / LONG_PRESS_START / LONG_PRESS_HOLD / LONG_PRESS_UP（含按压
 时长）。`LONG_PRESS_HOLD` 节流为每 500ms 一个——驱动默认每 20ms 触发一次，
 会洪泛事件管道并导致 LONG_PRESS_UP 漏检。
 
-**双队列（按键 / 触摸隔离）** —— 内部为两个物理队列，经 FreeRTOS Queue Set
-合并消费：
+**双队列（按键 / 触摸隔离）** —— 两个独立 FreeRTOS 队列：
 
 | 队列 | 深度 | 满时策略 |
 | ---- | ---- | -------- |
 | 按键 | 16 | 队首投递 + 挤掉最旧——按键事件永不丢失 |
 | 触摸 | 32 | `xQueueSend` 满时丢新——保留中间点供轨迹绘制 |
 
-`espaperplay_input_get_event()` 优先非阻塞查按键队列（按键延迟最低），再
-阻塞等待 Queue Set 中任一队列。触摸采用中断驱动（GT911 INT 唤醒任务——
-I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），高频触摸流量不会
-挤占按键队列。禁止对 Queue Set 成员队列直接 `xQueueReceive` 挤旧：会在
-容器中留下陈旧通知，最终触发 FreeRTOS `prvNotifyQueueSetContainer`
-断言崩溃——Queue Set 容器带余量创建，触摸队列满时改为丢弃新事件。
+触摸采用中断驱动（GT911 INT 唤醒任务——I2C 不能在 ISR 中执行——任务读取
+坐标后投递触摸队列），高频触摸流量不会挤占按键队列。LVGL 线程每个 indev
+read 周期（~30ms）全量排空触摸队列，积压有界。
 
-**GUI 输入分发** —— 分发任务（`espaperplay_ui_key_input_start()`）阻塞读取
-输入队列，按键 / 触摸分路处理：
+**GUI 输入消费** —— 两个队列都在 LVGL 线程内直读
+（`espaperplay_ui_input_start()`），无独立分发任务、无跨线程投递：
 
-- **按键**：逐个投递到 LVGL 线程，由页面栈转发给栈顶页面的可选 `on_key`
-  钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面；
+- **按键**：按键泵 lv_timer（20ms 周期）排空按键队列，逐条转发给栈顶页面
+  的可选 `on_key` 钩子（`espaperplay_ui_page_t` 扩展）。导航决策属于页面；
 - **长按默认动作**：BOOT 键的 `LONG_PRESS_START` 在页面栈按键汇流处全局
   拦截（先于页面钩子），**每次长按只响应一次**（HOLD / 松开事件不再触发）：
   `full_refresh`（默认——强制整屏深刷新清残影）、`back`（返回上一页）或
@@ -874,9 +869,10 @@ I2C 不能在 ISR 中执行——任务读取坐标后投递触摸队列），�
   控制台「屏幕设置」中配置（`boot_long_press_action`，NVS 持久化，改完
   立即生效）；长按判定时间同样可配置（`boot_long_press_time_ms`，默认
   1000ms，范围 300-10000ms，启动时应用到按键驱动，Web 修改即时生效）；
-- **触摸**：直接更新 LVGL 指针 indev 状态（临界区保护、无 LVGL 往返延迟），
-  所有 LVGL 控件均响应触摸；事件同时按 ~30ms 窗口批量投递、逐条转发给
-  栈顶页面的可选 `on_touch` 钩子——全部中间坐标保留，供轨迹绘制。
+- **触摸**：触摸指针 indev 的 `read_cb` 排空触摸队列（见 `lvgl_touch.c`）：
+  队列中的每个事件逐条转发给栈顶页面的可选 `on_touch` 钩子（全部中间
+  坐标保留，供轨迹绘制），按压状态机驱动 LVGL 控件。点击锁存 FIFO 会把
+  LVGL 线程忙碌期间完整到达的按下+释放补报回放，快速连击不被吞。
 
 - 主页：单击 → 进入**测试页**；
 - 测试页（局刷压力测试 + 按键/触摸实时显示）：触摸画板把手指轨迹画成

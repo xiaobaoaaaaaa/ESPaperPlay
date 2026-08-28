@@ -15,7 +15,6 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 
 #include "espaperplay_config.h"
 #include "espaperplay_touch.h"
@@ -30,11 +29,11 @@ static const char *TAG = "ESPaperPlay_TOUCH";
 #define GT911_REG_X_OUTPUT_MAX 0x8048   /*!< X 输出最大值（小端，config 区第 1~2 字节） */
 #define GT911_REG_Y_OUTPUT_MAX 0x804A   /*!< Y 输出最大值（小端，config 区第 3~4 字节） */
 #define GT911_REG_TOUCH_NUMBER 0x804C   /*!< 支持触摸点数（config 区第 5 字节，低 4 位） */
-#define GT911_REG_MODULE_SW1 0x804D     /*!< 模块开关 1（config 区第 6 字节，低 2 位=INT 触发模式） */
-#define GT911_REG_CMD 0x8040            /*!< 命令寄存器：写 1 = 软复位（芯片自动清零） */
-#define GT911_REG_PRODUCT_ID 0x8140     /*!< 产品 ID："911" */
-#define GT911_REG_STATUS 0x814E         /*!< 缓冲状态：b7=缓冲就绪，b3:0=触摸点数 */
-#define GT911_REG_POINT_BASE 0x814F     /*!< 触摸点数据区起点（每点 8 字节） */
+#define GT911_REG_MODULE_SW1 0x804D /*!< 模块开关 1（config 区第 6 字节，低 2 位=INT 触发模式） */
+#define GT911_REG_CMD 0x8040        /*!< 命令寄存器：写 1 = 软复位（芯片自动清零） */
+#define GT911_REG_PRODUCT_ID 0x8140 /*!< 产品 ID："911" */
+#define GT911_REG_STATUS 0x814E     /*!< 缓冲状态：b7=缓冲就绪，b3:0=触摸点数 */
+#define GT911_REG_POINT_BASE 0x814F /*!< 触摸点数据区起点（每点 8 字节） */
 
 /** GT911 配置区（编程指南）：0x8047..0x80FE 共 184 字节数据。 */
 #define GT911_CONFIG_DATA_LEN 184
@@ -71,11 +70,11 @@ static const char *TAG = "ESPaperPlay_TOUCH";
  *   - RST 释放后 INT 保持地址选择电平 ≥55ms 再转为输入——时序不足时
  *     GT911 会应答 I2C 但内部状态机不完成上电，触摸数据恒为 0，可能
  *     数分钟后才自行恢复（实测 4 分钟）。 */
-#define GT911_POWER_ON_DELAY_MS 5    /*!< 电源轨上电后等待（毫秒） */
-#define GT911_RESET_ASSERT_MS 20     /*!< RST 低电平保持时间（≥12ms） */
-#define GT911_INT_ADDR_HOLD_MS 60    /*!< RST 释放后 INT 保持地址电平时间（≥55ms） */
-#define GT911_BOOT_SETTLE_MS 100     /*!< 复位结束后等待固件启动（毫秒） */
-#define GT911_PROBE_RETRIES 10       /*!< 产品 ID 探测重试次数 */
+#define GT911_POWER_ON_DELAY_MS 5     /*!< 电源轨上电后等待（毫秒） */
+#define GT911_RESET_ASSERT_MS 20      /*!< RST 低电平保持时间（≥12ms） */
+#define GT911_INT_ADDR_HOLD_MS 60     /*!< RST 释放后 INT 保持地址电平时间（≥55ms） */
+#define GT911_BOOT_SETTLE_MS 100      /*!< 复位结束后等待固件启动（毫秒） */
+#define GT911_PROBE_RETRIES 10        /*!< 产品 ID 探测重试次数 */
 #define GT911_PROBE_RETRY_DELAY_MS 50 /*!< 探测重试间隔（毫秒） */
 
 /** INT 轮询模式（0x804D 低 2 位 == 3）下任务的读取周期（毫秒）。 */
@@ -146,9 +145,9 @@ static esp_err_t gt911_write_reg(uint16_t reg, const uint8_t *data, size_t len) 
  */
 static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *data, size_t len) {
     const uint8_t reg_addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
-    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_dev, reg_addr, sizeof(reg_addr),
-                                            ESPAPERPLAY_I2C_TIMEOUT_MS),
-                        TAG, "write register address 0x%04X failed", reg);
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit(s_dev, reg_addr, sizeof(reg_addr), ESPAPERPLAY_I2C_TIMEOUT_MS), TAG,
+        "write register address 0x%04X failed", reg);
     return i2c_master_receive(s_dev, data, len, ESPAPERPLAY_I2C_TIMEOUT_MS);
 }
 
@@ -218,8 +217,9 @@ static bool gt911_probe_product_id(void) {
                          id[2]);
                 return true;
             }
-            ESP_LOGW(TAG, "probe retry %d/%d: product ID mismatch, got %02X %02X %02X %02X "
-                         "(expect \"911\")",
+            ESP_LOGW(TAG,
+                     "probe retry %d/%d: product ID mismatch, got %02X %02X %02X %02X "
+                     "(expect \"911\")",
                      i + 1, GT911_PROBE_RETRIES, id[0], id[1], id[2], id[3]);
         } else {
             ESP_LOGW(TAG, "probe retry %d/%d: read 0x8140 failed (%s)", i + 1, GT911_PROBE_RETRIES,
@@ -298,9 +298,8 @@ static esp_err_t gt911_write_config(void) {
     cfg[GT911_CONFIG_DATA_LEN] = (uint8_t)(0 - sum); /* 校验和 = (~sum) + 1 */
     cfg[GT911_CONFIG_DATA_LEN + 1] = 0x01;           /* 刷新标志 */
 
-    ESP_RETURN_ON_ERROR(
-        gt911_write_reg(GT911_REG_CONFIG_VERSION, cfg, sizeof(cfg)), TAG,
-        "write config table (%u bytes) failed", (unsigned int)sizeof(cfg));
+    ESP_RETURN_ON_ERROR(gt911_write_reg(GT911_REG_CONFIG_VERSION, cfg, sizeof(cfg)), TAG,
+                        "write config table (%u bytes) failed", (unsigned int)sizeof(cfg));
     ESP_LOGI(TAG, "  config written: %u bytes @0x8047, checksum 0x%02X, refresh 0x01",
              (unsigned int)sizeof(cfg), cfg[GT911_CONFIG_DATA_LEN]);
 
@@ -350,8 +349,9 @@ static bool gt911_read_config(uint8_t *version, uint16_t *x_max, uint16_t *y_max
     *y_max = (uint16_t)((cfg[4] << 8) | cfg[3]);
     *touch_num = cfg[5] & 0x0F;
     *int_mode = cfg[6] & 0x03;
-    ESP_LOGI(TAG, "  raw config 0x8047..0x804D: %02X %02X %02X %02X %02X %02X %02X "
-                  "(v0x%02X, %ux%u, %u touches, INT mode %u)",
+    ESP_LOGI(TAG,
+             "  raw config 0x8047..0x804D: %02X %02X %02X %02X %02X %02X %02X "
+             "(v0x%02X, %ux%u, %u touches, INT mode %u)",
              cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[6], *version, *x_max, *y_max,
              *touch_num, *int_mode);
 
@@ -424,9 +424,8 @@ static esp_err_t gt911_read_frame(espaperplay_touch_point_t *points, uint8_t *co
 
     if (num > 0) {
         uint8_t raw[ESPAPERPLAY_TOUCH_MAX_POINTS * GT911_POINT_PACKET_LEN];
-        ESP_RETURN_ON_ERROR(
-            gt911_read_reg(GT911_REG_POINT_BASE, raw, num * GT911_POINT_PACKET_LEN), TAG,
-            "read %u touch point(s) failed", num);
+        ESP_RETURN_ON_ERROR(gt911_read_reg(GT911_REG_POINT_BASE, raw, num * GT911_POINT_PACKET_LEN),
+                            TAG, "read %u touch point(s) failed", num);
 
         for (uint8_t i = 0; i < num; i++) {
             const uint8_t *p = &raw[i * GT911_POINT_PACKET_LEN];
@@ -469,10 +468,7 @@ static void IRAM_ATTR gt911_int_isr(void *arg) {
  */
 static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t num) {
     static bool s_first_frame_logged = false;
-    static uint32_t s_frame_seq = 0;
-    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
-    s_frame_seq++;
     espaperplay_touch_event_cb_t cb = NULL;
     portENTER_CRITICAL(&s_frame_lock);
     if (num > 0) {
@@ -487,32 +483,9 @@ static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t
         ESP_LOGI(TAG, "first touch frame received: %u point(s) (reader path OK)", num);
         s_first_frame_logged = true;
     }
-    if (num == 0) {
-        ESP_LOGD(TAG, "GT911 deliver: seq=%u release frame @%u ms cb=%p", (unsigned)s_frame_seq,
-                 (unsigned)now_ms, (void *)cb);
-    } else {
-        ESP_LOGD(TAG, "GT911 deliver: seq=%u %u point(s) @%u ms p0=(%u,%u) id=%u cb=%p",
-                 (unsigned)s_frame_seq, num, (unsigned)now_ms, points[0].x, points[0].y,
-                 points[0].id, (void *)cb);
-        for (uint8_t i = 1; i < num; i++) {
-            ESP_LOGD(TAG, "GT911 deliver: seq=%u point[%u]=(%u,%u) id=%u", (unsigned)s_frame_seq,
-                     i, points[i].x, points[i].y, points[i].id);
-        }
-    }
 
     if (cb != NULL) {
-        const uint32_t cb_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         cb(points, num);
-        const uint32_t cb_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - cb_start_ms;
-        ESP_LOGD(TAG, "GT911 deliver: seq=%u cb done cost %u ms", (unsigned)s_frame_seq,
-                 (unsigned)cb_cost_ms);
-        if (cb_cost_ms > 20) {
-            ESP_LOGW(TAG, "GT911 deliver: seq=%u cb cost %u ms — input 队列可能堆积",
-                     (unsigned)s_frame_seq, (unsigned)cb_cost_ms);
-        }
-    } else {
-        ESP_LOGW(TAG, "GT911 deliver: seq=%u no cb registered — 帧未投递到 input 队列",
-                 (unsigned)s_frame_seq);
     }
 }
 
@@ -530,33 +503,20 @@ static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t
 static void gt911_task(void *arg) {
     (void)arg;
     static bool s_spurious_wake_logged = false;
-    static uint32_t s_wake_count = 0;
-    static uint32_t s_frame_count = 0;
 
     ESP_LOGI(TAG, "touch reader task started (%s)", s_task_wait_ms == 0 ? "interrupt" : "poll");
 
     for (;;) {
         const TickType_t wait_ticks =
             (s_task_wait_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(s_task_wait_ms);
-        const uint32_t wait_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         const bool wake_by_int = (xSemaphoreTake(s_int_sem, wait_ticks) == pdTRUE);
-        const uint32_t wait_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - wait_start_ms;
 
         /* 轮询模式（芯片 INT mode 3）：每个周期尝试读一帧，不依赖 INT 电平。 */
         if (s_task_wait_ms != 0) {
             uint8_t num = 0;
             espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
-            const esp_err_t read_ret = gt911_read_frame(points, &num);
-            if (read_ret == ESP_OK) {
-                s_frame_count++;
-                ESP_LOGD(TAG, "GT911 poll: frame #%u %u point(s) wait_cost=%u ms",
-                         (unsigned)s_frame_count, num, (unsigned)wait_cost_ms);
+            if (gt911_read_frame(points, &num) == ESP_OK) {
                 gt911_deliver_frame(points, num);
-            } else if (read_ret != ESP_ERR_NOT_FOUND) {
-                ESP_LOGW(TAG, "GT911 poll: read_frame failed: %s wait_cost=%u ms",
-                         esp_err_to_name(read_ret), (unsigned)wait_cost_ms);
-            } else {
-                ESP_LOGD(TAG, "GT911 poll: no data wait_cost=%u ms", (unsigned)wait_cost_ms);
             }
             continue;
         }
@@ -565,51 +525,22 @@ static void gt911_task(void *arg) {
             continue;
         }
 
-        s_wake_count++;
-        const int int_level = gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT);
-        ESP_LOGD(TAG, "GT911 wake #%u: INT=%d active_low=%d wait_cost=%u ms", (unsigned)s_wake_count,
-                 int_level, (int)s_int_active_low, (unsigned)wait_cost_ms);
-
         /* 中断模式：数据未消费时 INT 保持有效电平，用电平兜底被遗漏的中断沿。 */
-        uint32_t frames_in_wake = 0;
         while (gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == (s_int_active_low ? 0 : 1)) {
             uint8_t num = 0;
             espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
-            const uint32_t read_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            const esp_err_t read_ret = gt911_read_frame(points, &num);
-            const uint32_t read_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - read_start_ms;
-            if (read_ret != ESP_OK) {
-                if (read_ret != ESP_ERR_NOT_FOUND) {
-                    ESP_LOGW(TAG, "GT911 read_frame failed: %s cost=%u ms INT=%d",
-                             esp_err_to_name(read_ret), (unsigned)read_cost_ms,
-                             gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
-                } else if (!s_spurious_wake_logged) {
+            if (gt911_read_frame(points, &num) != ESP_OK) {
+                if (!s_spurious_wake_logged) {
                     ESP_LOGW(TAG,
                              "spurious INT wake: pin level %d but no data in buffer "
                              "(trigger %s)",
                              gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT),
                              s_int_active_low ? "falling/low" : "rising/high");
                     s_spurious_wake_logged = true;
-                } else {
-                    ESP_LOGD(TAG, "GT911 spurious wake #%u: no data INT=%d cost=%u ms",
-                             (unsigned)s_wake_count, gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT),
-                             (unsigned)read_cost_ms);
                 }
                 break; /* 无新帧：缓冲已被消费，等待下一次中断 */
             }
-            s_frame_count++;
-            frames_in_wake++;
-            ESP_LOGD(TAG, "GT911 wake #%u frame %u: %u point(s) read_cost=%u ms total_frames=%u",
-                     (unsigned)s_wake_count, (unsigned)frames_in_wake, num, (unsigned)read_cost_ms,
-                     (unsigned)s_frame_count);
             gt911_deliver_frame(points, num);
-        }
-        if (frames_in_wake == 0) {
-            ESP_LOGD(TAG, "GT911 wake #%u: 0 frames consumed INT=%d", (unsigned)s_wake_count,
-                     gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
-        } else {
-            ESP_LOGD(TAG, "GT911 wake #%u done: %u frame(s) consumed", (unsigned)s_wake_count,
-                     (unsigned)frames_in_wake);
         }
     }
 }
@@ -669,7 +600,7 @@ esp_err_t espaperplay_touch_init(void) {
     const uint8_t addr_candidates[2] = {
         ESPAPERPLAY_GT911_I2C_ADDR,
         (ESPAPERPLAY_GT911_I2C_ADDR == GT911_I2C_ADDR_INT_LOW) ? GT911_I2C_ADDR_INT_HIGH
-                                                              : GT911_I2C_ADDR_INT_LOW,
+                                                               : GT911_I2C_ADDR_INT_LOW,
     };
 
     bool found = false;
@@ -708,8 +639,7 @@ esp_err_t espaperplay_touch_init(void) {
         ESP_LOGE(TAG,
                  "GT911 not found on I2C port %d (SDA=%d SCL=%d). "
                  "Check touch power / RST / INT wiring and pull-ups",
-                 ESPAPERPLAY_I2C_PORT_ID, ESPAPERPLAY_PIN_TOUCH_SDA,
-                 ESPAPERPLAY_PIN_TOUCH_SCL);
+                 ESPAPERPLAY_I2C_PORT_ID, ESPAPERPLAY_PIN_TOUCH_SDA, ESPAPERPLAY_PIN_TOUCH_SCL);
         ret = ESP_ERR_NOT_FOUND;
         goto fail;
     }
@@ -727,9 +657,8 @@ esp_err_t espaperplay_touch_init(void) {
     uint8_t int_mode = 1; /* 默认下降沿（与厂商 demo 一致） */
 
     if (!gt911_read_config(&cfg_version, &x_max, &y_max, &touch_num, &int_mode)) {
-        ESP_LOGW(TAG,
-                 "config area empty/invalid -> writing vendor panel config "
-                 "(800x480, 5 touches, INT falling)");
+        ESP_LOGW(TAG, "config area empty/invalid -> writing vendor panel config "
+                      "(800x480, 5 touches, INT falling)");
         if (gt911_write_config() != ESP_OK) {
             ESP_LOGE(TAG, "write vendor panel config failed");
         } else if (!gt911_read_config(&cfg_version, &x_max, &y_max, &touch_num, &int_mode)) {
@@ -780,8 +709,7 @@ esp_err_t espaperplay_touch_init(void) {
 
     ESP_LOGI(TAG, "[init] step 5/5: INT mode %u -> GPIO trigger %d, active %s", int_mode,
              (int)int_trig, s_int_active_low ? "low" : "high");
-    ESP_LOGI(TAG, "  INT level before ISR install: %d",
-             gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+    ESP_LOGI(TAG, "  INT level before ISR install: %d", gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
 
     s_int_sem = xSemaphoreCreateBinary();
     if (s_int_sem == NULL) {
@@ -822,8 +750,8 @@ esp_err_t espaperplay_touch_init(void) {
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "[init] done: GT911 at 0x%02X, INT GPIO%d trigger %d, reader task %s",
-             s_i2c_addr, ESPAPERPLAY_PIN_TOUCH_INT, (int)int_trig,
+    ESP_LOGI(TAG, "[init] done: GT911 at 0x%02X, INT GPIO%d trigger %d, reader task %s", s_i2c_addr,
+             ESPAPERPLAY_PIN_TOUCH_INT, (int)int_trig,
              s_task_wait_ms == 0 ? "interrupt-driven" : "polling");
     return ESP_OK;
 
@@ -889,9 +817,8 @@ esp_err_t espaperplay_touch_diag(void) {
     uint8_t fresh = 0xFF;
     const esp_err_t fresh_ret = gt911_read_reg(GT911_REG_CONFIG_REFRESH, &fresh, 1);
 
-    ESP_LOGI(TAG,
-             "[diag] INT=%d status=0x%02X (%u points%s) config_fresh=0x%02X%s%s",
-             int_level, status_ret == ESP_OK ? status : 0xFF, status & GT911_STATUS_POINTS_MASK,
+    ESP_LOGI(TAG, "[diag] INT=%d status=0x%02X (%u points%s) config_fresh=0x%02X%s%s", int_level,
+             status_ret == ESP_OK ? status : 0xFF, status & GT911_STATUS_POINTS_MASK,
              (status & GT911_STATUS_BUFFER_READY) ? ", buffer ready" : "",
              fresh_ret == ESP_OK ? fresh : 0xFF,
              status_ret != ESP_OK ? " (status read failed)" : "",
