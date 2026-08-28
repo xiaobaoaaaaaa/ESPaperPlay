@@ -425,6 +425,65 @@
             display: none !important;
         }
 
+        /* 首次开机引导向导 */
+        #wizard {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.92);
+            z-index: 30;
+        }
+
+        .wizard-card {
+            width: min(560px, 92vw);
+            max-height: 92vh;
+            overflow-y: auto;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 22px;
+        }
+
+        .wizard-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .wizard-head h2 {
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .wizard-step {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .wizard-panel .hint {
+            color: var(--muted);
+            font-size: 13px;
+            margin: 6px 0 14px;
+        }
+
+        .wizard-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        .wizard-err {
+            color: var(--err);
+            font-size: 13px;
+            min-height: 18px;
+            margin-top: 6px;
+        }
+
         .login-card {
             width: min(360px, 90vw);
             background: var(--card);
@@ -481,6 +540,8 @@
                     <div class="menu-group-title">系统</div>
                     <ul>
                         <li><a class="menu-item" data-target="wifi" data-title="WiFi 设置" data-sub="无线网络配置">WiFi 设置</a>
+                        </li>
+                        <li><a class="menu-item" data-target="system" data-title="系统设置" data-sub="出厂重置与设备维护">系统设置</a>
                         </li>
                         <li><a class="menu-item" data-target="fonts" data-title="字体管理" data-sub="SD 卡字体">字体管理</a></li>
                         <li><a class="menu-item" data-target="files" data-title="文件管理" data-sub="SD 卡文件浏览与管理">文件管理</a>
@@ -581,8 +642,6 @@
                     <div class="actions">
                         <button type="submit" class="primary">保存并应用</button>
                         <button type="button" id="wifiRestart">重新应用网络</button>
-                        <button type="button" id="reset" class="danger">恢复默认</button>
-                        <button type="button" id="reboot" class="danger">重启设备</button>
                     </div>
                 </form>
             </section>
@@ -758,8 +817,139 @@
                     </div>
                 </form>
             </section>
+
+            <section class="panel" id="panel-system">
+                <h2>系统设置</h2>
+                <p class="hint">以下为设备级维护操作，请谨慎执行。</p>
+                <div class="field">
+                    <label>恢复出厂默认</label>
+                    <p class="hint">清空全部配置（WiFi、天气、屏幕、电源、字体选择、登录密码等）并恢复出厂内置字体，
+                        设备将重新进入首次开机引导。执行后需重新连接设备热点完成配置。</p>
+                    <div class="actions">
+                        <button type="button" id="reset" class="danger">恢复默认</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>重启设备</label>
+                    <p class="hint">立即重启 ESPaperPlay（配置已自动保存，无需重新设置）。</p>
+                    <div class="actions">
+                        <button type="button" id="reboot" class="danger">重启设备</button>
+                    </div>
+                </div>
+            </section>
         </main>
     </div>
+    <!-- 首次开机引导向导（setup_done=false 时显示，覆盖全部界面） -->
+    <div id="wizard" class="hidden">
+        <div class="wizard-card">
+            <div class="wizard-head">
+                <h2 id="wizardTitle">开机引导</h2>
+                <span id="wizardStep" class="wizard-step"></span>
+            </div>
+            <div class="wizard-body">
+                <!-- 步骤 1：欢迎 -->
+                <section class="wizard-panel" id="wz-1">
+                    <p>欢迎使用 ESPaperPlay！本向导将引导你完成基本配置，全程约 1 分钟。</p>
+                    <p class="hint">设备当前已开启热点，你可以用手机连接后访问本页面；也可以直接在网页上完成全部设置。</p>
+                    <div class="wizard-actions">
+                        <button type="button" id="wzStart" class="primary">开始配置</button>
+                    </div>
+                </section>
+                <!-- 步骤 2：管理密码 -->
+                <section class="wizard-panel hidden" id="wz-2">
+                    <p>设置管理密码（用于保护 Web 管理页，至少 8 位）。</p>
+                    <div class="field">
+                        <label>管理密码</label>
+                        <input type="password" id="wzPwd" maxlength="63" placeholder="至少 8 位" autocomplete="new-password">
+                    </div>
+                    <div class="field">
+                        <label>确认密码</label>
+                        <input type="password" id="wzPwdConfirm" maxlength="63" placeholder="再次输入" autocomplete="new-password">
+                    </div>
+                    <div class="wizard-err" id="wzPwdErr"></div>
+                    <div class="wizard-actions">
+                        <button type="button" id="wzPwdNext" class="primary">下一步</button>
+                        <button type="button" id="wzPwdSkip" class="link-btn">暂不设置</button>
+                    </div>
+                </section>
+                <!-- 步骤 3：网络 -->
+                <section class="wizard-panel hidden" id="wz-3">
+                    <p>选择设备联网方式。</p>
+                    <div class="field">
+                        <label>WiFi 工作模式</label>
+                        <label class="radio"><input type="radio" name="wz_wifi_mode" value="sta" checked> 站点 (STA)：连接你的路由器</label>
+                        <label class="radio"><input type="radio" name="wz_wifi_mode" value="ap"> 热点 (AP)：设备自建热点</label>
+                    </div>
+                    <form id="wzNetForm">
+                        <div id="wzStaFields">
+                            <div class="field">
+                                <label>STA SSID（要连接的路由器）</label>
+                                <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi" autocomplete="off">
+                            </div>
+                            <div class="field">
+                                <label>STA 密码</label>
+                                <input type="password" name="sta_password" maxlength="63" placeholder="路由器 WiFi 密码" autocomplete="new-password">
+                            </div>
+                        </div>
+                        <div id="wzApFields" style="display:none">
+                            <div class="field">
+                                <label>AP SSID（设备热点名）</label>
+                                <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP" autocomplete="off">
+                            </div>
+                            <div class="field">
+                                <label>AP 密码（留空 = 开放网络）</label>
+                                <input type="password" name="ap_password" maxlength="63" placeholder="留空 = 开放" autocomplete="new-password">
+                            </div>
+                        </div>
+                    </form>
+                    <p class="hint" id="wzNetWarn">保存后本热点将关闭，请将手机连接到同一网络后继续访问。</p>
+                    <div class="wizard-err" id="wzNetErr"></div>
+                    <div class="wizard-actions">
+                        <button type="button" id="wzNetNext" class="primary">保存并继续</button>
+                        <button type="button" id="wzNetSkip" class="link-btn">跳过</button>
+                        <button type="button" id="wzBack1" class="link-btn">上一步</button>
+                    </div>
+                </section>
+                <!-- 步骤 4：天气（可选） -->
+                <section class="wizard-panel hidden" id="wz-4">
+                    <p>配置和风天气（可选，稍后也能在「天气设置」中修改）。</p>
+                    <form id="wzWxForm">
+                        <div class="field">
+                            <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取）</label>
+                            <input type="password" name="weather_api_key" maxlength="47" placeholder="必填" autocomplete="new-password">
+                        </div>
+                        <div class="field">
+                            <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 自动定位）</label>
+                            <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label>API Host（<a href="https://dev.qweather.com/docs/configuration/api-host/"
+                                    target="_blank" rel="noopener">控制台-设置</a>查看，必填）</label>
+                            <input type="text" name="weather_api_host" maxlength="79"
+                                placeholder="例如 abc1234xyz.def.qweatherapi.com" autocomplete="off">
+                        </div>
+                    </form>
+                    <div class="wizard-err" id="wzWxErr"></div>
+                    <div class="wizard-actions">
+                        <button type="button" id="wzWxNext" class="primary">保存并继续</button>
+                        <button type="button" id="wzWxSkip" class="link-btn">跳过</button>
+                        <button type="button" id="wzBack2" class="link-btn">上一步</button>
+                    </div>
+                </section>
+                <!-- 步骤 5：完成 -->
+                <section class="wizard-panel hidden" id="wz-5">
+                    <p>配置已完成！点击「进入控制台」即可开始使用 ESPaperPlay。</p>
+                    <p class="hint">若上一步切换了 WiFi 模式，设备 IP 可能已变化，请重新连接后用新地址访问。</p>
+                    <div class="wizard-err" id="wzDoneErr"></div>
+                    <div class="wizard-actions">
+                        <button type="button" id="wzDone" class="primary">进入控制台</button>
+                        <button type="button" id="wzBack3" class="link-btn">上一步</button>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
     <div id="toast"></div>
 
     <script>
@@ -821,6 +1011,13 @@
         async function checkAuth() {
             const t = getToken();
             try {
+                /* 首次开机引导：未完成时优先进入分步向导（公开接口，无需登录）。 */
+                const setupRes = await fetch('/api/setup/status');
+                const sd = await setupRes.json();
+                if (!sd.setup_done) {
+                    showWizard(sd);
+                    return;
+                }
                 const res = await fetch('/api/auth/status', {
                     headers: t ? { 'Authorization': 'Bearer ' + t } : {}
                 });
@@ -1457,18 +1654,16 @@
         });
 
         $('#reset').addEventListener('click', async () => {
-            if (!confirm('确定恢复出厂默认设置并重新应用网络吗？')) return;
+            if (!confirm('确定恢复出厂默认设置吗？\n设备将重启并重新进入首次开机引导，需重新连接热点完成配置。')) return;
             try {
                 const d = await postForm('/api/config/reset', '');
                 if (d.ok) {
-                    toast('已恢复默认设置');
-                    loadConfig();
-                    loadStatus();
+                    toast('已恢复出厂默认，设备即将重启…');
                 } else {
                     toast('恢复失败：' + (d.error || '未知错误'), true);
                 }
             } catch (e) {
-                toast('连接已断开，设备正在重新应用网络…');
+                toast('连接已断开，设备正在重启…');
             }
         });
 
@@ -1750,6 +1945,155 @@
                 await apiFetch('/api/heartbeat', { method: 'POST' });
             } catch (e) { /* 设备可能睡眠/重启，忽略 */ }
         }
+
+        /* ------------------------------------------------------------------ */
+        /* 首次开机引导向导（setup_done=false 时由 checkAuth 调用）              */
+        /* ------------------------------------------------------------------ */
+
+        const WZ_TOTAL = 5; /*!< 向导总步数 */
+
+        /** 显示引导向导并跳到指定步骤。 */
+        let wzSetupStatus = null; /* 引导状态（含 ap_ssid 等默认值来源） */
+        let wzData = { password: null, wifi: null, weather: null }; /* 收集的各步表单数据，最后统一提交 */
+        function showWizard(status) {
+            wzSetupStatus = status;
+            wzData = { password: null, wifi: null, weather: null }; /* 每次进入向导重置 */
+            $('#login').classList.add('hidden');
+            $('#logoutBtn').classList.add('hidden');
+            $('#wizard').classList.remove('hidden');
+            wzGoto(1);
+        }
+
+        /** 切换到第 n 步（1..WZ_TOTAL）。 */
+        function wzGoto(n) {
+            document.querySelectorAll('.wizard-panel').forEach(p => p.classList.add('hidden'));
+            const panel = document.getElementById('wz-' + n);
+            if (panel) panel.classList.remove('hidden');
+            $('#wizardStep').textContent = '第 ' + n + ' / ' + WZ_TOTAL + ' 步';
+            const titles = ['', '欢迎', '管理密码', '网络', '天气', '完成'];
+            $('#wizardTitle').textContent = '开机引导 · ' + (titles[n] || '');
+            if (n === 3) wzSyncNetFields();
+        }
+
+        /** 隐藏向导（完成后由 checkAuth 重新决定界面）。 */
+        function wzHide() {
+            $('#wizard').classList.add('hidden');
+        }
+
+        /** 网络步骤：STA/AP 字段与警告显隐。 */
+        function wzSyncNetFields() {
+            const sta = document.querySelector('input[name=wz_wifi_mode][value=sta]').checked;
+            $('#wzStaFields').style.display = sta ? 'block' : 'none';
+            $('#wzApFields').style.display = sta ? 'none' : 'block';
+            $('#wzNetWarn').style.display = sta ? 'block' : 'none';
+            /* 预填 AP SSID 默认值（出厂 ESPaperPlay-AP），避免用户手动输入。 */
+            const apInput = $('#wzNetForm').querySelector('input[name=ap_ssid]');
+            if (apInput && apInput.value === '') {
+                apInput.value = (wzSetupStatus && wzSetupStatus.ap_ssid) || 'ESPaperPlay-AP';
+            }
+        }
+
+        /* 步骤 1：开始 */
+        $('#wzStart').addEventListener('click', () => wzGoto(2));
+
+        /* 步骤 2：设置密码（可跳过，仅收集不写入） */
+        $('#wzPwdNext').addEventListener('click', () => {
+            const pwd = $('#wzPwd').value;
+            const confirm = $('#wzPwdConfirm').value;
+            $('#wzPwdErr').textContent = '';
+            if (pwd.length < 8) { $('#wzPwdErr').textContent = '密码至少 8 位'; return; }
+            if (pwd !== confirm) { $('#wzPwdErr').textContent = '两次输入的密码不一致'; return; }
+            wzData.password = pwd; /* 暂存，最后一步统一写入 */
+            wzGoto(3);
+        });
+        $('#wzPwdSkip').addEventListener('click', () => {
+            wzData.password = null;
+            wzGoto(3);
+        });
+
+        /* 步骤 3：网络 */
+        document.querySelectorAll('input[name=wz_wifi_mode]').forEach(r =>
+            r.addEventListener('change', wzSyncNetFields));
+        /* 步骤 3：网络（可跳过，仅收集不写入） */
+        $('#wzNetNext').addEventListener('click', () => {
+            const sta = document.querySelector('input[name=wz_wifi_mode][value=sta]').checked;
+            const f = $('#wzNetForm'); /* 限定在向导表单，避免与「网络设置」面板同名输入框冲突 */
+            const sta_ssid = f.querySelector('input[name=sta_ssid]').value.trim();
+            const ap_ssid = f.querySelector('input[name=ap_ssid]').value.trim();
+            $('#wzNetErr').textContent = '';
+            if (sta && sta_ssid === '') { $('#wzNetErr').textContent = 'STA SSID 不能为空'; return; }
+            if (!sta && ap_ssid === '') { $('#wzNetErr').textContent = 'AP SSID 不能为空'; return; }
+            wzData.wifi = {
+                mode: sta ? 'sta' : 'ap',
+                sta_ssid: sta_ssid,
+                sta_password: f.querySelector('input[name=sta_password]').value,
+                ap_ssid: ap_ssid,
+                ap_password: f.querySelector('input[name=ap_password]').value
+            };
+            wzGoto(4);
+        });
+        $('#wzNetSkip').addEventListener('click', () => {
+            wzData.wifi = null;
+            wzGoto(4);
+        });
+        $('#wzBack1').addEventListener('click', () => wzGoto(2));
+
+        /* 步骤 4：天气（可选，仅收集不写入；API Key / API Host 必填） */
+        $('#wzWxNext').addEventListener('click', () => {
+            const f = $('#wzWxForm'); /* 限定在向导表单，避免与「天气设置」面板同名输入框冲突 */
+            const key = f.querySelector('input[name=weather_api_key]').value.trim();
+            const host = f.querySelector('input[name=weather_api_host]').value.trim();
+            $('#wzWxErr').textContent = '';
+            if (key === '') { $('#wzWxErr').textContent = 'API Key 不能为空'; return; }
+            if (host === '') { $('#wzWxErr').textContent = 'API Host 不能为空'; return; }
+            wzData.weather = {
+                weather_api_key: key,
+                weather_location: f.querySelector('input[name=weather_location]').value.trim(),
+                weather_api_host: host
+            };
+            wzGoto(5);
+        });
+        $('#wzWxSkip').addEventListener('click', () => {
+            wzData.weather = null;
+            wzGoto(5);
+        });
+        $('#wzBack2').addEventListener('click', () => wzGoto(3));
+
+        /* 步骤 5：完成（一次性写入全部收集的数据） */
+        $('#wzDone').addEventListener('click', async () => {
+            const btn = $('#wzDone'); btn.disabled = true;
+            const params = new URLSearchParams();
+            if (wzData.password) params.append('password', wzData.password);
+            if (wzData.wifi) {
+                params.append('wifi_mode', wzData.wifi.mode);
+                if (wzData.wifi.sta_ssid) params.append('sta_ssid', wzData.wifi.sta_ssid);
+                if (wzData.wifi.sta_password) params.append('sta_password', wzData.wifi.sta_password);
+                if (wzData.wifi.ap_ssid) params.append('ap_ssid', wzData.wifi.ap_ssid);
+                if (wzData.wifi.ap_password) params.append('ap_password', wzData.wifi.ap_password);
+            }
+            if (wzData.weather) {
+                if (wzData.weather.weather_api_key) params.append('weather_api_key', wzData.weather.weather_api_key);
+                if (wzData.weather.weather_location) params.append('weather_location', wzData.weather.weather_location);
+                if (wzData.weather.weather_api_host) params.append('weather_api_host', wzData.weather.weather_api_host);
+            }
+            try {
+                const res = await fetch('/api/setup/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: params.toString()
+                });
+                const d = await res.json();
+                if (res.ok && d.ok) {
+                    if (d.token) setToken(d.token); /* 设置了密码则登录 */
+                    wzHide();
+                    checkAuth();
+                } else {
+                    $('#wzDoneErr').textContent = d.error || '完成失败';
+                }
+            } catch (e) { $('#wzDoneErr').textContent = '网络错误，请重试'; }
+            btn.disabled = false;
+        });
+        $('#wzBack3').addEventListener('click', () => wzGoto(4));
 
         /* 初次加载：由 checkAuth 决定显示设置/登录/管理页，并周期刷新状态。 */
         checkAuth();

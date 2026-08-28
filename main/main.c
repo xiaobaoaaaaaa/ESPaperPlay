@@ -239,6 +239,14 @@ void app_main(void) {
                             pdMS_TO_TICKS(15000));
     if (!(bits & BOOT_DISPLAY_READY_BIT)) {
         ESP_LOGE(TAG, "timeout waiting for display pipeline (continuing headless)");
+    } else if (!espaperplay_system_is_setup_done()) {
+        /* 出厂状态首次开机：推入引导页（替代主界面作为根页面），完成或
+         * 跳过后由引导页自行切换到主界面。 */
+        ESP_LOGI(TAG, "first boot: setup wizard pushed (%.2fs since boot)",
+                 (double)(esp_timer_get_time() / 10000) / 100.0);
+        if (espaperplay_ui_page_push(&espaperplay_ui_page_setup) != ESP_OK) {
+            ESP_LOGE(TAG, "setup screen push failed");
+        }
     } else if (espaperplay_ui_page_push(&espaperplay_ui_page_home) != ESP_OK) {
         ESP_LOGE(TAG, "home screen push failed");
     } else {

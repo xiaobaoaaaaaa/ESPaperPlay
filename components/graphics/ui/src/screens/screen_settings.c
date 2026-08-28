@@ -286,6 +286,11 @@ static void settings_open_test(void) {
     espaperplay_ui_page_push_lv(&espaperplay_ui_page_test);
 }
 
+static void settings_open_setup(void) {
+    ESP_LOGI(TAG, "settings: open setup wizard");
+    espaperplay_ui_page_push_lv(&espaperplay_ui_page_setup);
+}
+
 /* ---- 服务组：天气 ---- */
 
 static void settings_fmt_weather_key(int32_t v, char *buf, size_t size) {
@@ -355,6 +360,7 @@ static settings_row_t s_rows[] = {
      .options = s_wifi_mode_options,
      .option_count = (int)(sizeof(s_wifi_mode_options) / sizeof(s_wifi_mode_options[0]))},
     {.name = "WiFi 凭据", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_wifi_cred},
+    {.name = "重新运行开机引导", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_setup},
     /* 系统：字体 / 版本 / 开发者 */
     {.name = "当前字体", .type = SETTINGS_ROW_FONT, .fmt_value = settings_fmt_font},
     {.name = "软件版本", .type = SETTINGS_ROW_INFO, .fmt_value = settings_fmt_version},
@@ -388,7 +394,7 @@ static const settings_subgroup_t s_dev_subgroups[] = {
 };
 
 static const settings_subgroup_t s_sys_subgroups[] = {
-    {"网络", 4, 2},
+    {"网络", 4, 3},
     {"字体", 6, 1},
     {"开发者", 7, 2},
 };

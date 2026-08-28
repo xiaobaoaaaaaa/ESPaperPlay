@@ -96,6 +96,11 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req);
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req);
 esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req);
 
+/* 引导域（webserver_handler_setup.c）：首次开机分步向导（公开免鉴权，
+ * 仅引导未完成时开放写接口）。 */
+esp_err_t webserver_handle_setup_status_get(httpd_req_t *req);
+esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req);
+
 /* 天气域（webserver_handler_weather.c）。 */
 esp_err_t webserver_handle_weather_get(httpd_req_t *req);
 esp_err_t webserver_handle_weather_refresh_post(httpd_req_t *req);

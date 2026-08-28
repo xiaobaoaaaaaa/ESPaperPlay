@@ -132,6 +132,7 @@ typedef struct {
                                                                        Host（空=公共地址） */
     char selected_font[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN]; /*!< 当前选用字体文件名（空=出厂默认）
                                                                */
+    bool setup_done; /*!< 首次开机引导是否已完成（false=下次开机仍进入引导页） */
 } espaperplay_system_config_t;
 
 /**
@@ -296,7 +297,27 @@ esp_err_t espaperplay_system_set_weather_api_host(const char *host);
 esp_err_t espaperplay_system_set_selected_font(const char *name);
 
 /**
+ * @brief 查询首次开机引导是否已完成。
+ *
+ * @return 已完成返回 true；出厂状态 / 恢复出厂后返回 false（下次开机进入引导页）。
+ */
+bool espaperplay_system_is_setup_done(void);
+
+/**
+ * @brief 标记首次开机引导已完成（立即持久化到 NVS，掉电不丢失）。
+ *
+ * 由引导页在用户完成配置或明确跳过时调用；恢复出厂默认会重新清零。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_system_mark_setup_done(void);
+
+/**
  * @brief 恢复出厂默认配置并持久化。
+ *
+ * 内存态重置为出厂默认后，调用 espaperplay_nvs_factory_reset() 擦除全部
+ * 应用层 NVS 命名空间（auth/clock/tls 等），再持久化 system 默认（含
+ * setup_done=false）。管理密码等随之清空，下次开机重新进入首次引导。
  *
  * @return 成功返回 ESP_OK，否则返回错误码。
  */

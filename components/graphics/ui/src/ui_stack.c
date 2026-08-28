@@ -45,8 +45,15 @@ static uint8_t s_depth = 0;
 static espaperplay_ui_status_bar_t *s_current_bar = NULL;
 static lv_timer_t *s_status_bar_timer = NULL;
 
+/** 页面切换模式。 */
+typedef enum {
+    UI_SWITCH_POP = 0, /*!< 弹出栈顶并重建上一页 */
+    UI_SWITCH_PUSH,    /*!< 压入新页 */
+    UI_SWITCH_REPLACE, /*!< 替换栈顶页（栈深不变；空栈时等价压入） */
+} ui_switch_mode_t;
+
 /** 页面切换核心（LVGL 线程内）：exit 当前页 -> 清屏 -> enter 目标页。 */
-static void ui_switch_inner(const espaperplay_ui_page_t *target, bool to_push) {
+static void ui_switch_inner(const espaperplay_ui_page_t *target, ui_switch_mode_t mode) {
     const espaperplay_ui_page_t *next = NULL;
 
     /* 旧页状态栏即将随清屏被删除：先释放其结构体并解除当前页登记，避免
@@ -58,13 +65,13 @@ static void ui_switch_inner(const espaperplay_ui_page_t *target, bool to_push) {
         s_current_bar = NULL;
     }
 
-    if (to_push) {
+    if (mode == UI_SWITCH_PUSH) {
         if (s_depth > 0 && s_stack[s_depth - 1].exit != NULL) {
             s_stack[s_depth - 1].exit();
         }
         s_stack[s_depth++] = *target;
         next = &s_stack[s_depth - 1]; /* 新页（栈内副本） */
-    } else {
+    } else if (mode == UI_SWITCH_POP) {
         if (s_depth <= 1) {
             return; /* 根页面不可弹出 */
         }
@@ -73,6 +80,15 @@ static void ui_switch_inner(const espaperplay_ui_page_t *target, bool to_push) {
         }
         s_depth--;
         next = &s_stack[s_depth - 1]; /* 重建栈顶上一页（pop 时 target 为 NULL，勿解引用） */
+    } else { /* UI_SWITCH_REPLACE：替换栈顶（引导页完成后以主界面替换自身） */
+        if (s_depth > 0 && s_stack[s_depth - 1].exit != NULL) {
+            s_stack[s_depth - 1].exit();
+        }
+        if (s_depth == 0) {
+            s_depth++; /* 空栈时等价于压入 */
+        }
+        s_stack[s_depth - 1] = *target;
+        next = &s_stack[s_depth - 1];
     }
 
     lv_obj_clean(lv_screen_active());
@@ -84,12 +100,12 @@ static void ui_switch_inner(const espaperplay_ui_page_t *target, bool to_push) {
 
 /** 跨线程投递用包装（LVGL 线程内执行）。 */
 static void ui_switch_push_cb(void *arg) {
-    ui_switch_inner((const espaperplay_ui_page_t *)arg, true);
+    ui_switch_inner((const espaperplay_ui_page_t *)arg, UI_SWITCH_PUSH);
 }
 
 static void ui_switch_pop_cb(void *arg) {
     (void)arg;
-    ui_switch_inner(NULL, false);
+    ui_switch_inner(NULL, UI_SWITCH_POP);
 }
 
 esp_err_t espaperplay_ui_page_push(const espaperplay_ui_page_t *page) {
@@ -124,7 +140,15 @@ esp_err_t espaperplay_ui_page_pop_lv(void) {
     if (s_depth <= 1) {
         return ESP_ERR_NOT_FOUND;
     }
-    ui_switch_inner(NULL, false);
+    ui_switch_inner(NULL, UI_SWITCH_POP);
+    return ESP_OK;
+}
+
+esp_err_t espaperplay_ui_page_replace_lv(const espaperplay_ui_page_t *page) {
+    if (page == NULL || page->enter == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ui_switch_inner(page, UI_SWITCH_REPLACE);
     return ESP_OK;
 }
 
@@ -148,7 +172,7 @@ static void ui_boot_long_press_default(void) {
     case ESPAPERPLAY_BOOT_LONG_PRESS_BACK:
         if (s_depth > 1) {
             ESP_LOGI(TAG, "boot long press: pop back");
-            ui_switch_inner(NULL, false);
+            ui_switch_inner(NULL, UI_SWITCH_POP);
         }
         break;
     case ESPAPERPLAY_BOOT_LONG_PRESS_NONE:

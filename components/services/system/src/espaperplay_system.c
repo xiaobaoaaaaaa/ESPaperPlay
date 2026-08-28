@@ -10,6 +10,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "espaperplay_nvs.h"
 #include "espaperplay_system.h"
 
 static const char *TAG = "ESPaperPlay_SYSTEM";
@@ -29,6 +30,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_FONT_NAME "font_name"
 #define NVS_KEY_BOOT_LP_ACTION "boot_lp_action"
 #define NVS_KEY_BOOT_LP_TIME_MS "boot_lp_time_ms"
+#define NVS_KEY_SETUP_DONE "setup_done"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -52,6 +54,7 @@ static espaperplay_system_config_t s_config = {
     .weather_location = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
     .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
     .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
+    .setup_done = false, /* 出厂状态：首次开机进入引导页 */
 };
 
 static bool s_initialized = false;
@@ -171,6 +174,9 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_str(handle, NVS_KEY_FONT_NAME, s_config.selected_font);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_SETUP_DONE, s_config.setup_done ? 1 : 0);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -283,6 +289,18 @@ static esp_err_t system_load(void) {
     load_str_field(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host,
                    sizeof(s_config.weather_api_host), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
                    &missing);
+
+    uint8_t setup_done = 0;
+    err = nvs_get_u8(handle, NVS_KEY_SETUP_DONE, &setup_done);
+    if (err == ESP_OK) {
+        s_config.setup_done = setup_done != 0;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_SETUP_DONE, esp_err_to_name(err));
+        }
+        s_config.setup_done = false;
+        missing = true;
+    }
 
     nvs_close(handle);
 
@@ -416,6 +434,16 @@ espaperplay_boot_long_press_action_t espaperplay_system_get_boot_long_press_acti
     return s_config.boot_long_press_action;
 }
 
+bool espaperplay_system_is_setup_done(void) { return s_config.setup_done; }
+
+esp_err_t espaperplay_system_mark_setup_done(void) {
+    if (!s_config.setup_done) {
+        ESP_LOGI(TAG, "First-boot setup marked done");
+        s_config.setup_done = true;
+    }
+    return save_u8_field(NVS_KEY_SETUP_DONE, 1);
+}
+
 esp_err_t espaperplay_system_set_boot_long_press_time_ms(uint32_t time_ms) {
     if (time_ms < ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MIN_MS ||
         time_ms > ESPAPERPLAY_SYSTEM_BOOT_LONG_PRESS_TIME_MAX_MS) {
@@ -496,5 +524,14 @@ esp_err_t espaperplay_system_reset_defaults(void) {
             sizeof(s_config.weather_location));
     strlcpy(s_config.weather_api_host, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
             sizeof(s_config.weather_api_host));
+    /* 恢复出厂后重新进入首次开机引导。 */
+    s_config.setup_done = false;
+
+    /* 擦除其余应用层命名空间（auth/clock/tls；system 随后由 system_save_all 重写默认）。 */
+    esp_err_t err = espaperplay_nvs_factory_reset();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "factory reset: some nvs namespaces not erased: %s", esp_err_to_name(err));
+    }
+    /* 持久化 system 默认（含 setup_done=false），其余命名空间保持擦除。 */
     return system_save_all();
 }

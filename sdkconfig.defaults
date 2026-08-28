@@ -34,6 +34,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # LVGL 字体
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+# LVGL QR 码控件（首次开机引导页：展示 WebUI 配置地址二维码）
+CONFIG_LV_USE_QRCODE=y
 # LVGL FreeType 字体引擎：TTF/OTF 矢量字体渲染（配合 fonts 分区资产，
 # 见 components/graphics/fonts）。LV_FREETYPE_USE_LVGL_PORT 让 FreeType
 # 走 LVGL 的内存分配与文件系统（盘符 A: 由 esp_lv_fs 注册）。

@@ -7,6 +7,7 @@ idf_component_register(
          "src/webserver_handler_fonts.c"
          "src/webserver_handler_files.c"
          "src/webserver_handler_auth.c"
+         "src/webserver_handler_setup.c"
          "src/webserver_auth_guard.c"
          "src/webserver_tls.c"
     INCLUDE_DIRS "include"

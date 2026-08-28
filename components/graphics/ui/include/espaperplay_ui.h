@@ -106,6 +106,18 @@ esp_err_t espaperplay_ui_page_push_lv(const espaperplay_ui_page_t *page);
 esp_err_t espaperplay_ui_page_pop_lv(void);
 
 /**
+ * @brief 用新页替换栈顶页（LVGL 线程内直接切换，不做跨线程投递）。
+ *
+ * 栈深不变（空栈时等价压入）：旧页 exit -> 清屏 -> 新页 enter。供引导页
+ * 完成后以主界面替换自身等场景使用。
+ *
+ * @param page 页面描述（enter 必须非 NULL）。
+ *
+ * @return ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG。
+ */
+esp_err_t espaperplay_ui_page_replace_lv(const espaperplay_ui_page_t *page);
+
+/**
  * @brief 把按键事件转发给栈顶页面的 on_key 钩子（须在 LVGL 线程内调用）。
  *
  * 由按键分发任务调用；栈为空或无钩子时为空操作。
@@ -229,6 +241,10 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_settings;
 /** 文件管理页页面实例（screen_files.c）：SD 卡基本文件操作（浏览 / 新建文件夹 /
  * 重命名 / 删除），敏感操作二次确认，长按条目弹菜单，边缘滑动或单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_files;
+
+/** 首次开机引导页页面实例（screen_setup.c）：分步交互式初始化配置
+ * （联网配置二维码 / 本机输入 WiFi / 跳过），完成后标记 setup_done。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_setup;
 
 /**
  * @brief 显示开机日志屏（不经页面栈，直接绘制在活动屏幕上）。

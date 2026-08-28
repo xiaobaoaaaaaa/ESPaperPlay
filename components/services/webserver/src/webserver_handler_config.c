@@ -17,6 +17,7 @@
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
+#include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -394,7 +395,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
-/** POST /api/config/reset —— 恢复出厂默认并重新应用 WiFi。 */
+/** POST /api/config/reset —— 恢复出厂默认并重启设备。 */
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     if (webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
@@ -405,26 +406,32 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
         webserver_send_json_err(req, esp_err_to_name(err));
         return ESP_FAIL;
     }
-    /* 恢复默认后同步应用到驱动。 */
+    /* 恢复默认后同步应用到驱动（仅内存态，NVS 已由 reset_defaults 落盘）。 */
     espaperplay_epd_set_idle_sleep_timeout_ms(
         espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
     espaperplay_power_set_auto_sleep_timeout_ms(
         espaperplay_system_get_config()->auto_sleep_timeout_ms);
+    /* 天气配置已恢复默认（Key 清空），同步清空天气缓存。 */
+    espaperplay_weather_config_changed();
 
-    /* 先返回成功响应，再延时重启 WiFi（恢复默认可能切回 AP 模式并改变 IP）。 */
+    /* 先返回成功响应，再延时重启设备（恢复默认会重新进入首次开机引导）。 */
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "message", "已恢复出厂默认，设备即将重启");
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
 
     vTaskDelay(pdMS_TO_TICKS(200));
-    err = espaperplay_wifi_start();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to re-apply wifi after reset: %s", esp_err_to_name(err));
+    /* 安全下电 SD 卡（刷盘 + 卸载 + 软下电）再重启，避免重启瞬间卡片上有未收尾的事务。
+     * 失败不阻断重启。 */
+    if (espaperplay_storage_is_mounted()) {
+        esp_err_t um_ret = espaperplay_storage_unmount();
+        if (um_ret != ESP_OK) {
+            ESP_LOGW(TAG, "SD unmount before reboot failed: %s", esp_err_to_name(um_ret));
+        }
     }
-    /* 天气配置已恢复默认（Key 清空），同步清空天气缓存。 */
-    espaperplay_weather_config_changed();
-    return ESP_OK;
+    esp_restart();
+    return ESP_OK; /* 不会执行到这里 */
 }
 
 /** POST /api/wifi/restart —— 重新应用 WiFi 配置。 */
