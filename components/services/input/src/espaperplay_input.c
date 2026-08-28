@@ -131,21 +131,33 @@ static void input_post_key_event(uint8_t key_id, espaperplay_input_key_action_t 
  */
 static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_t count) {
     const uint16_t seq = ++s_touch_seq;
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     /* 任意触摸帧（按下 / 抬起）均视为用户活动。 */
     input_mark_activity();
 
     if (count == 0) {
+        ESP_LOGD(TAG, "touch cb: seq=%u release frame @%u ms q_free=%u q_waiting=%u", seq,
+                 (unsigned)now_ms, (unsigned)uxQueueSpacesAvailable(s_touch_queue),
+                 (unsigned)uxQueueMessagesWaiting(s_touch_queue));
         const espaperplay_input_event_t event = {
             .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
             .touch_pressed = 0,
             .touch_points = 0,
             .touch_seq = seq,
         };
-        (void)espaperplay_input_post_event(&event);
+        const esp_err_t ret = espaperplay_input_post_event(&event);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "touch cb: post release seq=%u failed: %s", seq, esp_err_to_name(ret));
+        }
         return;
     }
 
+    ESP_LOGD(TAG,
+             "touch cb: seq=%u press frame points=%u @%u ms p0=(%u,%u) q_free=%u q_waiting=%u",
+             seq, count, (unsigned)now_ms, points[0].x, points[0].y,
+             (unsigned)uxQueueSpacesAvailable(s_touch_queue),
+             (unsigned)uxQueueMessagesWaiting(s_touch_queue));
     for (uint8_t i = 0; i < count; i++) {
         const espaperplay_input_event_t event = {
             .type = ESPAPERPLAY_INPUT_EVENT_TOUCH,
@@ -154,7 +166,14 @@ static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_
             .touch_points = count,
             .touch_seq = seq,
         };
-        (void)espaperplay_input_post_event(&event);
+        const esp_err_t ret = espaperplay_input_post_event(&event);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "touch cb: post point %u/%u seq=%u failed: %s", (unsigned)i,
+                     (unsigned)count, seq, esp_err_to_name(ret));
+        } else {
+            ESP_LOGD(TAG, "touch cb: posted point %u/%u seq=%u (%u,%u) id=%u", (unsigned)i,
+                     (unsigned)count, seq, points[i].x, points[i].y, points[i].id);
+        }
     }
 }
 
@@ -372,13 +391,25 @@ esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event) {
 
     if (event->type == ESPAPERPLAY_INPUT_EVENT_KEY) {
         /* 按键：队首 + 满时挤最旧（与按键回调投递策略一致）。 */
+        const UBaseType_t q_free_before = uxQueueSpacesAvailable(s_key_queue);
         if (xQueueSendToFront(s_key_queue, event, 0) != pdTRUE) {
             espaperplay_input_event_t dropped;
             if (xQueueReceive(s_key_queue, &dropped, 0) == pdTRUE) {
                 (void)xQueueSendToFront(s_key_queue, event, 0);
+                ESP_LOGW(TAG,
+                         "key queue full (free %u before), dropped oldest key id=%u action=%s "
+                         "to enqueue new id=%u action=%s",
+                         (unsigned)q_free_before, dropped.key_id,
+                         espaperplay_input_key_action_str(dropped.key_action), event->key_id,
+                         espaperplay_input_key_action_str(event->key_action));
             } else {
-                ESP_LOGW(TAG, "key event queue full, injected key event dropped");
+                ESP_LOGW(TAG, "key event queue full, key event dropped id=%u action=%s",
+                         event->key_id, espaperplay_input_key_action_str(event->key_action));
             }
+        } else {
+            ESP_LOGD(TAG, "post key: id=%u action=%s press=%u ms q_free_before=%u",
+                     event->key_id, espaperplay_input_key_action_str(event->key_action),
+                     event->key_press_time_ms, (unsigned)q_free_before);
         }
     } else {
         /* 触摸：普通投递；满时丢弃新事件（轨迹中间点，短暂过载只丢最新，
@@ -386,12 +417,33 @@ esp_err_t espaperplay_input_post_event(const espaperplay_input_event_t *event) {
          * Queue Set 容器通知不会同步移除，陈旧通知会撑满容器并触发
          * FreeRTOS assert 崩溃（prvNotifyQueueSetContainer）。 */
         static uint32_t s_touch_drop_log_ms = 0;
+        static uint32_t s_touch_drop_count = 0;
+        const UBaseType_t q_free_before = uxQueueSpacesAvailable(s_touch_queue);
+        const UBaseType_t q_wait_before = uxQueueMessagesWaiting(s_touch_queue);
         if (xQueueSend(s_touch_queue, event, 0) != pdTRUE) {
+            s_touch_drop_count++;
             const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (now_ms - s_touch_drop_log_ms >= 1000) {
                 s_touch_drop_log_ms = now_ms;
-                ESP_LOGW(TAG, "touch queue full, dropping newest touch event");
+                ESP_LOGW(TAG,
+                         "touch queue full, dropping newest touch event seq=%u pressed=%u "
+                         "(%u,%u) q_free=%u q_waiting=%u dropped_in_window=%u",
+                         event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
+                         (unsigned)q_free_before, (unsigned)q_wait_before,
+                         (unsigned)s_touch_drop_count);
+                s_touch_drop_count = 0;
+            } else {
+                ESP_LOGD(TAG,
+                         "touch queue drop seq=%u pressed=%u (%u,%u) q_free=%u total_dropped=%u",
+                         event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
+                         (unsigned)q_free_before, (unsigned)s_touch_drop_count);
             }
+        } else {
+            ESP_LOGD(TAG,
+                     "post touch: seq=%u pressed=%u (%u,%u) points=%u q_free_before=%u "
+                     "q_wait_before=%u",
+                     event->touch_seq, event->touch_pressed, event->point.x, event->point.y,
+                     event->touch_points, (unsigned)q_free_before, (unsigned)q_wait_before);
         }
     }
     return ESP_OK;

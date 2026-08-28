@@ -15,6 +15,7 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "espaperplay_config.h"
 #include "espaperplay_touch.h"
@@ -468,7 +469,10 @@ static void IRAM_ATTR gt911_int_isr(void *arg) {
  */
 static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t num) {
     static bool s_first_frame_logged = false;
+    static uint32_t s_frame_seq = 0;
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
+    s_frame_seq++;
     espaperplay_touch_event_cb_t cb = NULL;
     portENTER_CRITICAL(&s_frame_lock);
     if (num > 0) {
@@ -483,9 +487,32 @@ static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t
         ESP_LOGI(TAG, "first touch frame received: %u point(s) (reader path OK)", num);
         s_first_frame_logged = true;
     }
+    if (num == 0) {
+        ESP_LOGD(TAG, "GT911 deliver: seq=%u release frame @%u ms cb=%p", (unsigned)s_frame_seq,
+                 (unsigned)now_ms, (void *)cb);
+    } else {
+        ESP_LOGD(TAG, "GT911 deliver: seq=%u %u point(s) @%u ms p0=(%u,%u) id=%u cb=%p",
+                 (unsigned)s_frame_seq, num, (unsigned)now_ms, points[0].x, points[0].y,
+                 points[0].id, (void *)cb);
+        for (uint8_t i = 1; i < num; i++) {
+            ESP_LOGD(TAG, "GT911 deliver: seq=%u point[%u]=(%u,%u) id=%u", (unsigned)s_frame_seq,
+                     i, points[i].x, points[i].y, points[i].id);
+        }
+    }
 
     if (cb != NULL) {
+        const uint32_t cb_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         cb(points, num);
+        const uint32_t cb_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - cb_start_ms;
+        ESP_LOGD(TAG, "GT911 deliver: seq=%u cb done cost %u ms", (unsigned)s_frame_seq,
+                 (unsigned)cb_cost_ms);
+        if (cb_cost_ms > 20) {
+            ESP_LOGW(TAG, "GT911 deliver: seq=%u cb cost %u ms — input 队列可能堆积",
+                     (unsigned)s_frame_seq, (unsigned)cb_cost_ms);
+        }
+    } else {
+        ESP_LOGW(TAG, "GT911 deliver: seq=%u no cb registered — 帧未投递到 input 队列",
+                 (unsigned)s_frame_seq);
     }
 }
 
@@ -503,20 +530,33 @@ static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t
 static void gt911_task(void *arg) {
     (void)arg;
     static bool s_spurious_wake_logged = false;
+    static uint32_t s_wake_count = 0;
+    static uint32_t s_frame_count = 0;
 
     ESP_LOGI(TAG, "touch reader task started (%s)", s_task_wait_ms == 0 ? "interrupt" : "poll");
 
     for (;;) {
         const TickType_t wait_ticks =
             (s_task_wait_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(s_task_wait_ms);
+        const uint32_t wait_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         const bool wake_by_int = (xSemaphoreTake(s_int_sem, wait_ticks) == pdTRUE);
+        const uint32_t wait_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - wait_start_ms;
 
         /* 轮询模式（芯片 INT mode 3）：每个周期尝试读一帧，不依赖 INT 电平。 */
         if (s_task_wait_ms != 0) {
             uint8_t num = 0;
             espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
-            if (gt911_read_frame(points, &num) == ESP_OK) {
+            const esp_err_t read_ret = gt911_read_frame(points, &num);
+            if (read_ret == ESP_OK) {
+                s_frame_count++;
+                ESP_LOGD(TAG, "GT911 poll: frame #%u %u point(s) wait_cost=%u ms",
+                         (unsigned)s_frame_count, num, (unsigned)wait_cost_ms);
                 gt911_deliver_frame(points, num);
+            } else if (read_ret != ESP_ERR_NOT_FOUND) {
+                ESP_LOGW(TAG, "GT911 poll: read_frame failed: %s wait_cost=%u ms",
+                         esp_err_to_name(read_ret), (unsigned)wait_cost_ms);
+            } else {
+                ESP_LOGD(TAG, "GT911 poll: no data wait_cost=%u ms", (unsigned)wait_cost_ms);
             }
             continue;
         }
@@ -525,22 +565,51 @@ static void gt911_task(void *arg) {
             continue;
         }
 
+        s_wake_count++;
+        const int int_level = gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT);
+        ESP_LOGD(TAG, "GT911 wake #%u: INT=%d active_low=%d wait_cost=%u ms", (unsigned)s_wake_count,
+                 int_level, (int)s_int_active_low, (unsigned)wait_cost_ms);
+
         /* 中断模式：数据未消费时 INT 保持有效电平，用电平兜底被遗漏的中断沿。 */
+        uint32_t frames_in_wake = 0;
         while (gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == (s_int_active_low ? 0 : 1)) {
             uint8_t num = 0;
             espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
-            if (gt911_read_frame(points, &num) != ESP_OK) {
-                if (!s_spurious_wake_logged) {
+            const uint32_t read_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            const esp_err_t read_ret = gt911_read_frame(points, &num);
+            const uint32_t read_cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - read_start_ms;
+            if (read_ret != ESP_OK) {
+                if (read_ret != ESP_ERR_NOT_FOUND) {
+                    ESP_LOGW(TAG, "GT911 read_frame failed: %s cost=%u ms INT=%d",
+                             esp_err_to_name(read_ret), (unsigned)read_cost_ms,
+                             gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+                } else if (!s_spurious_wake_logged) {
                     ESP_LOGW(TAG,
                              "spurious INT wake: pin level %d but no data in buffer "
                              "(trigger %s)",
                              gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT),
                              s_int_active_low ? "falling/low" : "rising/high");
                     s_spurious_wake_logged = true;
+                } else {
+                    ESP_LOGD(TAG, "GT911 spurious wake #%u: no data INT=%d cost=%u ms",
+                             (unsigned)s_wake_count, gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT),
+                             (unsigned)read_cost_ms);
                 }
                 break; /* 无新帧：缓冲已被消费，等待下一次中断 */
             }
+            s_frame_count++;
+            frames_in_wake++;
+            ESP_LOGD(TAG, "GT911 wake #%u frame %u: %u point(s) read_cost=%u ms total_frames=%u",
+                     (unsigned)s_wake_count, (unsigned)frames_in_wake, num, (unsigned)read_cost_ms,
+                     (unsigned)s_frame_count);
             gt911_deliver_frame(points, num);
+        }
+        if (frames_in_wake == 0) {
+            ESP_LOGD(TAG, "GT911 wake #%u: 0 frames consumed INT=%d", (unsigned)s_wake_count,
+                     gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+        } else {
+            ESP_LOGD(TAG, "GT911 wake #%u done: %u frame(s) consumed", (unsigned)s_wake_count,
+                     (unsigned)frames_in_wake);
         }
     }
 }

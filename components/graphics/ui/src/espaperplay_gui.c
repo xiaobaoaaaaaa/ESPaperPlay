@@ -642,8 +642,12 @@ esp_err_t espaperplay_gui_init(void) {
     s_op_b.state = GUI_SLOT_IDLE;
     s_initialized = true;
 
-    /* 异步刷新 worker（创建失败退化为同步执行，仅告警）。 */
-    if (xTaskCreate(gui_worker_task, "gui_epd_worker", 4096, NULL, 6, &s_worker_task) != pdPASS) {
+    /* 异步刷新 worker（创建失败退化为同步执行，仅告警）。
+     * 优先级必须低于 LVGL 渲染任务（5）：SPI 传输分块填充时 worker 每次
+     * 就绪都会抢占 CPU，优先级过高会把 LVGL 渲染/indev 采样饿死数百 ms
+     * （实测 lv_timer_handler 耗时与 worker 刷新时长重合），触摸点击被吞。
+     * worker 降级后仅刷新墙钟时间略长，e-paper 场景无影响。 */
+    if (xTaskCreate(gui_worker_task, "gui_epd_worker", 4096, NULL, 3, &s_worker_task) != pdPASS) {
         ESP_LOGW(TAG, "worker task create failed: refreshes run synchronously");
         s_worker_task = NULL;
     }

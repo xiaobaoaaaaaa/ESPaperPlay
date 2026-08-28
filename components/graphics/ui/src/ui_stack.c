@@ -5,6 +5,7 @@
  */
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include <string.h>
 
@@ -201,11 +202,27 @@ void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event) {
 
 void espaperplay_ui_page_handle_touch_lv(const espaperplay_input_event_t *event) {
     if (event == NULL || s_depth == 0) {
+        ESP_LOGW(TAG, "page handle_touch: dropped event=%p depth=%u", (void *)event,
+                 (unsigned)s_depth);
         return;
     }
     const espaperplay_ui_page_t *top = &s_stack[s_depth - 1];
+    ESP_LOGD(TAG, "page handle_touch: depth=%u has_on_touch=%d seq=%u pressed=%u (%u,%u)",
+             (unsigned)s_depth, top->on_touch != NULL, event->touch_seq, event->touch_pressed,
+             event->point.x, event->point.y);
     if (top->on_touch != NULL) {
+        const uint32_t start_ms = (uint32_t)(esp_timer_get_time() / 1000);
         top->on_touch(event);
+        const uint32_t cost_ms = (uint32_t)(esp_timer_get_time() / 1000) - start_ms;
+        ESP_LOGD(TAG, "page handle_touch: on_touch done cost %u ms seq=%u", (unsigned)cost_ms,
+                 event->touch_seq);
+        if (cost_ms > 50) {
+            ESP_LOGW(TAG, "page handle_touch: on_touch cost %u ms seq=%u — 可能阻塞 LVGL 线程",
+                     (unsigned)cost_ms, event->touch_seq);
+        }
+    } else {
+        ESP_LOGD(TAG, "page handle_touch: no on_touch handler, event ignored seq=%u",
+                 event->touch_seq);
     }
 }
 
