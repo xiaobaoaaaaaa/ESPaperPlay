@@ -468,7 +468,10 @@ static lv_obj_t *settings_label_create(lv_obj_t *parent, const char *text, int f
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, settings_font(font_px), 0);
+    lv_font_t *font = settings_font(font_px);
+    if (font != NULL) {
+        lv_obj_set_style_text_font(label, font, 0);
+    }
     lv_obj_set_style_text_align(label, align, 0);
     lv_obj_set_width(label, LV_PCT(100));
     lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);

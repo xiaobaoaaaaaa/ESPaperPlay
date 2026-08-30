@@ -24,14 +24,19 @@ static const char *TAG = "ESPaperPlay_FONTS";
 static mmap_assets_handle_t s_font_assets;
 static esp_lv_fs_handle_t s_fs_handle;
 
-/* ---- FreeType 字体缓存（（文件名, 字号, 样式）→ lv_font_t） ----
+/* ---- FreeType 字体缓存（（实际生效文件名, 字号, 样式）→ lv_font_t） ----
  * 容量需容纳全部页面同时活跃的字号档（主界面 / 天气 / 设置 + 模态大字号
  * 合计约 8~9 档）：超限逐出会重建 FreeType face（SD 完整字库的表解析
- * 开销大），页面来回切换时表现为明显卡顿。 */
-#define ESPAPERPLAY_FONTS_CACHE_CNT 10
+ * 开销大），页面来回切换时表现为明显卡顿。
+ * 注意：缓存键必须是实际生效的字体名（SD 存在时为请求名，否则为默认名），
+ * 否则拔卡后请求 SD 字体会每次 miss 并重复创建默认字体，迅速填满缓存并
+ * 逐出仍在使用的字体，导致 LVGL 持有野指针而崩溃（InstrFetchProhibited）。
+ * 容量设为 20 以容纳所有页面（8 档）+ SD/Flash 双份 + 余量，避免正常使用
+ * 中触发逐出（逐出会释放仍被 LVGL 持有的字体，导致野指针）。 */
+#define ESPAPERPLAY_FONTS_CACHE_CNT 20
 
 typedef struct {
-    char name[64]; /* 请求的字体文件名（缓存键，含来源无关） */
+    char name[64]; /* 实际生效的字体文件名（缓存键） */
     uint32_t size;
     espaperplay_font_style_t style;
     bool from_sd; /*!< 实际加载来源（日志用） */
@@ -129,20 +134,9 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
         return NULL;
     }
 
-    /* 先查缓存（键 = 字体名 + 字号 + 样式）：命中即返回，不做 SD 卡存在性
-     * 探测。页面建屏时每个标签都会请求字体，若每次都 fopen SD 卡会显著
-     * 拖慢加载（设置页一次进入 40+ 个标签）。 */
-    for (int i = 0; i < ESPAPERPLAY_FONTS_CACHE_CNT; i++) {
-        if (s_font_cache[i].font != NULL && s_font_cache[i].size == size &&
-            s_font_cache[i].style == style && strcmp(s_font_cache[i].name, file_name) == 0) {
-            return s_font_cache[i].font;
-        }
-    }
-
-    /* 未命中才选择字体源（优先级从高到低）：
-     *   1. SD 卡完整字库（/sdcard/system/fonts/{file_name}，盘符 'B:'）——当卡已挂载
-     *      且该文件存在时使用，覆盖 Flash 中的裁剪子集；
-     *   2. Flash 字体分区裁剪子集（盘符 'A:'）——回退。 */
+    /* 先确定实际生效的字体名与路径（SD 完整字库优先，否则 Flash 默认子集）。
+     * 必须在查缓存前确定，否则拔卡后请求 SD 字体会每次 miss 并重复创建
+     * 默认字体，迅速填满缓存并逐出仍在使用的字体，导致 LVGL 持有野指针。 */
     char path[64];
     bool from_sd = false;
     if (espaperplay_sd_fonts_exists(file_name)) {
@@ -150,10 +144,8 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
             from_sd = true;
         }
     }
-
+    const char *effective_name = from_sd ? file_name : ESPAPERPLAY_FONTS_DEFAULT_NAME;
     if (!from_sd) {
-        /* Flash 字体分区仅含出厂裁剪子集（默认字体名）。所选字体不在 SD 卡时，
-         * 回退到该默认字体，避免加载不存在的字体名导致 FreeType 创建失败。 */
         if (espaperplay_fonts_get_path(ESPAPERPLAY_FONTS_DEFAULT_NAME, path, sizeof(path)) !=
             ESP_OK) {
             ESP_LOGE(TAG, "default font path build failed: %s", ESPAPERPLAY_FONTS_DEFAULT_NAME);
@@ -161,24 +153,31 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
         }
     }
 
+    /* 查缓存（键 = 实际生效字体名 + 字号 + 样式）。 */
+    for (int i = 0; i < ESPAPERPLAY_FONTS_CACHE_CNT; i++) {
+        if (s_font_cache[i].font != NULL && s_font_cache[i].size == size &&
+            s_font_cache[i].style == style && strcmp(s_font_cache[i].name, effective_name) == 0) {
+            return s_font_cache[i].font;
+        }
+    }
+
     /* 记录实际选用的字体名（供 WebUI 判断「当前正在使用」：字体在开机建屏时
      * 加载，选择后需重启才生效，故以实际加载为准而非 NVS 中的 selected_font）。 */
-    strlcpy(s_active_font_name, from_sd ? file_name : ESPAPERPLAY_FONTS_DEFAULT_NAME,
-            sizeof(s_active_font_name));
+    strlcpy(s_active_font_name, effective_name, sizeof(s_active_font_name));
 
-    /* 淘汰最旧（线性扫描第一个空位；全满时淘汰第一项） */
-    int slot = 0;
+    /* 淘汰最旧（线性扫描第一个空位；全满时拒绝创建而非逐出——逐出会释放
+     * 仍被 LVGL 持有的字体，导致野指针崩溃）。 */
+    int slot = -1;
     for (int i = 0; i < ESPAPERPLAY_FONTS_CACHE_CNT; i++) {
         if (s_font_cache[i].font == NULL) {
             slot = i;
             break;
         }
     }
-    if (s_font_cache[slot].font != NULL) {
-        ESP_LOGI(TAG, "font cache full, evicting %s @%u", s_font_cache[slot].name,
-                 (unsigned)s_font_cache[slot].size);
-        lv_freetype_font_delete(s_font_cache[slot].font);
-        s_font_cache[slot].font = NULL;
+    if (slot < 0) {
+        ESP_LOGE(TAG, "font cache full (%d), refuse to evict in-use font %s @%u",
+                 ESPAPERPLAY_FONTS_CACHE_CNT, effective_name, (unsigned)size);
+        return NULL;
     }
 
     lv_font_t *font = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, size,
@@ -189,8 +188,7 @@ lv_font_t *espaperplay_fonts_load(const char *file_name, uint32_t size,
         return NULL;
     }
 
-    strlcpy(s_font_cache[slot].name, from_sd ? file_name : ESPAPERPLAY_FONTS_DEFAULT_NAME,
-            sizeof(s_font_cache[slot].name));
+    strlcpy(s_font_cache[slot].name, effective_name, sizeof(s_font_cache[slot].name));
     s_font_cache[slot].size = size;
     s_font_cache[slot].style = style;
     s_font_cache[slot].from_sd = from_sd;

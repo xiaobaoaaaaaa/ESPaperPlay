@@ -254,7 +254,10 @@ static lv_obj_t *files_label_create(lv_obj_t *parent, const char *text, int font
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, files_font(font_px), 0);
+    lv_font_t *font = files_font(font_px);
+    if (font != NULL) {
+        lv_obj_set_style_text_font(label, font, 0);
+    }
     lv_obj_set_style_text_align(label, align, 0);
     lv_obj_set_width(label, LV_PCT(100));
     lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
@@ -344,9 +347,18 @@ static bool files_name_valid(const char *s) {
     if (strcmp(s, ".") == 0 || strcmp(s, "..") == 0) {
         return false;
     }
+    /* FAT 禁止尾随空格/点，且部分实现对首尾空格处理不一致，提前拦截。 */
+    if (s[n - 1] == ' ' || s[n - 1] == '.') {
+        return false;
+    }
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c == '/' || c < 0x20 || c == 0x7F) {
+            return false;
+        }
+        /* FAT 保留字符： \ : * ? " < > |  */
+        if (c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
+            c == '>' || c == '|') {
             return false;
         }
     }
@@ -374,6 +386,58 @@ static int files_entry_cmp(const void *a, const void *b) {
         return x->is_dir ? -1 : 1;
     }
     return strcmp(x->name, y->name);
+}
+
+/** 路径拼接并检测截断：成功返回 true，超长返回 false（dst 不定）。 */
+static bool files_path_join_checked(char *dst, size_t n, const char *a, const char *b) {
+    const size_t need = strlen(a) + 1 + strlen(b) + 1; /* a + "/" + b + NUL */
+    if (need > n) {
+        return false;
+    }
+    strlcpy(dst, a, n);
+    strlcat(dst, "/", n);
+    strlcat(dst, b, n);
+    return true;
+}
+
+/** 检查 SD 卡是否已挂载，未挂载则弹提示并返回 false。 */
+static bool files_require_mounted(void) {
+    if (espaperplay_storage_is_mounted()) {
+        return true;
+    }
+    files_confirm_open("提示", "SD 卡未挂载", true);
+    return false;
+}
+
+/** 名称是否全为空格（经 files_name_valid 后调用）。 */
+static bool files_name_is_all_spaces(const char *s) {
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if ((unsigned char)s[i] != ' ') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** 刷新底部按钮可用状态（未挂载 / 忙 / 内存不足时禁用）。 */
+static void files_update_bottom_buttons(void) {
+    const bool mounted = espaperplay_storage_is_mounted();
+    const bool can_write = mounted && !s_busy && s_entries != NULL;
+    if (s_btn_mkdir != NULL) {
+        if (can_write) {
+            lv_obj_remove_state(s_btn_mkdir, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(s_btn_mkdir, LV_STATE_DISABLED);
+        }
+    }
+    if (s_btn_up != NULL) {
+        const bool can_up = can_write && strcmp(s_cwd, FILES_ROOT) != 0;
+        if (can_up) {
+            lv_obj_remove_state(s_btn_up, LV_STATE_DISABLED);
+        } else {
+            lv_obj_add_state(s_btn_up, LV_STATE_DISABLED);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -411,7 +475,11 @@ static esp_err_t files_rm_rf(const char *path, int depth) {
             continue;
         }
         char child[FILES_PATH_MAX];
-        files_path_join(child, sizeof(child), path, e->d_name);
+        if (!files_path_join_checked(child, sizeof(child), path, e->d_name)) {
+            ESP_LOGW(TAG, "files: rm child path too long (%s/%s)", path, e->d_name);
+            ret = ESP_FAIL;
+            continue;
+        }
         esp_err_t sub = files_rm_rf(child, depth + 1);
         if (sub != ESP_OK) {
             ret = sub; /* 尽力删完其余条目，最后统一报失败 */
@@ -436,6 +504,7 @@ static void files_op_done_lv(void *arg) {
             snprintf(msg, sizeof(msg), "%s失败（errno=%d）", op_names[r->type], r->err_no);
             files_confirm_open("操作失败", msg, true);
         }
+        files_update_bottom_buttons();
     }
     heap_caps_free(r);
 }
@@ -501,36 +570,51 @@ static void files_worker_ensure(void) {
 
 /** 投递一个写操作（LVGL 线程内调用，非阻塞；进行中则忽略新操作）。 */
 static void files_work_post(files_pending_op_t op) {
+    if (!espaperplay_storage_is_mounted()) {
+        files_confirm_open("提示", "SD 卡未挂载", true);
+        return;
+    }
     files_worker_ensure();
     if (s_queue == NULL || s_worker_handle == NULL) {
+        files_confirm_open("操作失败", "系统繁忙，请稍后重试", true);
         return;
     }
     if (s_busy) {
         ESP_LOGW(TAG, "files: busy, drop op %d", (int)op);
+        files_confirm_open("提示", "操作进行中，请稍候", true);
         return;
     }
     files_work_t w = {0};
+    bool ok = true;
     switch (op) {
     case FILES_PENDING_MKDIR:
         w.type = FILES_WOP_MKDIR;
-        files_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_new);
+        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_new);
         break;
     case FILES_PENDING_RENAME:
         w.type = FILES_WOP_RENAME;
-        files_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old);
-        files_path_join(w.path_b, sizeof(w.path_b), s_cwd, s_pending_new);
+        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old) &&
+             files_path_join_checked(w.path_b, sizeof(w.path_b), s_cwd, s_pending_new);
         break;
     case FILES_PENDING_DELETE:
         w.type = FILES_WOP_DELETE;
-        files_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old);
+        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old);
         break;
     default:
         return;
     }
+    if (!ok) {
+        ESP_LOGW(TAG, "files: path too long for op %d", (int)op);
+        files_confirm_open("操作失败", "路径过长", true);
+        return;
+    }
     s_busy = true;
+    files_update_bottom_buttons();
     if (xQueueSend(s_queue, &w, 0) != pdTRUE) {
         s_busy = false;
+        files_update_bottom_buttons();
         ESP_LOGW(TAG, "files: op queue full");
+        files_confirm_open("操作失败", "系统繁忙，请稍后重试", true);
     }
 }
 
@@ -692,9 +776,12 @@ static void files_scan(void) {
             files_entry_t *ent = &s_entries[s_count];
             bool is_dir = (e->d_type == DT_DIR);
             if (e->d_type == DT_UNKNOWN) {
-                /* d_type 不可靠时 stat 兜底。 */
+                /* d_type 不可靠时 stat 兜底；路径过长则跳过该条目。 */
                 char full[FILES_PATH_MAX];
-                files_path_join(full, sizeof(full), s_cwd, e->d_name);
+                if (!files_path_join_checked(full, sizeof(full), s_cwd, e->d_name)) {
+                    ESP_LOGW(TAG, "files: entry path too long, skip %s", e->d_name);
+                    continue;
+                }
                 struct stat st;
                 is_dir = (stat(full, &st) == 0 && S_ISDIR(st.st_mode));
             }
@@ -711,7 +798,12 @@ static void files_scan(void) {
         lv_label_set_text(s_hint_label, "SD 卡未挂载");
         lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
     } else if (s_count == 0) {
-        lv_label_set_text(s_hint_label, "空目录");
+        /* 挂载但 opendir 失败（权限/IO 错误）与空目录区分提示。 */
+        if (d == NULL) {
+            lv_label_set_text(s_hint_label, "目录读取失败");
+        } else {
+            lv_label_set_text(s_hint_label, "空目录");
+        }
         lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
@@ -754,6 +846,7 @@ static void files_scan(void) {
 
     files_page_build(s_page);
     espaperplay_ui_status_bar_refresh(s_bar);
+    files_update_bottom_buttons();
     ESP_LOGI(TAG, "files: scan %s -> %d entries, %d page(s)", s_cwd, s_count, s_page_count);
 }
 
@@ -763,8 +856,23 @@ static void files_scan(void) {
 
 /** 进入子目录。 */
 static void files_enter_dir(const char *name) {
+    if (!espaperplay_storage_is_mounted()) {
+        files_confirm_open("提示", "SD 卡未挂载", true);
+        return;
+    }
     char target[FILES_PATH_MAX];
-    files_path_join(target, sizeof(target), s_cwd, name);
+    if (!files_path_join_checked(target, sizeof(target), s_cwd, name)) {
+        files_confirm_open("操作失败", "路径过长", true);
+        return;
+    }
+    /* 校验目标仍为目录（防并发删除/替换）。 */
+    struct stat st;
+    if (stat(target, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        ESP_LOGW(TAG, "files: enter target not a dir (%s)", target);
+        files_scan();
+        files_confirm_open("提示", "该目录已不存在", true);
+        return;
+    }
     strlcpy(s_cwd, target, sizeof(s_cwd));
     s_page = 0;
     files_scan();
@@ -914,7 +1022,10 @@ static lv_obj_t *files_card_button(lv_obj_t *card, const char *text, int x, int 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, files_font(20), 0);
+    lv_font_t *btn_font = files_font(20);
+    if (btn_font != NULL) {
+        lv_obj_set_style_text_font(label, btn_font, 0);
+    }
     lv_obj_center(label);
     if (cb != NULL) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
@@ -941,10 +1052,15 @@ static void files_confirm_ok_cb(lv_event_t *e) {
     if (!files_modal_click_ok()) {
         return;
     }
+    /* alert_only 提示框无待执行操作，仅关闭。 */
+    if (s_pending_op == FILES_PENDING_NONE) {
+        files_modal_close();
+        return;
+    }
     const files_pending_op_t op = s_pending_op;
     s_pending_op = FILES_PENDING_NONE;
-    files_work_post(op);
     files_modal_close();
+    files_work_post(op);
 }
 
 /**
@@ -1003,7 +1119,10 @@ static void files_info_open(int idx) {
     files_disp_name(ent->name, disp, sizeof(disp));
 
     char full[FILES_PATH_MAX];
-    files_path_join(full, sizeof(full), s_cwd, ent->name);
+    if (!files_path_join_checked(full, sizeof(full), s_cwd, ent->name)) {
+        files_confirm_open("提示", "路径过长", true);
+        return;
+    }
     struct stat st;
     char size_line[48];
     char time_line[48];
@@ -1042,11 +1161,31 @@ static void files_menu_cb(lv_event_t *e) {
         return;
     }
     if (action == FILES_MENU_RENAME) {
+        if (!espaperplay_storage_is_mounted()) {
+            files_modal_close();
+            files_confirm_open("提示", "SD 卡未挂载", true);
+            return;
+        }
+        if (s_busy) {
+            files_modal_close();
+            files_confirm_open("提示", "操作进行中，请稍候", true);
+            return;
+        }
         files_modal_close();
         files_keyboard_open(FILES_INPUT_RENAME, s_pending_old);
         return;
     }
     /* FILES_MENU_DELETE：删除属敏感操作，转二次确认。 */
+    if (!espaperplay_storage_is_mounted()) {
+        files_modal_close();
+        files_confirm_open("提示", "SD 卡未挂载", true);
+        return;
+    }
+    if (s_busy) {
+        files_modal_close();
+        files_confirm_open("提示", "操作进行中，请稍候", true);
+        return;
+    }
     char old[FILES_DISP_MAX];
     files_disp_name(s_pending_old, old, sizeof(old));
     /* 固定短语为 UTF-8 中文（每字 3 字节），缓冲按「显示名 + 充裕短语」取值。 */
@@ -1064,6 +1203,10 @@ static void files_menu_cb(lv_event_t *e) {
 /** 打开条目上下文菜单（长按触发，发生在按住期间 -> 启用点击抑制窗口）。 */
 static void files_menu_open(int idx) {
     if (idx < 0 || idx >= s_count) {
+        return;
+    }
+    if (!espaperplay_storage_is_mounted()) {
+        files_confirm_open("提示", "SD 卡未挂载", true);
         return;
     }
     strlcpy(s_pending_old, s_entries[idx].name, sizeof(s_pending_old));
@@ -1110,16 +1253,38 @@ static void files_kb_ok_cb(lv_event_t *e) {
     if (!files_modal_click_ok() || s_kb_ta == NULL) {
         return;
     }
+    if (!espaperplay_storage_is_mounted()) {
+        files_modal_close();
+        files_confirm_open("提示", "SD 卡未挂载", true);
+        return;
+    }
     const char *text = lv_textarea_get_text(s_kb_ta);
-    if (!files_name_valid(text)) {
+    if (!files_name_valid(text) || files_name_is_all_spaces(text)) {
         if (s_kb_status != NULL) {
-            lv_label_set_text(s_kb_status, "名称无效：不能为空，且不能含 / 或控制字符");
+            lv_label_set_text(s_kb_status, "名称无效：不能为空、全空格，且不能含 / 或控制字符");
         }
         ESP_LOGW(TAG, "files: invalid name rejected");
         return; /* 不关闭，让用户修正输入 */
     }
 
     strlcpy(s_pending_new, text, sizeof(s_pending_new));
+    /* 路径长度预检（避免二次确认后才报路径过长）。 */
+    char probe[FILES_PATH_MAX];
+    if (!files_path_join_checked(probe, sizeof(probe), s_cwd, s_pending_new)) {
+        if (s_kb_status != NULL) {
+            lv_label_set_text(s_kb_status, "路径过长");
+        }
+        return;
+    }
+    /* 重名预检（FAT 大小写不敏感，提前提示更友好；最终仍以 worker 结果为准）。 */
+    struct stat st_probe;
+    if (stat(probe, &st_probe) == 0) {
+        if (s_kb_status != NULL) {
+            lv_label_set_text(s_kb_status,
+                              s_input_mode == FILES_INPUT_RENAME ? "目标已存在" : "同名文件或文件夹已存在");
+        }
+        return;
+    }
     char old_disp[FILES_DISP_MAX];
     char new_disp[FILES_DISP_MAX];
     files_disp_name(s_pending_old, old_disp, sizeof(old_disp));
@@ -1130,6 +1295,10 @@ static void files_kb_ok_cb(lv_event_t *e) {
         if (strcmp(s_pending_new, s_pending_old) == 0) {
             files_modal_close(); /* 名字未变：无操作 */
             return;
+        }
+        /* 大小写仅变大小写时 FAT 视为同名，stat 已命中则上面已拦截；此处再做大小写不敏感比对兜底。 */
+        if (strcasecmp(s_pending_new, s_pending_old) == 0) {
+            /* 同名不同大小写：FAT 上可能视为重命名成功或失败，允许走二次确认由 worker 决定。 */
         }
         snprintf(msg, sizeof(msg), "将把「%s」重命名为「%s」。", old_disp, new_disp);
         s_pending_op = FILES_PENDING_RENAME;
@@ -1206,7 +1375,10 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     lv_textarea_set_max_length(ta, FILES_NAME_MAX - 1);
     lv_textarea_set_text(ta, init_text != NULL ? init_text : "");
     lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_text_font(ta, files_font(20), 0);
+    lv_font_t *ta_font = files_font(20);
+    if (ta_font != NULL) {
+        lv_obj_set_style_text_font(ta, ta_font, 0);
+    }
     lv_obj_set_style_border_color(ta, lv_color_black(), 0);
     lv_obj_set_style_border_width(ta, 2, 0);
     lv_obj_set_style_radius(ta, 6, 0);
@@ -1244,7 +1416,16 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
 /* ------------------------------------------------------------------ */
 
 /** 底部「新建文件夹」：打开键盘输入（空名称）。 */
-static void files_action_mkdir(void) { files_keyboard_open(FILES_INPUT_MKDIR, ""); }
+static void files_action_mkdir(void) {
+    if (!files_require_mounted()) {
+        return;
+    }
+    if (s_busy) {
+        files_confirm_open("提示", "操作进行中，请稍候", true);
+        return;
+    }
+    files_keyboard_open(FILES_INPUT_MKDIR, "");
+}
 
 /** 命中检测：返回按下点命中的条目下标（当前页内，-1=无）。 */
 static int files_hit_entry(const lv_point_t *p) {
@@ -1362,6 +1543,9 @@ static void files_enter(void) {
     s_busy = false;
     s_modal = NULL;
     s_pending_op = FILES_PENDING_NONE;
+    s_pending_old[0] = '\0';
+    s_pending_new[0] = '\0';
+    s_pending_is_dir = false;
     s_touch_down = false;
     s_await_release = false;
     s_modal_track_release = false;
@@ -1369,6 +1553,7 @@ static void files_enter(void) {
     s_touch_btn = -1;
     s_active = true;
     files_scan();
+    files_update_bottom_buttons();
 
     ESP_LOGI(TAG, "files screen entered");
 }

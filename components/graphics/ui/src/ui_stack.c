@@ -292,7 +292,10 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
     bar->time = lv_label_create(bar->bar);
     lv_label_set_text(bar->time, "--:--");
     lv_obj_set_style_text_color(bar->time, lv_color_black(), 0);
-    lv_obj_set_style_text_font(bar->time, ui_bar_font(16), 0);
+    lv_font_t *bar_font16 = ui_bar_font(16);
+    if (bar_font16 != NULL) {
+        lv_obj_set_style_text_font(bar->time, bar_font16, 0);
+    }
     lv_obj_set_style_text_align(bar->time, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_width(bar->time, LV_PCT(100));
     lv_obj_set_pos(bar->time, 12, 4);
@@ -302,7 +305,10 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
     bar->title = lv_label_create(bar->bar);
     lv_label_set_text(bar->title, (title != NULL && title[0] != '\0') ? title : "");
     lv_obj_set_style_text_color(bar->title, lv_color_black(), 0);
-    lv_obj_set_style_text_font(bar->title, ui_bar_font(20), 0);
+    lv_font_t *bar_font20 = ui_bar_font(20);
+    if (bar_font20 != NULL) {
+        lv_obj_set_style_text_font(bar->title, bar_font20, 0);
+    }
     lv_obj_set_style_text_align(bar->title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(bar->title, LV_PCT(100));
     lv_obj_set_pos(bar->title, 0, 3);

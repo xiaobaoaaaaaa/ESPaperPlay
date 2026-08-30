@@ -154,7 +154,10 @@ static lv_obj_t *home_label_create(lv_obj_t *parent, const char *text, int font_
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, home_font(font_px), 0);
+    lv_font_t *font = home_font(font_px);
+    if (font != NULL) {
+        lv_obj_set_style_text_font(label, font, 0);
+    }
     lv_obj_set_style_text_align(label, align, 0);
     lv_obj_set_width(label, LV_PCT(100));
     return label;
@@ -259,7 +262,10 @@ static lv_obj_t *home_app_card_create(lv_obj_t *parent, const home_app_t *app, i
     lv_obj_t *name = lv_label_create(card);
     lv_label_set_text(name, app->name_zh);
     lv_obj_set_style_text_color(name, lv_color_black(), 0);
-    lv_obj_set_style_text_font(name, home_font(20), 0);
+    lv_font_t *font20 = home_font(20);
+    if (font20 != NULL) {
+        lv_obj_set_style_text_font(name, font20, 0);
+    }
     lv_obj_set_width(name, HOME_APP_CARD_W);
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(name, 0, HOME_APP_FRAME_PX + 6);
