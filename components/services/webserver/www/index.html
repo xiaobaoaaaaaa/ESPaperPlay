@@ -860,11 +860,13 @@
                     <p>设置管理密码（用于保护 Web 管理页，至少 8 位）。</p>
                     <div class="field">
                         <label>管理密码</label>
-                        <input type="password" id="wzPwd" maxlength="63" placeholder="至少 8 位" autocomplete="new-password">
+                        <input type="password" id="wzPwd" maxlength="63" placeholder="至少 8 位"
+                            autocomplete="new-password">
                     </div>
                     <div class="field">
                         <label>确认密码</label>
-                        <input type="password" id="wzPwdConfirm" maxlength="63" placeholder="再次输入" autocomplete="new-password">
+                        <input type="password" id="wzPwdConfirm" maxlength="63" placeholder="再次输入"
+                            autocomplete="new-password">
                     </div>
                     <div class="wizard-err" id="wzPwdErr"></div>
                     <div class="wizard-actions">
@@ -877,28 +879,33 @@
                     <p>选择设备联网方式。</p>
                     <div class="field">
                         <label>WiFi 工作模式</label>
-                        <label class="radio"><input type="radio" name="wz_wifi_mode" value="sta" checked> 站点 (STA)：连接你的路由器</label>
+                        <label class="radio"><input type="radio" name="wz_wifi_mode" value="sta" checked> 站点
+                            (STA)：连接你的路由器</label>
                         <label class="radio"><input type="radio" name="wz_wifi_mode" value="ap"> 热点 (AP)：设备自建热点</label>
                     </div>
                     <form id="wzNetForm">
                         <div id="wzStaFields">
                             <div class="field">
                                 <label>STA SSID（要连接的路由器）</label>
-                                <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi" autocomplete="off">
+                                <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi"
+                                    autocomplete="off">
                             </div>
                             <div class="field">
                                 <label>STA 密码</label>
-                                <input type="password" name="sta_password" maxlength="63" placeholder="路由器 WiFi 密码" autocomplete="new-password">
+                                <input type="password" name="sta_password" maxlength="63" placeholder="路由器 WiFi 密码"
+                                    autocomplete="new-password">
                             </div>
                         </div>
                         <div id="wzApFields" style="display:none">
                             <div class="field">
                                 <label>AP SSID（设备热点名）</label>
-                                <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP" autocomplete="off">
+                                <input type="text" name="ap_ssid" maxlength="31" placeholder="ESPaperPlay-AP"
+                                    autocomplete="off">
                             </div>
                             <div class="field">
                                 <label>AP 密码（留空 = 开放网络）</label>
-                                <input type="password" name="ap_password" maxlength="63" placeholder="留空 = 开放" autocomplete="new-password">
+                                <input type="password" name="ap_password" maxlength="63" placeholder="留空 = 开放"
+                                    autocomplete="new-password">
                             </div>
                         </div>
                     </form>
@@ -915,12 +922,15 @@
                     <p>配置和风天气（可选，稍后也能在「天气设置」中修改）。</p>
                     <form id="wzWxForm">
                         <div class="field">
-                            <label>API Key（<a href="https://dev.qweather.com/" target="_blank" rel="noopener">和风天气控制台</a>获取）</label>
-                            <input type="password" name="weather_api_key" maxlength="47" placeholder="必填" autocomplete="new-password">
+                            <label>API Key（<a href="https://dev.qweather.com/" target="_blank"
+                                    rel="noopener">和风天气控制台</a>获取）</label>
+                            <input type="password" name="weather_api_key" maxlength="47" placeholder="必填"
+                                autocomplete="new-password">
                         </div>
                         <div class="field">
                             <label>位置（LocationID / 城市名 / "经度,纬度"；留空 = 自动定位）</label>
-                            <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位" autocomplete="off">
+                            <input type="text" name="weather_location" maxlength="63" placeholder="留空 = 自动定位"
+                                autocomplete="off">
                         </div>
                         <div class="field">
                             <label>API Host（<a href="https://dev.qweather.com/docs/configuration/api-host/"

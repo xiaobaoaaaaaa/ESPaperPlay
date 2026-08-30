@@ -24,9 +24,9 @@ extern "C" {
 
 /** 应用层 NVS 命名空间清单（必须与各服务 nvs_open 所用命名空间一致）。 */
 #define ESPAPERPLAY_NVS_NS_SYSTEM "system"
-#define ESPAPERPLAY_NVS_NS_AUTH    "auth"
-#define ESPAPERPLAY_NVS_NS_CLOCK   "clock"
-#define ESPAPERPLAY_NVS_NS_TLS     "tls"
+#define ESPAPERPLAY_NVS_NS_AUTH "auth"
+#define ESPAPERPLAY_NVS_NS_CLOCK "clock"
+#define ESPAPERPLAY_NVS_NS_TLS "tls"
 
 /**
  * @brief 恢复出厂：擦除全部应用层 NVS 命名空间。

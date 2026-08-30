@@ -417,10 +417,10 @@ static const settings_section_t s_sections[] = {
 /* 运行时分页分组：每页包含若干大类（settings_enter 按可用高度构建）。 */
 static const settings_section_t *s_page_sections[SETTINGS_PAGE_MAX][SETTINGS_SECTION_CNT];
 static int s_page_section_cnt[SETTINGS_PAGE_MAX];
-static int s_page_count = 0;  /*!< 实际分页数 */
+static int s_page_count = 0;                 /*!< 实际分页数 */
 static bool s_page_built[SETTINGS_PAGE_MAX]; /*!< 分页控件是否已构建（隐藏页惰性构建） */
-static int s_area_y = 0;      /*!< 分页容器顶部 y（enter 时计算，惰性构建用） */
-static int s_area_h = 0;      /*!< 分页容器高度 */
+static int s_area_y = 0;                     /*!< 分页容器顶部 y（enter 时计算，惰性构建用） */
+static int s_area_h = 0;                     /*!< 分页容器高度 */
 
 /* ------------------------------------------------------------------ */
 /* 页面状态                                                             */
@@ -1298,7 +1298,8 @@ static void settings_page_build(int idx) {
         return;
     }
     s_page_objs[idx] = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_page_objs[idx], lv_display_get_horizontal_resolution(lv_display_get_default()),
+    lv_obj_set_size(s_page_objs[idx],
+                    lv_display_get_horizontal_resolution(lv_display_get_default()),
                     settings_area_h());
     lv_obj_set_pos(s_page_objs[idx], 0, settings_area_y());
     lv_obj_set_style_bg_color(s_page_objs[idx], lv_color_white(), 0);
@@ -1324,8 +1325,7 @@ static void settings_show_page(int idx) {
     for (int i = 0; i < s_page_count; i++) {
         /* 未构建的分页没有控件（指针无效），跳过显隐操作。 */
         if (!s_page_built[i]) {
-            lv_obj_set_style_bg_color(s_dots[i],
-                                      i == idx ? lv_color_black() : lv_color_white(), 0);
+            lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
             continue;
         }
         if (i == idx) {

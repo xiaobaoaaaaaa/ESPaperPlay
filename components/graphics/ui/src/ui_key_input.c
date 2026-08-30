@@ -154,8 +154,10 @@ static void ui_key_selftest_task(void *arg) {
 #endif /* ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST */
 
 esp_err_t espaperplay_ui_input_start(void) {
-    /* 按键泵定时器必须在 LVGL 线程内创建（lv_timer 非线程安全）。 */
-    const esp_err_t err = espaperplay_gui_lv_call(ui_key_pump_create_cb, NULL, 1000);
+    /* 按键泵定时器必须在 LVGL 线程内创建（lv_timer 非线程安全）。
+     * 超时放宽至 3000ms：首帧渲染（FreeType 栅格化）可能耗时较长，
+     * 避免 LVGL 任务忙于绘制时投递超时。 */
+    const esp_err_t err = espaperplay_gui_lv_call(ui_key_pump_create_cb, NULL, 3000);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "key pump timer create failed: %s", esp_err_to_name(err));
         return err;

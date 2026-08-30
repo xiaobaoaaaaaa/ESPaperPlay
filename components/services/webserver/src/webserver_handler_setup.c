@@ -156,10 +156,10 @@ esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req) {
     char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN] = {0};
     const bool has_key =
         webserver_form_get_field(body, "weather_api_key", weather_api_key, sizeof(weather_api_key));
-    const bool has_loc =
-        webserver_form_get_field(body, "weather_location", weather_location, sizeof(weather_location));
-    const bool has_host =
-        webserver_form_get_field(body, "weather_api_host", weather_api_host, sizeof(weather_api_host));
+    const bool has_loc = webserver_form_get_field(body, "weather_location", weather_location,
+                                                  sizeof(weather_location));
+    const bool has_host = webserver_form_get_field(body, "weather_api_host", weather_api_host,
+                                                   sizeof(weather_api_host));
 
     free(body);
 
@@ -224,8 +224,7 @@ esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req) {
     }
     if (err == ESP_OK && (has_ap_ssid || has_ap_pass)) {
         const char *new_pass = has_ap_pass ? ap_password : cur->ap_password;
-        err = espaperplay_system_set_ap_credentials(has_ap_ssid ? ap_ssid : cur->ap_ssid,
-                                                    new_pass);
+        err = espaperplay_system_set_ap_credentials(has_ap_ssid ? ap_ssid : cur->ap_ssid, new_pass);
     }
 
     /* 3) 天气（可选）。 */

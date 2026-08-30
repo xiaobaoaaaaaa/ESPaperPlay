@@ -55,8 +55,18 @@ static void espaperplay_lvgl_log_cb(lv_log_level_t level, const char *buf) {
  *   - LVGL 初始化（lv_init + tick 源 + display 注册 + 绘制暂存）；
  *   - flush 回调：LVGL 的 RGB565 渲染结果逐块拷入主帧并提交脏区，
  *     周期末触发一次异步刷新（worker 执行真实面板刷新，本任务不阻塞）；
- *   - lv_timer_handler 渲染任务循环。
+ *   - lv_timer_handler 渲染任务循环（FreeRTOS OS 模式下受 lv_lock 保护）。
  * UI 页面（widget 树）不在此文件，见 src/screens/（espaperplay_ui.h）。
+ *
+ * 双核并行（FreeRTOS + 双核，当前单单元稳定模式）：
+ *   - Kconfig 已启用 LV_OS_FREERTOS（FreeRTOS 互斥/条件变量，线程安全），
+ *     LV_DRAW_SW_DRAW_UNIT_CNT=1 暂保持单绘制单元以验证稳定性；
+ *     双核并行需 2 单元，但当前 flush 直接写共享主帧，并发写存在竞态，
+ *     需加锁或双缓冲后再启用 2 单元；
+ *   - 绘制线程栈 32KB（FreeType 字形栅格化在绘制线程执行，需大栈，
+ *     放 PSRAM，见 lv_freertos.c 的 xTaskCreateWithCaps）；
+ *   - gui_lvgl 任务无固定亲和性（NO_AFFINITY），由 FreeRTOS 双核调度器
+ *     自动分配到空闲核心。
  *
  * 屏幕旋转按 LVGL 官方方案在 flush 回调内完成（《Rotation | LVGL Open》
  * 文档）：lv_display_set_rotation 只交换逻辑分辨率，实际旋转在 flush 内
@@ -183,14 +193,22 @@ static uint32_t espaperplay_lvgl_tick_ms(void) { return (uint32_t)(esp_timer_get
  * LV_NO_TIMER_READY 或异常大值兜底 100ms。注意 CONFIG_FREERTOS_HZ=100，
  * pdMS_TO_TICKS(5) 会截断为 0 tick（vTaskDelay(0) 仅让出一次），切勿用小于
  * 10ms 的固定延时，否则高优先级任务会空转饿死 IDLE 触发任务看门狗。
+ *
+ * FreeRTOS OS 模式（LV_OS_FREERTOS）：lv_timer_handler 内部已通过
+ * lv_lock/lv_unlock 保护全局状态；当前单绘制单元（CNT=1），flush 在
+ * gui_lvgl 任务上下文内同步触发，安全（仅操作主帧与脏区）；后续启用
+ * 2 单元双核并行时，flush 将在绘制线程上下文触发，需加锁保护主帧。
  */
 static void espaperplay_lvgl_task(void *arg) {
     (void)arg;
-    ESP_LOGI(TAG, "LVGL task started");
+    ESP_LOGI(TAG, "LVGL task started (FreeRTOS OS, single draw unit)");
     for (;;) {
-        /* 先执行投递的 UI 操作（在 LVGL 线程内、渲染周期之外，安全）。 */
+        /* 先排空所有已投递的 UI 操作（在 LVGL 线程内、渲染周期之外，安全）。
+         * FreeRTOS 模式下，UI 操作与 lv_timer_handler 共享 LVGL 全局锁，
+         * 需在锁外执行投递回调，避免与绘制线程死锁。排空而非单条，避免
+         * 队列积压导致调用方超时（曾导致 key pump 创建 ESP_ERR_TIMEOUT）。 */
         espaperplay_lv_call_item_t item;
-        if (xQueueReceive(s_lv_call_queue, &item, 0) == pdTRUE) {
+        while (xQueueReceive(s_lv_call_queue, &item, 0) == pdTRUE) {
             if (item.fn != NULL) {
                 item.fn(item.arg);
             }
@@ -201,10 +219,25 @@ static void espaperplay_lvgl_task(void *arg) {
         }
 
         uint32_t next = lv_timer_handler();
-        if (next == 0 || next > 100) {
-            next = 100; /* 无定时器就绪（LV_NO_TIMER_READY）或异常值：兜底 */
+        if (next == LV_NO_TIMER_READY) {
+            next = 100;
+        } else if (next == 0) {
+            next = 1; /* 定时器恰好到期：让出 1 tick，避免空转饿死 IDLE */
+        } else if (next > 100) {
+            next = 100; /* 异常大值兜底 */
         }
-        vTaskDelay(pdMS_TO_TICKS(next));
+        /* 以 next 为超时阻塞等待新投递，兼顾定时器精度与投递响应：
+         * 有新投递时立即唤醒，无投递时按 LVGL 节拍休眠。 */
+        if (xQueueReceive(s_lv_call_queue, &item, pdMS_TO_TICKS(next)) == pdTRUE) {
+            if (item.fn != NULL) {
+                item.fn(item.arg);
+            }
+            if (item.need_done) {
+                s_lv_call_done_seq = item.seq;
+                xSemaphoreGive(s_lv_call_done);
+            }
+            /* 处理完投递后立即进入下一轮渲染，不额外延时 */
+        }
     }
 }
 
@@ -281,19 +314,21 @@ esp_err_t espaperplay_gui_lv_start(void) {
      * 队列 -> 分发任务 -> indev 状态，见 lvgl_touch.c）。 */
     ESP_RETURN_ON_ERROR(espaperplay_ui_touch_init(), TAG, "touch pointer indev init failed");
 
-    /* 渲染任务栈：LVGL 单线程渲染模式（LV_OS_NONE）下，FreeType 字形栅格化
-     * （smooth 渲染器）在本任务栈上执行，8KB 会栈溢出（曾实测 gui_lvgl 溢出），
-     * 需 >=32KB（与 LVGL 对 draw 线程的官方要求一致）。
-     * 栈放 PSRAM：32KB 内部 RAM 分配会失败（WiFi/Web 已占大量内部堆），
-     * PSRAM 栈是官方支持做法（esp_lvgl_adapter 的 LVGL_THREAD_STACK_IN_PSRAM）。 */
+    /* 渲染任务栈：FreeRTOS OS 模式下，FreeType 字形栅格化在 LVGL 绘制线程
+     * （swdraw，LV_DRAW_THREAD_STACK_SIZE=32KB）执行；当前单单元时绘制
+     * 仍在 gui_lvgl 任务内同步执行，32KB 保留以兼容复杂页面与后续 2 单元
+     * 并行；栈放 PSRAM（32KB 内部 RAM 分配会失败，WiFi/Web 已占大量
+     * 内部堆，PSRAM 栈是官方支持做法 esp_lvgl_adapter 的 LVGL_THREAD_STACK_IN_PSRAM）。
+     * 当前单单元，无额外绘制线程；后续启用 2 单元时，绘制线程与 gui_lvgl
+     * 均无固定亲和性，由 FreeRTOS 双核调度器自动分配到空闲核心。 */
     static TaskHandle_t s_lvgl_task = NULL;
     if (xTaskCreateWithCaps(espaperplay_lvgl_task, "gui_lvgl", 32768, NULL, 5, &s_lvgl_task,
                             MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "LVGL task create failed");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "LVGL %d.%d.%d started (%ux%u, draw buf %uB, partial mode)", LVGL_VERSION_MAJOR,
-             LVGL_VERSION_MINOR, LVGL_VERSION_PATCH, disp_w, disp_h,
+    ESP_LOGI(TAG, "LVGL %d.%d.%d started (%ux%u, draw buf %uB, partial mode, FreeRTOS single-unit)",
+             LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH, disp_w, disp_h,
              (unsigned)(disp_w * ESPAPERPLAY_LVGL_BUF_ROWS * 2));
     return ESP_OK;
 }

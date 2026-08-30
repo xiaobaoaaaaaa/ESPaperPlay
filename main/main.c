@@ -254,7 +254,16 @@ void app_main(void) {
                  (double)(esp_timer_get_time() / 10000) / 100.0);
     }
 
-    ESP_ERROR_CHECK(espaperplay_ui_input_start()); /* 输入消费：input 双队列 -> LVGL 线程直读 */
+    /* 输入消费：input 双队列 -> LVGL 线程直读。启动失败不直接 abort，
+     * 避免 LVGL 任务短暂忙碌导致的超时使整机无法启动（曾触发
+     * ESP_ERROR_CHECK 0x107 abort）。 */
+    esp_err_t input_err = espaperplay_ui_input_start();
+    if (input_err != ESP_OK) {
+        ESP_LOGE(TAG, "input start failed: %s (retry once in 500ms)", esp_err_to_name(input_err));
+        vTaskDelay(pdMS_TO_TICKS(500));
+        input_err = espaperplay_ui_input_start();
+        ESP_ERROR_CHECK(input_err);
+    }
     ESP_ERROR_CHECK(espaperplay_reader_init());
 
     /* 创建任务。 */

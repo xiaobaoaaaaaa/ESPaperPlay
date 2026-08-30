@@ -1178,8 +1178,8 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     const int kb_h = files_scaled(240) < 170 ? 170 : files_scaled(240);
     /* 面板仅含标题/输入框/提示/按钮（不含键盘，键盘单独挂全屏 modal 贴底，避免被面板裁剪）。 */
     const int panel_h = pad + title_h + 6 + ta_h + 4 + status_h + 6 + bh + pad;
-    const int kb_y = scr_h - kb_h - 6;       /* 键盘贴底 */
-    const int panel_y = kb_y - panel_h - 6;  /* 面板位于键盘上方 */
+    const int kb_y = scr_h - kb_h - 6;      /* 键盘贴底 */
+    const int panel_y = kb_y - panel_h - 6; /* 面板位于键盘上方 */
 
     lv_obj_t *panel = lv_obj_create(s_modal);
     lv_obj_set_size(panel, panel_w, panel_h);

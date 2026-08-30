@@ -42,7 +42,22 @@ CONFIG_LV_USE_QRCODE=y
 CONFIG_LV_USE_FREETYPE=y
 CONFIG_LV_FREETYPE_USE_LVGL_PORT=y
 CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256
-# FreeType 字形栅格化在 LVGL draw 线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+# LVGL 操作系统与双核并行：启用 FreeRTOS 支持，充分利用 ESP32-S3 双核
+# - LV_OS_FREERTOS：启用 FreeRTOS 互斥/线程/条件变量，支撑多线程渲染与线程安全
+#   （修复：此前 LV_OS_NONE 单线程模式在复杂页面下易阻塞；FreeRTOS 模式让
+#    LVGL 内部使用递归互斥与条件变量，避免跨线程调用时的断言死循环）
+# - LV_DRAW_SW_DRAW_UNIT_CNT=1：暂保持单绘制单元（双核并行需 2，但当前
+#   flush 回调直接写共享主帧，并发写存在竞态；先以单单元验证 FreeRTOS 稳定性，
+#   后续再通过加锁或双缓冲启用 2 单元并行）
+# - LV_USE_FREERTOS_TASK_NOTIFY=y：任务通知替代二值信号量，快 45% 且更省 RAM
+# - LV_DRAW_THREAD_PRIO=3：绘制线程高优先级，减少渲染延迟（单单元时此项无实际线程）
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_USE_FREERTOS_TASK_NOTIFY=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=1
+CONFIG_LV_DRAW_THREAD_PRIO=3
+# FreeType 字形栅格化在 LVGL 绘制线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+# LV_OS_FREERTOS 下此配置生效于绘制线程（单单元时仍在 gui_lvgl 任务内执行）；
+# gui_lvgl 任务栈另在 lvgl_port.c 中设为 32KB PSRAM
 CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768
 # LVGL 内存用 C 标准库 malloc（走 ESP-IDF heap，大块分配自动落 8MB PSRAM）；
 # 不用内置 TLSF 池（仅 64KB，触发 benchmark 的 #warning 且被 -Werror 当错误）
