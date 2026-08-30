@@ -93,7 +93,7 @@ typedef struct {
 
 static const home_app_t s_apps[HOME_APP_CNT] = {
     {"天气", &icon_weather_64, &espaperplay_ui_page_weather},
-    {"阅读器", &icon_reader_64, NULL},
+    {"阅读器", &icon_reader_64, &espaperplay_ui_page_reader},
     {"文件", &icon_files_64, &espaperplay_ui_page_files},
     {"设置", &icon_settings_64, &espaperplay_ui_page_settings},
     /* 测试页不放在主界面：经设置页「开发者」组进入（页面实例保留在 ui.h）。 */

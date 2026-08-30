@@ -27,6 +27,7 @@
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
+#include "espaperplay_reader.h"
 #include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
@@ -357,8 +358,8 @@ static bool files_name_valid(const char *s) {
             return false;
         }
         /* FAT 保留字符： \ : * ? " < > |  */
-        if (c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
-            c == '>' || c == '|') {
+        if (c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' ||
+            c == '|') {
             return false;
         }
     }
@@ -891,7 +892,7 @@ static void files_go_up(void) {
     files_scan();
 }
 
-/** 激活条目（点击）：目录进入；普通文件弹出详情（大小 / 修改时间）。 */
+/** 激活条目（点击）：目录进入；TXT 直接打开阅读器，普通文件弹出详情。 */
 static void files_entry_activate(int idx) {
     if (idx < 0 || idx >= s_count) {
         return;
@@ -899,10 +900,28 @@ static void files_entry_activate(int idx) {
     if (s_entries[idx].is_dir) {
         ESP_LOGI(TAG, "files: enter %s", s_entries[idx].name);
         files_enter_dir(s_entries[idx].name);
-    } else {
-        ESP_LOGI(TAG, "files: file tapped (%s) -> info", s_entries[idx].name);
-        files_info_open(idx);
+        return;
     }
+    /* TXT 文件：直接打开阅读器 */
+    if (espaperplay_reader_is_txt_file(s_entries[idx].name)) {
+        char full[FILES_PATH_MAX];
+        if (!files_path_join_checked(full, sizeof(full), s_cwd, s_entries[idx].name)) {
+            files_confirm_open("提示", "路径过长", true);
+            return;
+        }
+        esp_err_t err = espaperplay_reader_open(full);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "files: open txt %s -> reader", full);
+            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader);
+        } else if (err == ESP_ERR_NO_MEM) {
+            files_confirm_open("提示", "文件过大，无法打开", true);
+        } else {
+            files_confirm_open("提示", "打开失败", true);
+        }
+        return;
+    }
+    ESP_LOGI(TAG, "files: file tapped (%s) -> info", s_entries[idx].name);
+    files_info_open(idx);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1142,6 +1161,10 @@ static void files_info_open(int idx) {
 
     char msg[128];
     snprintf(msg, sizeof(msg), "类型：文件\n%s\n%s", size_line, time_line);
+    /* TXT 文件在详情中提示可直接打开阅读 */
+    if (espaperplay_reader_is_txt_file(ent->name)) {
+        strlcat(msg, "\n点击条目直接阅读", sizeof(msg));
+    }
     files_confirm_open(disp, msg, true); /* 标题=文件名，单「确定」按钮 */
 }
 
@@ -1158,6 +1181,25 @@ static void files_menu_cb(lv_event_t *e) {
     const intptr_t action = (intptr_t)lv_event_get_user_data(e);
     if (action == FILES_MENU_CANCEL) {
         files_modal_close();
+        return;
+    }
+    /* 长按菜单中的"打开阅读"（仅 TXT） */
+    if (action == FILES_MENU_RENAME + 10) {
+        char full[FILES_PATH_MAX];
+        if (!files_path_join_checked(full, sizeof(full), s_cwd, s_pending_old)) {
+            files_modal_close();
+            files_confirm_open("提示", "路径过长", true);
+            return;
+        }
+        esp_err_t err = espaperplay_reader_open(full);
+        files_modal_close();
+        if (err == ESP_OK) {
+            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader);
+        } else if (err == ESP_ERR_NO_MEM) {
+            files_confirm_open("提示", "文件过大，无法打开", true);
+        } else {
+            files_confirm_open("提示", "打开失败", true);
+        }
         return;
     }
     if (action == FILES_MENU_RENAME) {
@@ -1215,14 +1257,21 @@ static void files_menu_open(int idx) {
     char disp[FILES_DISP_MAX];
     files_disp_name(s_pending_old, disp, sizeof(disp));
 
+    const bool is_txt = !s_pending_is_dir && espaperplay_reader_is_txt_file(s_pending_old);
+    const int btn_cnt = is_txt ? 4 : 3;
     const int bh = files_btn_h();
     const int gap = 10;
-    const int card_h = files_scaled(56) + 3 * bh + 2 * gap + files_scaled(16);
+    const int card_h = files_scaled(56) + btn_cnt * bh + (btn_cnt - 1) * gap + files_scaled(16);
     lv_obj_t *card = files_modal_base(disp, NULL, card_h, true, true);
 
     const int card_w = files_modal_card_w(); /* 布局前读宽为 0，须算术求得 */
     const int bw = card_w - files_scaled(48);
     int by = files_scaled(56);
+    if (is_txt) {
+        files_card_button(card, "打开阅读", files_scaled(24), by, bw, bh, true, files_menu_cb,
+                          (void *)(intptr_t)FILES_MENU_RENAME + 10);
+        by += bh + gap;
+    }
     files_card_button(card, "重命名", files_scaled(24), by, bw, bh, false, files_menu_cb,
                       (void *)(intptr_t)FILES_MENU_RENAME);
     by += bh + gap;
@@ -1280,8 +1329,9 @@ static void files_kb_ok_cb(lv_event_t *e) {
     struct stat st_probe;
     if (stat(probe, &st_probe) == 0) {
         if (s_kb_status != NULL) {
-            lv_label_set_text(s_kb_status,
-                              s_input_mode == FILES_INPUT_RENAME ? "目标已存在" : "同名文件或文件夹已存在");
+            lv_label_set_text(s_kb_status, s_input_mode == FILES_INPUT_RENAME
+                                               ? "目标已存在"
+                                               : "同名文件或文件夹已存在");
         }
         return;
     }
@@ -1296,7 +1346,8 @@ static void files_kb_ok_cb(lv_event_t *e) {
             files_modal_close(); /* 名字未变：无操作 */
             return;
         }
-        /* 大小写仅变大小写时 FAT 视为同名，stat 已命中则上面已拦截；此处再做大小写不敏感比对兜底。 */
+        /* 大小写仅变大小写时 FAT 视为同名，stat 已命中则上面已拦截；此处再做大小写不敏感比对兜底。
+         */
         if (strcasecmp(s_pending_new, s_pending_old) == 0) {
             /* 同名不同大小写：FAT 上可能视为重命名成功或失败，允许走二次确认由 worker 决定。 */
         }

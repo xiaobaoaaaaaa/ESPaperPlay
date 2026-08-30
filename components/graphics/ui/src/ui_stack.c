@@ -186,12 +186,16 @@ void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event) {
         return;
     }
     /* 全局默认长按功能：BOOT 键 LONG_PRESS_START 时刻响应一次（避免重复
-     * 响应：仅挂钩 START，HOLD / UP 不触发）。随后事件照常转发给当前页
-     * 的 on_key。 */
+     * 响应：仅挂钩 START，HOLD / UP 不触发）。阅读器页自行处理长按为
+     * 单次 GRAY4 刷屏，此时跳过全局默认动作，避免双重刷新。 */
     if (event->type == ESPAPERPLAY_INPUT_EVENT_KEY &&
         event->key_id == ESPAPERPLAY_INPUT_KEY_ID_BOOT &&
         event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_START) {
-        ui_boot_long_press_default();
+        const espaperplay_ui_page_t *top_peek = &s_stack[s_depth - 1];
+        if (top_peek != &espaperplay_ui_page_reader) {
+            ui_boot_long_press_default();
+        }
+        /* 阅读器页：跳过全局 BW 全刷，由页面自身处理长按（单次 GRAY4） */
     }
     const espaperplay_ui_page_t *top = &s_stack[s_depth - 1];
     if (top->on_key != NULL) {
