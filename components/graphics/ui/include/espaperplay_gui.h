@@ -123,7 +123,7 @@ typedef struct {
  * 置 0 表示禁用周期性全刷清残影（永远只用局部刷新）。
  */
 #ifndef ESPAPERPLAY_GUI_FULL_FORCE_AFTER
-#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 10
+#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 20
 #endif
 
 /** 连续局刷计数阈值上限（防止不合理配置）。 */

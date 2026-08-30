@@ -45,7 +45,7 @@ static const char *TAG = "ESPaperPlay_UI";
  *   back + clear 按钮。
  *
  * 压力测试（200ms 周期连续局刷）会触发"连续局刷计数"策略：无论区域大小，
- * 连续局刷达阈值（默认 5 次）后强制一次全刷清残影。
+ * 连续局刷达阈值（默认 20 次）后强制一次全刷清残影。
  */
 
 #define TEST_UI_PERIOD_MS 200 /* UI 更新周期（快于 EPD 局部刷新 ~370ms，制造排队合并） */
