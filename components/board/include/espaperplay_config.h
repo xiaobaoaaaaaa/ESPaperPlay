@@ -163,6 +163,14 @@ extern "C" {
  */
 #define ESPAPERPLAY_SD_FONT_DRIVE_LETTER 'B'
 
+/**
+ * @brief 阅读器默认文本存放目录（SD 卡，VFS 路径，末尾无 '/'）。
+ *
+ * 阅读器主页「SD 卡图书」递归扫描本目录下的 TXT 文件（含子目录，深度与
+ * 条目数有上限）；目录不存在时主页给出提示。
+ */
+#define ESPAPERPLAY_READER_SD_DIR ESPAPERPLAY_STORAGE_MOUNT_POINT "/books"
+
 /* ====================================================================
  * 物理按键（BOOT）
  * ==================================================================== */

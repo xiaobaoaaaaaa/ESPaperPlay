@@ -45,6 +45,12 @@ static uint8_t s_depth = 0;
 static espaperplay_ui_status_bar_t *s_current_bar = NULL;
 static lv_timer_t *s_status_bar_timer = NULL;
 
+/* 暂停统一状态栏刷新（如阅读页「单次 GRAY4 显示」期间）。置位时 1s 定时器
+ * 跳过刷新，避免状态栏内容变化触发 BW 刷新覆盖灰阶画面；由页面显式恢复。 */
+static bool s_status_bar_suspended = false;
+
+void espaperplay_ui_status_bar_set_suspended(bool suspended) { s_status_bar_suspended = suspended; }
+
 /** 页面切换模式。 */
 typedef enum {
     UI_SWITCH_POP = 0, /*!< 弹出栈顶并重建上一页 */
@@ -186,16 +192,19 @@ void espaperplay_ui_page_handle_key_lv(const espaperplay_input_event_t *event) {
         return;
     }
     /* 全局默认长按功能：BOOT 键 LONG_PRESS_START 时刻响应一次（避免重复
-     * 响应：仅挂钩 START，HOLD / UP 不触发）。阅读器页自行处理长按为
-     * 单次 GRAY4 刷屏，此时跳过全局默认动作，避免双重刷新。 */
+     * 响应：仅挂钩 START，HOLD / UP 不触发）。阅读视图页自行处理长按为
+     * 单次 GRAY4 刷屏，此时跳过全局默认动作，避免双重刷新。
+     *
+     * 注意：页面入栈时是按值拷贝（s_stack[i] = *page），栈内地址与全局
+     * 页实例地址永不相等，必须比较函数指针（enter）而非地址。 */
     if (event->type == ESPAPERPLAY_INPUT_EVENT_KEY &&
         event->key_id == ESPAPERPLAY_INPUT_KEY_ID_BOOT &&
         event->key_action == ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_START) {
         const espaperplay_ui_page_t *top_peek = &s_stack[s_depth - 1];
-        if (top_peek != &espaperplay_ui_page_reader) {
+        if (top_peek->enter != espaperplay_ui_page_reader_view.enter) {
             ui_boot_long_press_default();
         }
-        /* 阅读器页：跳过全局 BW 全刷，由页面自身处理长按（单次 GRAY4） */
+        /* 阅读视图页：跳过全局 BW 全刷，由页面自身处理长按（单次 GRAY4） */
     }
     const espaperplay_ui_page_t *top = &s_stack[s_depth - 1];
     if (top->on_key != NULL) {
@@ -421,10 +430,11 @@ void espaperplay_ui_status_bar_set_title(espaperplay_ui_status_bar_t *bar, const
 
 /** 统一调度定时器：1s 刷新当前页状态栏（时间/WiFi/睡眠图标）。
  * 睡眠图标与 WiFi 图标走同一局部刷新路径；进睡/唤醒前由电源管理留出约
- * 2s 窗口，使定时器把图标显隐真正绘制到屏上，无需额外全刷同步。 */
+ * 2s 窗口，使定时器把图标显隐真正绘制到屏上，无需额外全刷同步。
+ * 暂停标志置位时跳过（阅读页灰度显示期间保持画面不被覆写）。 */
 static void ui_status_bar_timer_cb(lv_timer_t *timer) {
     (void)timer;
-    if (s_current_bar != NULL) {
+    if (s_current_bar != NULL && !s_status_bar_suspended) {
         espaperplay_ui_status_bar_refresh(s_current_bar);
     }
 }

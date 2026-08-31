@@ -16,6 +16,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_reader_history.h"
 #include "espaperplay_reader_txt.h"
 #include "espaperplay_storage.h"
 
@@ -31,6 +32,7 @@ static bool s_open = false;    /*!< 是否已打开 */
 
 esp_err_t espaperplay_reader_init(void) {
     ESP_LOGI(TAG, "Reader framework init");
+    (void)espaperplay_reader_history_init();
     return ESP_OK;
 }
 

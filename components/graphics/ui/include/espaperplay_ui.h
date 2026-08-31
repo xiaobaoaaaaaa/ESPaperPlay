@@ -210,6 +210,18 @@ void espaperplay_ui_status_bar_refresh(espaperplay_ui_status_bar_t *bar);
 void espaperplay_ui_status_bar_set_title(espaperplay_ui_status_bar_t *bar, const char *title);
 
 /**
+ * @brief 暂停/恢复统一状态栏的周期刷新。
+ *
+ * 阅读页进入「单次 GRAY4 显示」期间暂停：状态栏内容变化（分钟跳变 / WiFi
+ * 图标等）会触发 BW 刷新，而灰阶后的下一次 BW 刷新会被后端升级为全屏基线
+ * （清灰阶残留），导致整屏覆写、灰度失效。暂停后灰阶画面得以保持；翻页 /
+ * 打开底边栏 / 退出页面时恢复。
+ *
+ * @param suspended true=暂停周期刷新，false=恢复。
+ */
+void espaperplay_ui_status_bar_set_suspended(bool suspended);
+
+/**
  * @brief 初始化统一状态栏调度（UI 初始化时调用一次）。
  *
  * 创建周期刷新定时器（1s）统一刷新当前页状态栏，并注册进睡前准备回调
@@ -228,8 +240,13 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_test;
  * 预警），单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_weather;
 
-/** 阅读器页页面实例（screen_reader.c）：占位页（FreeType 中文标题 + 即将推出提示），单击返回。 */
+/** 阅读器主页页面实例（screen_reader_home.c）：最近阅读（SD 卡持久化历史）+
+ * SD 卡图书（默认目录递归扫描），点击打开阅读，长按删除历史，边缘滑动或单击返回。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_reader;
+
+/** 阅读视图页面实例（screen_reader.c）：TXT 正文分页渲染，点击/滑动翻页，
+ * 中部点击展开底边栏（跳转 / 字号 / 单次 GRAY4），退出自动保存进度。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_reader_view;
 
 /** 设置页页面实例（screen_settings.c）：系统设置管理（数值步进 / 循环切换 /
  * 字体选择 / 测试页入口），难以输入的配置项提示到 Web 管理页，边缘滑动或单击返回。 */

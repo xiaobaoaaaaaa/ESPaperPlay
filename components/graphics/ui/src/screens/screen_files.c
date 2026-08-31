@@ -366,13 +366,6 @@ static bool files_name_valid(const char *s) {
     return true;
 }
 
-/** 路径拼接 a + "/" + b（strlcpy/strlcat 恒 NUL 结尾，规避格式化告警）。 */
-static void files_path_join(char *dst, size_t n, const char *a, const char *b) {
-    strlcpy(dst, a, n);
-    strlcat(dst, "/", n);
-    strlcat(dst, b, n);
-}
-
 /** 取当前目录的相对显示路径（根目录显示 "/"）。 */
 static const char *files_rel_path(void) {
     const char *rel = s_cwd + strlen(FILES_ROOT);
@@ -912,7 +905,7 @@ static void files_entry_activate(int idx) {
         esp_err_t err = espaperplay_reader_open(full);
         if (err == ESP_OK) {
             ESP_LOGI(TAG, "files: open txt %s -> reader", full);
-            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader);
+            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader_view);
         } else if (err == ESP_ERR_NO_MEM) {
             files_confirm_open("提示", "文件过大，无法打开", true);
         } else {
@@ -1194,7 +1187,7 @@ static void files_menu_cb(lv_event_t *e) {
         esp_err_t err = espaperplay_reader_open(full);
         files_modal_close();
         if (err == ESP_OK) {
-            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader);
+            espaperplay_ui_page_push_lv(&espaperplay_ui_page_reader_view);
         } else if (err == ESP_ERR_NO_MEM) {
             files_confirm_open("提示", "文件过大，无法打开", true);
         } else {
