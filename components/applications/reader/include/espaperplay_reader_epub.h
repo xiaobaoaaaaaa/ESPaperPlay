@@ -89,7 +89,8 @@ esp_err_t espaperplay_reader_epub_load_chapter(int idx);
  * @param blocks   输出数组（每页起始块号，容量 max_cnt）。
  * @param lines    输出数组（每页起始块内行号，容量 max_cnt）。
  * @param max_cnt  数组容量。
- * @return 缓存的页数（>0 命中）；0=无缓存；<0=读取失败（文件已删除待重建）。
+ * @return 缓存的页数（>0 命中）；0=无缓存；<0=读取失败（文件已删除待重建）
+ *         或 -所需容量（缓存有效但 max_cnt 不足，调用方扩容后重读，文件保留）。
  */
 int espaperplay_reader_epub_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
                                        uint16_t *lines, int max_cnt);

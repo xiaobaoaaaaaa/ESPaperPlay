@@ -306,9 +306,35 @@ static bool reader_pstarts_init(void) {
         uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint16_t),
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (bt != NULL && lt != NULL) {
-            const int cnt =
-                espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(), bt, lt,
-                                              s_pstart_cap);
+            int cnt = espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(), bt, lt,
+                                                    s_pstart_cap);
+            if (cnt < 0) {
+                /* 大章节：缓存有效但表容量不足 → 扩表后重读一次 */
+                const int need = -cnt;
+                reader_pos_t *grown =
+                    heap_caps_realloc(s_pstarts, (size_t)need * sizeof(reader_pos_t),
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (grown == NULL) {
+                    grown = heap_caps_realloc(s_pstarts, (size_t)need * sizeof(reader_pos_t),
+                                              MALLOC_CAP_8BIT);
+                }
+                if (grown != NULL) {
+                    s_pstarts = grown;
+                    s_pstart_cap = need;
+                    heap_caps_free(bt);
+                    heap_caps_free(lt);
+                    bt = heap_caps_malloc((size_t)need * sizeof(uint32_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    lt = heap_caps_malloc((size_t)need * sizeof(uint16_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    cnt = (bt != NULL && lt != NULL)
+                              ? espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(),
+                                                              bt, lt, need)
+                              : 0;
+                } else {
+                    cnt = 0;
+                }
+            }
             if (cnt > 0) {
                 for (int i = 0; i < cnt; i++) {
                     s_pstarts[i].block = bt[i];
@@ -495,15 +521,21 @@ static bool rdr_advance_page(void) {
     }
     reader_pos_t next;
     int seg_cnt = 0;
-    if (!reader_paginate_from(s_pstarts[s_pstart_cnt - 1], &next, &seg_cnt)) {
+    int blk_cnt_all = 0;
+    const bool stopped = !reader_paginate_from(s_pstarts[s_pstart_cnt - 1], &next, &seg_cnt);
+    (void)espaperplay_reader_blocks(&blk_cnt_all);
+    /* 只有真正推进到章末才算分页完成；中途卡住（字形缺失等）的残缺表
+     * 不能当作完成，更不能落盘（否则下次开书把残缺缓存当有效直用） */
+    const bool reached_end = stopped && next.block >= (uint32_t)blk_cnt_all;
+    if (stopped) {
         s_ch_total_known = true;
         /* 章节页数已知：记录到 s_pstarts 所属章节 */
-        if (s_ch_pages != NULL && s_pstart_ch >= 0 && s_pstart_ch < s_chapter_cnt &&
-            s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
+        if (reached_end && s_ch_pages != NULL && s_pstart_ch >= 0 &&
+            s_pstart_ch < s_chapter_cnt && s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
             s_ch_pages[s_pstart_ch] = (uint32_t)s_pstart_cnt;
         }
         /* 分页缓存异步落盘（EPUB；字号/内容区变化经 font_key 自动失效） */
-        if (espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB &&
+        if (reached_end && espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB &&
             s_pstart_ch >= 0 && s_pstart_cnt > 1) {
             uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint32_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -514,6 +546,9 @@ static bool rdr_advance_page(void) {
                     bt[i] = s_pstarts[i].block;
                     lt[i] = s_pstarts[i].line;
                 }
+                ESP_LOGI(TAG, "reader: pagination ch %d done: %d page(s), %u ms -> cache",
+                         s_pstart_ch + 1, s_pstart_cnt,
+                         (unsigned)lv_tick_elaps(s_paginate_t0));
                 espaperplay_reader_pagen_save_async(s_pstart_ch, reader_layout_key(),
                                                     s_pstart_cnt, bt, lt);
             }

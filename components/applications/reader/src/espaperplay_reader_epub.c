@@ -1979,8 +1979,14 @@ int espaperplay_reader_epub_pagen_load(int chapter, uint32_t font_key, uint32_t 
     int cnt = -1;
     if (fread(hdr, sizeof(uint32_t), 6, f) == 6 && hdr[0] == EPUB_CACHE_MAGIC + 1u &&
         hdr[1] == EPUB_PAGEN_VER && hdr[2] == s_epub.token && hdr[3] == font_key &&
-        hdr[4] == (uint32_t)chapter && hdr[5] <= (uint32_t)max_cnt && hdr[5] > 0) {
+        hdr[4] == (uint32_t)chapter && hdr[5] > 0) {
         const int n = (int)hdr[5];
+        if (n > max_cnt) {
+            /* 缓存有效但调用方表容量不足：返回所需容量（负值），由调用方
+             * 扩表后重读；绝不删除文件（大章节缓存否则会被误删反复重算） */
+            fclose(f);
+            return -n;
+        }
         if (fread(blocks, sizeof(uint32_t), (size_t)n, f) == (size_t)n &&
             fread(lines, sizeof(uint16_t), (size_t)n, f) == (size_t)n) {
             cnt = n;
