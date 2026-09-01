@@ -885,7 +885,7 @@ static void files_go_up(void) {
     files_scan();
 }
 
-/** 激活条目（点击）：目录进入；TXT 直接打开阅读器，普通文件弹出详情。 */
+/** 激活条目（点击）：目录进入；TXT / EPUB 直接打开阅读器，普通文件弹出详情。 */
 static void files_entry_activate(int idx) {
     if (idx < 0 || idx >= s_count) {
         return;
@@ -895,8 +895,8 @@ static void files_entry_activate(int idx) {
         files_enter_dir(s_entries[idx].name);
         return;
     }
-    /* TXT 文件：直接打开阅读器 */
-    if (espaperplay_reader_is_txt_file(s_entries[idx].name)) {
+    /* TXT/EPUB：直接打开阅读器 */
+    if (espaperplay_reader_is_supported_file(s_entries[idx].name)) {
         char full[FILES_PATH_MAX];
         if (!files_path_join_checked(full, sizeof(full), s_cwd, s_entries[idx].name)) {
             files_confirm_open("提示", "路径过长", true);
@@ -1154,8 +1154,8 @@ static void files_info_open(int idx) {
 
     char msg[128];
     snprintf(msg, sizeof(msg), "类型：文件\n%s\n%s", size_line, time_line);
-    /* TXT 文件在详情中提示可直接打开阅读 */
-    if (espaperplay_reader_is_txt_file(ent->name)) {
+    /* 文本文档在详情中提示可直接打开阅读 */
+    if (espaperplay_reader_is_supported_file(ent->name)) {
         strlcat(msg, "\n点击条目直接阅读", sizeof(msg));
     }
     files_confirm_open(disp, msg, true); /* 标题=文件名，单「确定」按钮 */
@@ -1176,7 +1176,7 @@ static void files_menu_cb(lv_event_t *e) {
         files_modal_close();
         return;
     }
-    /* 长按菜单中的"打开阅读"（仅 TXT） */
+    /* 长按菜单中的"打开阅读"（TXT / EPUB） */
     if (action == FILES_MENU_RENAME + 10) {
         char full[FILES_PATH_MAX];
         if (!files_path_join_checked(full, sizeof(full), s_cwd, s_pending_old)) {
@@ -1250,7 +1250,7 @@ static void files_menu_open(int idx) {
     char disp[FILES_DISP_MAX];
     files_disp_name(s_pending_old, disp, sizeof(disp));
 
-    const bool is_txt = !s_pending_is_dir && espaperplay_reader_is_txt_file(s_pending_old);
+    const bool is_txt = !s_pending_is_dir && espaperplay_reader_is_supported_file(s_pending_old);
     const int btn_cnt = is_txt ? 4 : 3;
     const int bh = files_btn_h();
     const int gap = 10;

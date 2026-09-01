@@ -109,6 +109,6 @@ direct_dependencies:
 - espressif/zlib
 - idf
 - lvgl/lvgl
-manifest_hash: 2b8ca72225dcfcc73a794d5bd62cca9e79c19dbbbc22bc903d79cb7b46790e3c
+manifest_hash: 224eaa7123dda74ceb16c67305b1d4fa70d8ad58e02db9030bab87085ebf4e2c
 target: esp32s3
 version: 2.0.0

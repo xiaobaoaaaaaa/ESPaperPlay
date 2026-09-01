@@ -38,7 +38,7 @@ static const char *TAG = "ESPaperPlay_UI";
  *   - 历史：SD 卡持久化的阅读记录（最多 ESPAPERPLAY_READER_HISTORY_MAX 条，
  *     最近优先），点击恢复进度，长按删除单条记录；
  *   - 图书：首次进入「SD 卡图书」选项卡时，在 LVGL 线程同步递归扫描
- *     ESPAPERPLAY_READER_SD_DIR（默认 /sdcard/books）下的 TXT 文件（深度与
+ *     ESPAPERPLAY_READER_SD_DIR（默认 /sdcard/books）下的 TXT / EPUB 文件（深度与
  *     条数有上限），点击打开阅读。readdir 为只读 SD 访问（不触发 flash 缓存
  *     禁用），与文件页同款做法，无需后台任务，避免任务生命周期竞态。
  * 手势：边缘向内滑动返回；点击行打开；长按历史行删除记录；单键返回。
@@ -199,9 +199,10 @@ static void rdh_disp(const char *src, char *dst, size_t n) {
 /* 递归扫描（worker，内部 RAM 栈）                                       */
 /* ------------------------------------------------------------------ */
 
-static bool rdh_is_txt(const char *name) {
+/** 支持的图书格式（TXT / EPUB）。 */
+static bool rdh_is_book(const char *name) {
     const char *dot = strrchr(name, '.');
-    return dot != NULL && strcasecmp(dot, ".txt") == 0;
+    return dot != NULL && (strcasecmp(dot, ".txt") == 0 || strcasecmp(dot, ".epub") == 0);
 }
 
 static void rdh_scan_dir(const char *dir, int depth, int *cnt) {
@@ -223,7 +224,7 @@ static void rdh_scan_dir(const char *dir, int depth, int *cnt) {
         }
         if (e->d_type == DT_DIR) {
             rdh_scan_dir(child, depth + 1, cnt);
-        } else if (rdh_is_txt(e->d_name)) {
+        } else if (rdh_is_book(e->d_name)) {
             strlcpy(s_books[*cnt].path, child, sizeof(s_books[*cnt].path));
             (*cnt)++;
         }
@@ -306,13 +307,19 @@ static void rdh_build_rows(void) {
         char title[RDH_PATH_MAX];
         char sub[64];
         if (s_tab == 0) {
-            /* 历史：书名 + 进度/时间 */
+            /* 历史：书名 + 进度（page 为打包位置：章 << 20 | 章内页） */
             rdh_disp(rdh_basename(s_hist[idx].path), title, sizeof(title));
-            if (s_hist[idx].total > 0) {
-                snprintf(sub, sizeof(sub), "第 %u / %u 页", (unsigned)s_hist[idx].page + 1,
+            const unsigned hch = (unsigned)(s_hist[idx].page >> 20);
+            const unsigned hlp = (unsigned)(s_hist[idx].page & 0xFFFFF);
+            if (hch > 0 && s_hist[idx].total > 0) {
+                snprintf(sub, sizeof(sub), "第%u章 %u/%u页", hch + 1, hlp + 1,
                          (unsigned)s_hist[idx].total);
+            } else if (hch > 0) {
+                snprintf(sub, sizeof(sub), "第%u章 %u页", hch + 1, hlp + 1);
+            } else if (s_hist[idx].total > 0) {
+                snprintf(sub, sizeof(sub), "第 %u / %u 页", hlp + 1, (unsigned)s_hist[idx].total);
             } else {
-                snprintf(sub, sizeof(sub), "第 %u 页", (unsigned)s_hist[idx].page + 1);
+                snprintf(sub, sizeof(sub), "第 %u 页", hlp + 1);
             }
         } else {
             /* 图书：相对路径 */
@@ -376,7 +383,7 @@ static void rdh_rebuild(void) {
             lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
         } else if (s_book_cnt == 0) {
             char hint[128];
-            snprintf(hint, sizeof(hint), "目录无 TXT 文件\n\n请把小说放入 %s",
+            snprintf(hint, sizeof(hint), "目录无图书（TXT / EPUB）\n\n请把书放入 %s",
                      ESPAPERPLAY_READER_SD_DIR);
             lv_label_set_text(s_hint_label, hint);
             lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);

@@ -41,7 +41,7 @@ CONFIG_LV_USE_QRCODE=y
 # 走 LVGL 的内存分配与文件系统（盘符 A: 由 esp_lv_fs 注册）。
 CONFIG_LV_USE_FREETYPE=y
 CONFIG_LV_FREETYPE_USE_LVGL_PORT=y
-CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256
+CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=384
 # LVGL 操作系统与双核并行：启用 FreeRTOS 支持，充分利用 ESP32-S3 双核
 # - LV_OS_FREERTOS：启用 FreeRTOS 互斥/线程/条件变量，支撑多线程渲染与线程安全
 #   （修复：此前 LV_OS_NONE 单线程模式在复杂页面下易阻塞；FreeRTOS 模式让
