@@ -38,7 +38,7 @@ static const char *TAG = "ESPaperPlay_READER";
 
 #define EPUB_CACHE_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader"
 #define EPUB_CACHE_MAGIC 0x43525045u /* "EPRC" */
-#define EPUB_PAGEN_VER 2u /* 分页缓存头版本（magic = CACHE_MAGIC + 1） */
+#define EPUB_PAGEN_VER 3u /* v3：章节按目录切分，旧分页缓存失效 */
 
 #define EPUB_ZIP_EOCD_SIG 0x06054b50UL
 #define EPUB_ZIP_CDH_SIG 0x02014b50UL
@@ -524,6 +524,9 @@ static struct {
     epub_zip_t zip;
     bool open;
     uint32_t token; /* 书指纹（路径哈希 ^ mtime ^ size）：缓存与预取槽校验 */
+    int *chap_docs;           /*!< 章节 → 首个 spine 文档位（目录切分；NULL=退化为 spine） */
+    char (*chap_titles)[128]; /*!< 章节 → 目录标题（NCX navLabel / nav3 锚文本，可空） */
+    int chap_cnt;             /*!< 章节数（=目录项数；无目录时 = spine_cnt） */
     char title[128];      /*!< dc:title */
     char opf_dir[300];    /*!< OPF 所在目录 */
     epub_item_t *items;   /*!< manifest */
@@ -900,6 +903,325 @@ static uint8_t epub_css_lookup(epub_css_t *c, const char *class_attr) {
         }
     }
     return flags;
+}
+
+/* ====================================================================
+ * 章节切分（以目录为准：EPUB2 NCX / EPUB3 nav；无目录退化为 spine 文档）
+ * ====================================================================
+ *
+ * spine 是「阅读顺序的文档列表」，包含封面/扉页/插图页等非章内容；书籍
+ * 意义上的章以目录（toc.ncx navMap / EPUB3 nav）为准。切分规则：
+ *   - 目录项 → 其目标文档在 spine 中的位置；
+ *   - 章节内容 = 该文档起至下一目录项文档止（目录外的独立插图文档并入
+ *     前一章的阅读流，内容不丢）；
+ *   - 首个目录项之前的文档（若有）并入第一章之前单独成章（标题取文档）。
+ */
+
+/** 在 spine 中查找文档位（zip 内路径）；找不到返回 -1。 */
+static int epub_spine_pos_of(const char *zip_path) {
+    for (int i = 0; i < s_epub.spine_cnt; i++) {
+        if (strcmp(s_epub.items[s_epub.spine[i]].zip_path, zip_path) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** 章节（文档位, 标题）收集器。 */
+typedef struct {
+    int *docs;
+    char (*titles)[128];
+    int cnt;
+    int cap;
+} epub_toc_acc_t;
+
+static bool epub_toc_add(epub_toc_acc_t *acc, int doc, const char *title) {
+    if (doc < 0 || doc >= s_epub.spine_cnt) {
+        return true; /* 目录项指向未知文档：跳过 */
+    }
+    if (acc->cnt > 0 && acc->docs[acc->cnt - 1] >= doc) {
+        if (acc->docs[acc->cnt - 1] == doc) {
+            return true; /* 同一文档多个目录项：保留首个 */
+        }
+        return true; /* 乱序项（指向已覆盖文档）：跳过，保持阅读顺序单调 */
+    }
+    if (acc->cnt >= acc->cap) {
+        return false;
+    }
+    acc->docs[acc->cnt] = doc;
+    if (title != NULL && title[0] != '\0') {
+        strlcpy(acc->titles[acc->cnt], title, sizeof(acc->titles[0]));
+    } else {
+        acc->titles[acc->cnt][0] = '\0';
+    }
+    acc->cnt++;
+    return true;
+}
+
+/** 实体反转义（标题用；原地）。 */
+static void epub_unescape_title(char *t) {
+    char *w = t;
+    for (const char *r = t; *r != '\0';) {
+        if (r[0] == '&') {
+            if (strncmp(r, "&amp;", 5) == 0) {
+                *w++ = '&';
+                r += 5;
+                continue;
+            }
+            if (strncmp(r, "&lt;", 4) == 0) {
+                *w++ = '<';
+                r += 4;
+                continue;
+            }
+            if (strncmp(r, "&gt;", 4) == 0) {
+                *w++ = '>';
+                r += 4;
+                continue;
+            }
+            if (strncmp(r, "&quot;", 6) == 0) {
+                *w++ = '"';
+                r += 6;
+                continue;
+            }
+            if (strncmp(r, "&apos;", 6) == 0) {
+                *w++ = '\'';
+                r += 6;
+                continue;
+            }
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
+/** NCX（toc.ncx）解析：按文档序展平 navPoint 的 (navLabel, content src)。 */
+static void epub_toc_parse_ncx(char *x, const char *opf_dir, epub_toc_acc_t *acc) {
+    char *p = x;
+    while ((p = strcasestr(p, "<navPoint")) != NULL) {
+        const char *seg_end = strstr(p, "</navPoint>");
+        const char *scan_end = seg_end != NULL ? seg_end : p + strlen(p);
+        char title[128];
+        title[0] = '\0';
+        char src[600];
+        src[0] = '\0';
+        /* navLabel/text */
+        const char *lbl = strcasestr(p, "<text");
+        if (lbl != NULL && (seg_end == NULL || lbl < seg_end)) {
+            const char *ts = strchr(lbl, '>');
+            const char *te2 = ts != NULL ? strstr(ts, "</text>") : NULL;
+            if (ts != NULL && te2 != NULL) {
+                size_t n = (size_t)(te2 - (ts + 1));
+                if (n >= sizeof(title)) {
+                    n = sizeof(title) - 1;
+                }
+                memcpy(title, ts + 1, n);
+                title[n] = '\0';
+                epub_unescape_title(title);
+            }
+        }
+        /* content src */
+        const char *ct = strcasestr(p, "<content");
+        if (ct != NULL && (seg_end == NULL || ct < seg_end)) {
+            char raw[600];
+            if (xml_attr(ct, scan_end, "src", raw, sizeof(raw))) {
+                url_decode(raw);
+                strlcpy(src, raw, sizeof(src));
+            }
+        }
+        if (src[0] != '\0') {
+            char *frag = strchr(src, '#');
+            if (frag != NULL) {
+                *frag = '\0';
+            }
+            char zp[600];
+            if (path_resolve(opf_dir, src, zp, sizeof(zp))) {
+                if (!epub_toc_add(acc, epub_spine_pos_of(zp), title)) {
+                    return; /* 收集器满 */
+                }
+            }
+        }
+        p += 9; /* 越过 "<navPoint"，继续找（含嵌套子点） */
+    }
+}
+
+/** EPUB3 nav 文档解析：首个 <nav> 内全部 <a href>（标题取锚文本）。 */
+static void epub_toc_parse_nav3(char *x, const char *opf_dir, epub_toc_acc_t *acc) {
+    const char *nav = strcasestr(x, "<nav");
+    if (nav == NULL) {
+        return;
+    }
+    const char *nav_end = strcasestr(nav, "</nav");
+    const char *end = nav_end != NULL ? nav_end : x + strlen(x);
+    char *p = (char *)nav;
+    while ((p = (char *)strcasestr(p, "<a ")) != NULL && p < end) {
+        const char *ae = strchr(p, '>');
+        if (ae == NULL || ae >= end) {
+            break;
+        }
+        char href[600];
+        if (!xml_attr(p, ae, "href", href, sizeof(href))) {
+            p = (char *)ae;
+            continue;
+        }
+        /* 锚文本（可能含嵌套标签：粗取纯文本） */
+        char title[128];
+        title[0] = '\0';
+        const char *ts = ae + 1;
+        const char *aend = strstr(ts, "</a>");
+        if (aend != NULL && aend <= end) {
+            size_t o = 0;
+            for (const char *r = ts; r < aend && o < sizeof(title) - 1; r++) {
+                if (*r == '<') {
+                    while (r < aend && *r != '>') {
+                        r++;
+                    }
+                    continue;
+                }
+                title[o++] = *r;
+            }
+            title[o] = '\0';
+            epub_unescape_title(title);
+        }
+        char *frag = strchr(href, '#');
+        if (frag != NULL) {
+            *frag = '\0';
+        }
+        url_decode(href);
+        char zp[600];
+        if (href[0] != '\0' && path_resolve(opf_dir, href, zp, sizeof(zp))) {
+            if (!epub_toc_add(acc, epub_spine_pos_of(zp), title)) {
+                return;
+            }
+        }
+        p = (char *)ae;
+    }
+}
+
+/** 构建章节表：NCX 优先，其次 EPUB3 nav，均无则退化为 spine 文档即章。 */
+static void epub_toc_build(const char *opf) {
+    /* 收集器容量 = spine 文档数上界 */
+    s_epub.chap_docs = heap_caps_calloc((size_t)s_epub.spine_cnt, sizeof(int),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_epub.chap_titles =
+        heap_caps_calloc((size_t)s_epub.spine_cnt, 128, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_epub.chap_docs == NULL || s_epub.chap_titles == NULL) {
+        heap_caps_free(s_epub.chap_docs);
+        heap_caps_free(s_epub.chap_titles);
+        s_epub.chap_docs = NULL;
+        s_epub.chap_titles = NULL;
+        s_epub.chap_cnt = s_epub.spine_cnt; /* 退化（无标题） */
+        return;
+    }
+    epub_toc_acc_t acc = {.docs = s_epub.chap_docs,
+                          .titles = s_epub.chap_titles,
+                          .cnt = 0,
+                          .cap = s_epub.spine_cnt};
+
+    char base_dir[300];
+    strlcpy(base_dir, s_epub.opf_dir, sizeof(base_dir));
+
+    /* 定位目录文档：spine@toc → NCX；manifest properties 含 nav → EPUB3 nav */
+    char toc_href[600];
+    toc_href[0] = '\0';
+    bool is_ncx = false;
+    char toc_attr[64];
+    const char *sp = strcasestr(opf, "<spine");
+    if (sp != NULL) {
+        const char *se = strchr(sp, '>');
+        if (se != NULL && xml_attr(sp, se, "toc", toc_attr, sizeof(toc_attr))) {
+            /* id → href */
+            const char *q = opf;
+            while ((q = strcasestr(q, "<item")) != NULL) {
+                const char *qe = strchr(q, '>');
+                if (qe == NULL) {
+                    break;
+                }
+                const char *qxe = qe[-1] == '/' ? qe - 1 : qe;
+                char id[64];
+                char href[600];
+                if (xml_attr(q, qxe, "id", id, sizeof(id)) && strcmp(id, toc_attr) == 0 &&
+                    xml_attr(q, qxe, "href", href, sizeof(href))) {
+                    url_decode(href);
+                    strlcpy(toc_href, href, sizeof(toc_href));
+                    is_ncx = true;
+                    break;
+                }
+                q = qe + 1;
+            }
+        }
+    }
+    if (toc_href[0] == '\0') {
+        /* media-type 扫描：NCX 或 EPUB3 nav */
+        const char *q = opf;
+        while ((q = strcasestr(q, "<item")) != NULL) {
+            const char *qe = strchr(q, '>');
+            if (qe == NULL) {
+                break;
+            }
+            const char *qxe = qe[-1] == '/' ? qe - 1 : qe;
+            char mime[64];
+            char props[64];
+            char href[600];
+            if (xml_attr(q, qxe, "media-type", mime, sizeof(mime)) &&
+                strstr(mime, "dtbncx") != NULL &&
+                xml_attr(q, qxe, "href", href, sizeof(href))) {
+                url_decode(href);
+                strlcpy(toc_href, href, sizeof(toc_href));
+                is_ncx = true;
+                break;
+            }
+            if (xml_attr(q, qxe, "properties", props, sizeof(props)) &&
+                strstr(props, "nav") != NULL &&
+                xml_attr(q, qxe, "href", href, sizeof(href))) {
+                url_decode(href);
+                strlcpy(toc_href, href, sizeof(toc_href));
+                is_ncx = false;
+                break;
+            }
+            q = qe + 1;
+        }
+    }
+
+    if (toc_href[0] != '\0') {
+        char zp[600];
+        if (path_resolve(base_dir, toc_href, zp, sizeof(zp))) {
+            const int zi = epub_zip_find(&s_epub.zip, zp);
+            if (zi >= 0) {
+                char *toc_doc = NULL;
+                if (epub_zip_extract(&s_epub.zip, zi, &toc_doc, NULL) == ESP_OK) {
+                    if (is_ncx) {
+                        epub_toc_parse_ncx(toc_doc, base_dir, &acc);
+                    } else {
+                        epub_toc_parse_nav3(toc_doc, base_dir, &acc);
+                    }
+                    heap_caps_free(toc_doc);
+                }
+            }
+        }
+    }
+
+    /* 首个目录项之前的文档（若有）：单独成章，标题留空（装载时取文档标题） */
+    if (acc.cnt > 0 && acc.docs[0] > 0) {
+        const int lead = acc.docs[0];
+        if (acc.cnt + 1 <= acc.cap) {
+            memmove(&acc.docs[1], &acc.docs[0], (size_t)acc.cnt * sizeof(int));
+            memmove(&acc.titles[1], &acc.titles[0], (size_t)acc.cnt * 128);
+            acc.docs[0] = 0;
+            acc.titles[0][0] = '\0';
+            acc.cnt++;
+            (void)lead;
+        }
+    }
+
+    if (acc.cnt == 0) {
+        /* 无目录：退化为 spine 文档即章 */
+        for (int i = 0; i < s_epub.spine_cnt; i++) {
+            acc.docs[i] = i;
+            acc.titles[i][0] = '\0';
+        }
+        acc.cnt = s_epub.spine_cnt;
+    }
+    s_epub.chap_cnt = acc.cnt;
 }
 
 /* ====================================================================
@@ -1386,15 +1708,15 @@ static bool xs_text(xhtml_state_t *st, const char *s, size_t n) {
     return true;
 }
 
-/** XHTML 主解析（html 为解压后的可修改缓冲；结果写入 packet）。 */
-static esp_err_t epub_parse_xhtml(char *html, const char *zip_path, epub_css_t *css,
-                                  epub_packet_t *out) {
-    xhtml_state_t st = {0};
-    st.para_off = 0;
-    st.blocks = NULL;
-    st.blk_cnt = 0;
-    st.blk_cap = 0;
-    st.css = css;
+/** XHTML 解析开始（初始化状态；跨文档章节可多次 feed 后一次 finish）。 */
+static void epub_xhtml_begin(xhtml_state_t *st, epub_css_t *css) {
+    memset(st, 0, sizeof(*st));
+    st->para_off = 0;
+    st->css = css;
+}
+
+/** XHTML 解压缓冲喂入解析器（一个 spine 文档；结束时不落最终段，便于跨文档拼接）。 */
+static esp_err_t epub_xhtml_feed(char *html, const char *zip_path, xhtml_state_t *st) {
     char base_dir[300];
     path_dir(zip_path, base_dir, sizeof(base_dir));
 
@@ -1442,14 +1764,14 @@ static esp_err_t epub_parse_xhtml(char *html, const char *zip_path, epub_css_t *
             const bool self_close = te[-1] == '/';
             const char *tag_e = self_close ? te - 1 : te;
             if (!self_close) {
-                if (closing ? !xs_close_tag(&st, name)
-                            : !xs_open_tag(&st, name, &html[i], tag_e, base_dir)) {
+                if (closing ? !xs_close_tag(st, name)
+                            : !xs_open_tag(st, name, &html[i], tag_e, base_dir)) {
                     goto oom;
                 }
             } else {
                 /* 自闭合：open + close */
-                if (!xs_open_tag(&st, name, &html[i], tag_e, base_dir) ||
-                    !xs_close_tag(&st, name)) {
+                if (!xs_open_tag(st, name, &html[i], tag_e, base_dir) ||
+                    !xs_close_tag(st, name)) {
                     goto oom;
                 }
             }
@@ -1459,29 +1781,37 @@ static esp_err_t epub_parse_xhtml(char *html, const char *zip_path, epub_css_t *
         /* 文本段 */
         const char *te = strchr(&html[i], '<');
         const size_t tl = te != NULL ? (size_t)(te - &html[i]) : n - i;
-        if (!xs_text(&st, &html[i], tl)) {
+        if (!xs_text(st, &html[i], tl)) {
             goto oom;
         }
         i += tl;
     }
-    xs_flush_para(&st);
-
-    /* NUL 结尾 */
-    if (!xs_putb(&st, '\0')) {
+    if (!xs_flush_para(st)) {
         goto oom;
     }
-    out->text = st.blob;
-    out->text_len = st.blob_len ? st.blob_len - 1 : 0;
-    out->blocks = st.blocks;
-    out->block_cnt = st.blk_cnt;
-    out->images = st.images;
-    out->image_cnt = st.img_cnt;
     return ESP_OK;
 oom:
-    heap_caps_free(st.blob);
-    heap_caps_free(st.blocks);
-    heap_caps_free(st.images);
+    heap_caps_free(st->blob);
+    heap_caps_free(st->blocks);
+    heap_caps_free(st->images);
     return ESP_ERR_NO_MEM;
+}
+
+/** XHTML 解析结束：落最终段 + NUL 结尾，结果移交给 packet。 */
+static esp_err_t epub_xhtml_finish(xhtml_state_t *st, epub_packet_t *out) {
+    if (!xs_flush_para(st) || !xs_putb(st, '\0')) {
+        heap_caps_free(st->blob);
+        heap_caps_free(st->blocks);
+        heap_caps_free(st->images);
+        return ESP_ERR_NO_MEM;
+    }
+    out->text = st->blob;
+    out->text_len = st->blob_len ? st->blob_len - 1 : 0;
+    out->blocks = st->blocks;
+    out->block_cnt = st->blk_cnt;
+    out->images = st->images;
+    out->image_cnt = st->img_cnt;
+    return ESP_OK;
 }
 
 /* ====================================================================
@@ -2129,6 +2459,9 @@ esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
         return err;
     }
     err = epub_parse_opf(opf);
+    if (err == ESP_OK) {
+        epub_toc_build(opf); /* 章节以目录为准（NCX/nav），失败退化为 spine */
+    }
     heap_caps_free(opf);
     if (err != ESP_OK) {
         epub_zip_close(&s_epub.zip);
@@ -2161,8 +2494,8 @@ esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
     s_epub.open = true;
     s_epub.cur_ch = -1;
     s_epub.img_cached_id = -1;
-    ESP_LOGI(TAG, "epub: opened, title=\"%s\", %d chapter(s), %d manifest item(s)", s_epub.title,
-             s_epub.spine_cnt, s_epub.item_cnt);
+    ESP_LOGI(TAG, "epub: opened, title=\"%s\", %d chapter(s) / %d spine doc(s), %d manifest item(s)",
+             s_epub.title, s_epub.chap_cnt, s_epub.spine_cnt, s_epub.item_cnt);
     return ESP_OK;
 }
 
@@ -2191,6 +2524,11 @@ void espaperplay_reader_epub_close(void) {
         s_epub.spine = NULL;
     }
     s_epub.spine_cnt = 0;
+    heap_caps_free(s_epub.chap_docs);
+    heap_caps_free(s_epub.chap_titles);
+    s_epub.chap_docs = NULL;
+    s_epub.chap_titles = NULL;
+    s_epub.chap_cnt = 0;
     epub_zip_close(&s_epub.zip);
     s_epub.open = false;
     s_epub.title[0] = '\0';
@@ -2200,13 +2538,13 @@ bool espaperplay_reader_epub_is_open(void) { return s_epub.open; }
 
 const char *espaperplay_reader_epub_title(void) { return s_epub.title; }
 
-int espaperplay_reader_epub_chapter_count(void) { return s_epub.open ? s_epub.spine_cnt : 0; }
+int espaperplay_reader_epub_chapter_count(void) { return s_epub.open ? s_epub.chap_cnt : 0; }
 
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
 
 /* ---------------- SD 解析缓存 ---------------- */
 
-#define EPUB_CACHE_VER 1u
+#define EPUB_CACHE_VER 2u /* v2：章节按目录切分（多文档拼接），旧缓存失效 */
 
 /** 缓存路径：书指纹 + 章节号（指纹含 mtime/size，书变更自动换名失效）。 */
 static void epub_cache_path(char *buf, size_t n, uint32_t token, int idx) {
@@ -2350,100 +2688,113 @@ static esp_err_t epub_produce_packet(uint32_t token, int idx, bool use_cache, bo
 
     epub_zip_lock();
     do {
-        if (!s_epub.open || s_epub.token != token || idx < 0 || idx >= s_epub.spine_cnt) {
+        if (!s_epub.open || s_epub.token != token || idx < 0 || idx >= s_epub.chap_cnt) {
             break;
         }
-        const int item_idx = s_epub.spine[idx];
-        const char *zip_path = s_epub.items[item_idx].zip_path;
-        const int zi = epub_zip_find(&s_epub.zip, zip_path);
-        if (zi < 0) {
-            break;
-        }
-        char *html = NULL;
-        esp_err_t err = epub_zip_extract_unlocked(&s_epub.zip, zi, &html, NULL);
-        if (err != ESP_OK) {
-            break;
+        /* 章 = spine 文档区间 [chap_docs[idx], 下一章首)——目录外的独立插图
+         * 文档并入前一章阅读流，内容不丢 */
+        const int doc_first = s_epub.chap_docs != NULL ? s_epub.chap_docs[idx] : idx;
+        const int doc_last = (idx + 1 < s_epub.chap_cnt) ? s_epub.chap_docs[idx + 1]
+                                                          : s_epub.spine_cnt;
+
+        /* 章标题：目录标题优先（生产时已反转义），文档 <title> 兜底 */
+        if (s_epub.chap_titles != NULL && idx < s_epub.chap_cnt &&
+            s_epub.chap_titles[idx][0] != '\0') {
+            strlcpy(out->title, s_epub.chap_titles[idx], sizeof(out->title));
         }
 
-        /* 章节标题：XHTML <title>…</title>（实体反转义） */
-        char *tp = strcasestr(html, "<title");
-        if (tp != NULL) {
-            char *ts = strchr(tp, '>');
-            char *te = ts != NULL ? strcasestr(ts, "</title") : NULL;
-            if (ts != NULL && te != NULL && te > ts + 1 &&
-                (size_t)(te - ts - 1) < sizeof(out->title)) {
-                memcpy(out->title, ts + 1, (size_t)(te - ts - 1));
-                out->title[te - ts - 1] = '\0';
-                char *w = out->title;
-                for (const char *r = out->title; *r != '\0';) {
-                    if (r[0] == '&') {
-                        if (strncmp(r, "&amp;", 5) == 0) {
-                            *w++ = '&';
-                            r += 5;
-                            continue;
-                        }
-                        if (strncmp(r, "&lt;", 4) == 0) {
-                            *w++ = '<';
-                            r += 4;
-                            continue;
-                        }
-                        if (strncmp(r, "&gt;", 4) == 0) {
-                            *w++ = '>';
-                            r += 4;
-                            continue;
-                        }
-                    }
-                    *w++ = *r++;
-                }
-                *w = '\0';
-            }
-        }
-
-        /* 样式表：首个 <link rel=stylesheet>（每次产出本地解析，~几 ms；
-         * 实例 ~3.5KB 放堆上，避免撑爆产出线程栈） */
+        /* 样式表解析实例放堆上（~3.5KB，避免撑爆产出线程栈） */
         epub_css_t *css = heap_caps_malloc(sizeof(epub_css_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (css == NULL) {
-            heap_caps_free(html);
             break;
         }
-        epub_css_init(css);
-        {
-            char base_dir[300];
-            path_dir(zip_path, base_dir, sizeof(base_dir));
-            const char *lp = html;
-            while ((lp = strcasestr(lp, "<link")) != NULL) {
-                const char *te = strchr(lp, '>');
-                if (te == NULL) {
-                    break;
+        epub_css_init(css); /* 必须清零：堆块可能含陈旧数据，cnt 非零会越界 */
+        xhtml_state_t st;
+        epub_xhtml_begin(&st, css);
+
+        esp_err_t err = ESP_OK;
+        bool chapter_ok = true;
+        for (int d = doc_first; d < doc_last && chapter_ok; d++) {
+            const int item_idx = s_epub.spine[d];
+            const char *zip_path = s_epub.items[item_idx].zip_path;
+            const int zi = epub_zip_find(&s_epub.zip, zip_path);
+            if (zi < 0) {
+                chapter_ok = false;
+                break;
+            }
+            char *html = NULL;
+            err = epub_zip_extract_unlocked(&s_epub.zip, zi, &html, NULL);
+            if (err != ESP_OK) {
+                chapter_ok = false;
+                break;
+            }
+
+            /* 章标题兜底：首个文档的 XHTML <title>（目录标题缺失时） */
+            if (d == doc_first && out->title[0] == '\0') {
+                char *tp = strcasestr(html, "<title");
+                if (tp != NULL) {
+                    char *ts = strchr(tp, '>');
+                    char *te = ts != NULL ? strcasestr(ts, "</title") : NULL;
+                    if (ts != NULL && te != NULL && te > ts + 1 &&
+                        (size_t)(te - ts - 1) < sizeof(out->title)) {
+                        memcpy(out->title, ts + 1, (size_t)(te - ts - 1));
+                        out->title[te - ts - 1] = '\0';
+                        epub_unescape_title(out->title);
+                    }
                 }
-                const char *xe = te[-1] == '/' ? te - 1 : te;
-                char href[600];
-                char rel[32];
-                if (xml_attr(lp, xe, "href", href, sizeof(href)) &&
-                    (!xml_attr(lp, xe, "rel", rel, sizeof(rel)) ||
-                     strcasestr(rel, "stylesheet") != NULL)) {
-                    url_decode(href);
-                    char zp[600];
-                    if (path_resolve(base_dir, href, zp, sizeof(zp))) {
-                        const int czi = epub_zip_find(&s_epub.zip, zp);
-                        if (czi >= 0 && s_epub.zip.ents[czi].usize <= 64 * 1024) {
-                            char *csst = NULL;
-                            if (epub_zip_extract_unlocked(&s_epub.zip, czi, &csst, NULL) ==
-                                ESP_OK) {
-                                epub_css_parse(css, csst);
-                                heap_caps_free(csst);
+            }
+
+            /* 样式表：每文档首个 <link rel=stylesheet>（已解析则复用实例） */
+            {
+                char base_dir2[300];
+                path_dir(zip_path, base_dir2, sizeof(base_dir2));
+                const char *lp = html;
+                while ((lp = strcasestr(lp, "<link")) != NULL) {
+                    const char *te = strchr(lp, '>');
+                    if (te == NULL) {
+                        break;
+                    }
+                    const char *xe = te[-1] == '/' ? te - 1 : te;
+                    char href[600];
+                    char rel[32];
+                    if (xml_attr(lp, xe, "href", href, sizeof(href)) &&
+                        (!xml_attr(lp, xe, "rel", rel, sizeof(rel)) ||
+                         strcasestr(rel, "stylesheet") != NULL)) {
+                        url_decode(href);
+                        char zp[600];
+                        if (path_resolve(base_dir2, href, zp, sizeof(zp))) {
+                            const int czi = epub_zip_find(&s_epub.zip, zp);
+                            if (czi >= 0 && s_epub.zip.ents[czi].usize <= 64 * 1024) {
+                                char *csst = NULL;
+                                if (epub_zip_extract_unlocked(&s_epub.zip, czi, &csst, NULL) ==
+                                    ESP_OK) {
+                                    epub_css_parse(css, csst);
+                                    heap_caps_free(csst);
+                                }
                             }
                         }
+                        break; /* 只取首个样式表 */
                     }
-                    break; /* 只取首个样式表 */
+                    lp = te + 1;
                 }
-                lp = te + 1;
+            }
+
+            err = epub_xhtml_feed(html, zip_path, &st);
+            heap_caps_free(html);
+            if (err != ESP_OK) {
+                chapter_ok = false;
+                break;
             }
         }
-
-        err = epub_parse_xhtml(html, zip_path, css, out);
         heap_caps_free(css);
-        heap_caps_free(html);
+        if (!chapter_ok) {
+            heap_caps_free(st.blob);
+            heap_caps_free(st.blocks);
+            heap_caps_free(st.images);
+            break;
+        }
+
+        err = epub_xhtml_finish(&st, out);
         if (err != ESP_OK) {
             epub_packet_free(out);
             break;
@@ -2559,7 +2910,7 @@ esp_err_t espaperplay_reader_epub_load_chapter(int idx) {
     if (!s_epub.open) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (idx < 0 || idx >= s_epub.spine_cnt) {
+    if (idx < 0 || idx >= s_epub.chap_cnt) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_epub.cur_ch == idx) {
@@ -2595,7 +2946,7 @@ esp_err_t espaperplay_reader_epub_load_chapter(int idx) {
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
 
 bool espaperplay_reader_epub_poll_chapter(int idx) {
-    if (!s_epub.open || idx < 0 || idx >= s_epub.spine_cnt) {
+    if (!s_epub.open || idx < 0 || idx >= s_epub.chap_cnt) {
         return false;
     }
     if (s_epub.cur_ch == idx) {
