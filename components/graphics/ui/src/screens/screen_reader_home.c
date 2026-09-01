@@ -512,10 +512,11 @@ static void rdh_confirm_open(const char *title, const char *msg, bool alert_only
     int32_t scr_h = 0;
     rdh_screen_size(&scr_w, &scr_h);
 
+    /* 全屏覆盖层：背景透明，避免 BW 模式下浅灰渲染成纯白盖掉列表。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);

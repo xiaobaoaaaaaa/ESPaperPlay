@@ -700,11 +700,11 @@ static void setup_open_keyboard(bool for_pass) {
     int32_t scr_h = 0;
     setup_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层（不点空白关闭）。 */
+    /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);

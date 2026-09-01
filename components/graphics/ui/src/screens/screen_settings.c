@@ -913,12 +913,11 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     int32_t scr_w, scr_h;
     settings_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭）。浅灰底在 BW 阈值模式下显示为
-     * 白色（L>=128 判白），模态靠卡片黑边框区分；GRAY4 模式下显示浅灰。 */
+    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);
@@ -988,12 +987,11 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     int32_t scr_w, scr_h;
     settings_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭）。浅灰底在 BW 阈值模式下显示为
-     * 白色（L>=128 判白），模态靠卡片黑边框区分；GRAY4 模式下显示浅灰。 */
+    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);
@@ -1129,12 +1127,11 @@ static void settings_font_modal_open(void) {
     int32_t scr_w, scr_h;
     settings_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭）。浅灰底在 BW 阈值模式下显示为
-     * 白色（L>=128 判白），模态靠卡片黑边框区分；GRAY4 模式下显示浅灰。 */
+    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);

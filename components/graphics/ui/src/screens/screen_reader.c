@@ -8,11 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/idf_additions.h" /* xTaskCreateWithCaps */
-#include "freertos/semphr.h"
-#include "freertos/task.h"
-
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
@@ -43,8 +38,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *   - BOOT 键：单击下一页、双击上一页、长按单次 GRAY4 刷屏。
  *
  * 性能（大文件）：惰性分页——打开时只计算第一页，翻页时按需计算当前页
- * 边界；后台任务继续计算剩余页边界以得到总页数（页码显示 n / m）。512KB
- * 小说打开即时、翻页不卡。
+ * 边界；LVGL 定时器分片计算剩余页边界以得到总页数（页码显示 n / m，无需
+ * 额外任务/内部 RAM 栈）。512KB 小说打开即时、翻页不卡。
  *
  * 页窗口（预载 + 释放）：显示某页时预载「前后各 READER_WINDOW 页」的文本
  * 缓冲，翻页只换标签不重建缓冲；窗口外的页文本被释放。任意页访问（跳转）
@@ -71,11 +66,6 @@ static const int READER_FONT_SIZES[] = {16, 20, 24, 32};
 #define READER_FONT_DEFAULT_IDX 1 /* 20px */
 
 #define READER_PAGES_CAP_INIT 256 /* 分页表初始容量（页数） */
-
-/* 后台总页数任务：栈须放内部 RAM（读 PSRAM 文本 + flash 字体，且不能占 PSRAM
- * 栈；lv_text_get_next_line -> FreeType 字形查找栈深较大，3072 曾触发溢出）。 */
-#define READER_TOTAL_TASK_STACK 8192
-#define READER_TOTAL_TASK_PRIO 3
 
 /* 稀疏检查点索引：每 READER_SPARSE_STEP 页记录一次（页号, 字节偏移），
  * 使任意页访问/跳转只需从最近检查点线性推进 ≤STEP 页，而不是从头重算。 */
@@ -109,7 +99,7 @@ static int s_content_w = 0;
 static int s_content_h = 0;
 static bool s_gray4_display = false; /*!< 单次 GRAY4 显示模式（期间暂停状态栏刷新） */
 
-/* 惰性分页表（互斥保护：LVGL 翻页 + 后台总页数任务并发访问） */
+/* 惰性分页表（LVGL 线程内串行访问；总页数由 LVGL 定时器分片计算，无并发） */
 static struct {
     uint32_t
         *offsets;  /*!< offsets[i] = 第 i 页起始字节偏移；offsets[computed] = 已计算的最后边界 */
@@ -118,10 +108,14 @@ static struct {
     int total;     /*!< 已知总页数（-1=未知；offsets[computed]>=文本长度时可知） */
     int max_lines; /*!< 每页最大行数（依赖字号） */
 } s_pages;
-static SemaphoreHandle_t s_pages_lock = NULL;
-static TaskHandle_t s_total_task = NULL;
-static volatile bool s_total_stop = false;
-static lv_text_attributes_t s_attr; /*!< 换行属性（BREAK_ALL + 内容区宽度） */
+static lv_timer_t *s_total_timer = NULL; /*!< 总页数分片计算定时器（LVGL 线程，无需锁/任务） */
+static lv_text_attributes_t s_attr;      /*!< 换行属性（BREAK_ALL + 内容区宽度） */
+
+static lv_obj_t *s_loading_modal = NULL;  /*!< 加载中弹窗（NULL=未显示） */
+static lv_timer_t *s_loading_timer = NULL; /*!< 延迟初始化定时器 */
+static uint32_t s_pending_start = 0;      /*!< 待恢复的起始页 */
+static bool s_loading = false;            /*!< 是否正在加载中 */
+static uint32_t s_last_footer_tick = 0;   /*!< 上次页码刷新时刻 */
 
 /* 稀疏检查点索引（页号, 字节偏移；按页号升序，n≤READER_SPARSE_MAX 线性查找即可） */
 typedef struct {
@@ -238,7 +232,7 @@ static void reader_pcache_reset(void) {
     }
 }
 
-/** 释放分页表（须持锁）。 */
+/** 释放分页表。 */
 static void reader_pages_free_locked(void) {
     if (s_pages.offsets != NULL) {
         heap_caps_free(s_pages.offsets);
@@ -250,7 +244,7 @@ static void reader_pages_free_locked(void) {
     s_pages.max_lines = 0;
 }
 
-/** 初始化分页表（须持锁；s_font/s_content_w/s_content_h 须已就绪）。 */
+/** 初始化分页表（s_font/s_content_w/s_content_h 须已就绪）。 */
 static bool reader_pages_init_locked(void) {
     s_pages.cap = READER_PAGES_CAP_INIT;
     s_pages.offsets = heap_caps_malloc((size_t)(s_pages.cap + 1) * sizeof(uint32_t),
@@ -280,10 +274,7 @@ static bool reader_pages_init_locked(void) {
     return true;
 }
 
-/**
- * 按需计算分页边界，确保 offsets[want_end_idx] 已就绪（须持锁）。
- * 计算到文本末尾时设置 s_pages.total。幂等，可被 LVGL 与后台任务并发调用。
- */
+/** 按需计算分页边界，确保 offsets[want_end_idx] 已就绪（LVGL 线程内串行）。 */
 static void reader_compute_pages_locked(int want_end_idx) {
     /* 远跳（目标远超已计算边界）：从最近稀疏检查点回退，避免从头线性重算 */
     if (want_end_idx > s_pages.computed && want_end_idx - s_pages.computed > READER_SPARSE_STEP &&
@@ -338,56 +329,123 @@ static void reader_compute_pages_locked(int want_end_idx) {
     }
 }
 
-/** 后台任务完成回调：刷新页码显示（LVGL 线程）。 */
-static void reader_total_done_lv(void *arg) {
-    (void)arg;
-    if (s_page_label != NULL) {
-        reader_footer_update();
-    }
-}
-
-/** 后台任务：继续计算剩余页边界以得到总页数。 */
-static void reader_total_task(void *arg) {
-    (void)arg;
-    for (;;) {
-        if (xSemaphoreTake(s_pages_lock, portMAX_DELAY) != pdTRUE) {
-            break;
-        }
-        if (s_total_stop || s_pages.offsets == NULL || s_text == NULL) {
-            xSemaphoreGive(s_pages_lock);
-            break;
+/** 总页数分片计算：每 tick 推进若干页边界，节流刷新页码并自停。 */
+static void reader_total_timer_cb(lv_timer_t *t) {
+    (void)t;
+    if (s_pages.offsets == NULL || s_text == NULL || s_pages.total >= 0) {
+        if (s_total_timer != NULL) {
+            lv_timer_delete(s_total_timer);
+            s_total_timer = NULL;
         }
         if (s_pages.total >= 0) {
-            xSemaphoreGive(s_pages_lock);
-            break;
+            reader_footer_update();
         }
-        reader_compute_pages_locked(s_pages.computed + 1); /* 每次只推进一个边界 */
-        const bool done = (s_pages.total >= 0);
-        xSemaphoreGive(s_pages_lock);
-        if (done) {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(4));
-    }
-    s_total_task = NULL;
-    (void)espaperplay_gui_lv_call(reader_total_done_lv, NULL, 1000);
-    vTaskDelete(NULL);
-}
-
-/** 启动后台总页数计算（幂等）。 */
-static void reader_total_task_start(void) {
-    if (s_total_task != NULL || s_pages.offsets == NULL || s_text == NULL) {
         return;
     }
-    s_total_stop = false;
-    /* 栈放内部 RAM：任务读 PSRAM 文本 + flash 字体，且 CONFIG_SPIRAM_USE_MALLOC
-     * 下 xTaskCreate 默认栈在 PSRAM（flash 缓存禁用窗口无法访问，且栈深大） */
-    if (xTaskCreateWithCaps(reader_total_task, "rdr_total", READER_TOTAL_TASK_STACK, NULL,
-                            READER_TOTAL_TASK_PRIO, &s_total_task,
-                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
-        s_total_task = NULL;
-        ESP_LOGE(TAG, "total page task create failed");
+    /* 每 tick 推进 16 页（约 8-16ms），减少总耗时；节流页码刷新 */
+    for (int i = 0; i < 16 && s_pages.total < 0; i++) {
+        reader_compute_pages_locked(s_pages.computed + 1);
     }
+    const uint32_t now = lv_tick_get();
+    if (s_pages.total >= 0 || (int32_t)(now - s_last_footer_tick) >= 300) {
+        s_last_footer_tick = now;
+        reader_footer_update();
+    }
+    if (s_pages.total >= 0 && s_total_timer != NULL) {
+        lv_timer_delete(s_total_timer);
+        s_total_timer = NULL;
+    }
+}
+
+/** 启动总页数分片计算（幂等；LVGL 定时器，无需任务/内部 RAM 栈）。 */
+static void reader_total_task_start(void) {
+    if (s_total_timer != NULL || s_pages.offsets == NULL || s_text == NULL ||
+        s_pages.total >= 0) {
+        return;
+    }
+    s_last_footer_tick = lv_tick_get();
+    s_total_timer = lv_timer_create(reader_total_timer_cb, 48, NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* 加载中弹窗（首次进入时延迟初始化，避免阻塞首帧）                     */
+/* ------------------------------------------------------------------ */
+
+static void reader_loading_close(void) {
+    if (s_loading_modal != NULL) {
+        lv_obj_del(s_loading_modal);
+        s_loading_modal = NULL;
+    }
+    s_loading = false;
+}
+
+static void reader_loading_open(void) {
+    if (s_loading_modal != NULL) {
+        return;
+    }
+    int32_t scr_w = 0;
+    int32_t scr_h = 0;
+    reader_screen_size(&scr_w, &scr_h);
+    s_loading_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_loading_modal, scr_w, scr_h);
+    lv_obj_set_pos(s_loading_modal, 0, 0);
+    lv_obj_set_style_bg_opa(s_loading_modal, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_loading_modal, 0, 0);
+    lv_obj_set_style_radius(s_loading_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_loading_modal, 0, 0);
+    lv_obj_remove_flag(s_loading_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_loading_modal, LV_OBJ_FLAG_CLICKABLE);
+
+    const int card_w = 200;
+    const int card_h = 100;
+    lv_obj_t *card = lv_obj_create(s_loading_modal);
+    lv_obj_set_size(card, card_w, card_h);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *label = lv_label_create(card);
+    lv_label_set_text(label, "加载中…");
+    lv_obj_set_style_text_color(label, lv_color_black(), 0);
+    if (s_font != NULL) {
+        lv_obj_set_style_text_font(label, s_font, 0);
+    }
+    lv_obj_center(label);
+    s_loading = true;
+}
+
+static void reader_loading_timer_cb(lv_timer_t *t) {
+    lv_timer_delete(t);
+    s_loading_timer = NULL;
+    if (s_text == NULL || s_text_len == 0) {
+        reader_loading_close();
+        return;
+    }
+    /* 重量级初始化：分页表 + 首屏计算（可能涉及 FreeType 字形度量） */
+    reader_pages_free_locked();
+    const bool ok = reader_pages_init_locked();
+    if (!ok) {
+        reader_loading_close();
+        lv_label_set_text(s_hint_label, "内存不足");
+        lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_content_label, "");
+        lv_label_set_text(s_page_label, "0 / 0");
+        s_ready = true;
+        ESP_LOGE(TAG, "reader: pages alloc failed");
+        return;
+    }
+    /* 仅计算首屏所需页（当前页 + 窗口），其余由 total_timer 分片完成 */
+    reader_compute_pages_locked(1);
+    s_ready = true;
+    lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+    reader_show_page((int)s_pending_start);
+    reader_total_task_start();
+    reader_loading_close();
+    ESP_LOGI(TAG, "reader: loading done, show page %u", (unsigned)s_pending_start + 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -426,15 +484,12 @@ static void reader_show_page(int idx) {
     /* 显示新页即退出灰度显示模式（翻页/字号变化的 BW 刷新将执行全屏基线清残留） */
     reader_gray4_mode_set(false);
 
-    /* 窗口页范围与字节区间（须持锁，避免与后台任务并发） */
+    /* 窗口页范围与字节区间 */
     int lo = 0;
     int hi = 0;
     uint32_t rng_s[READER_WIN_CNT];
     uint32_t rng_e[READER_WIN_CNT];
 
-    if (xSemaphoreTake(s_pages_lock, portMAX_DELAY) != pdTRUE) {
-        return;
-    }
     /* 目标页 + 窗口内最远页的边界一起计算 */
     reader_compute_pages_locked(idx + 1 + READER_WINDOW);
     if (s_pages.total >= 0 && idx >= s_pages.total) {
@@ -444,7 +499,6 @@ static void reader_show_page(int idx) {
         idx = 0;
     }
     if (s_pages.total == 0) {
-        xSemaphoreGive(s_pages_lock);
         lv_label_set_text(s_content_label, "");
         s_cur_page = 0;
         reader_footer_update();
@@ -467,7 +521,6 @@ static void reader_show_page(int idx) {
         rng_s[i] = s_pages.offsets[lo + i];
         rng_e[i] = s_pages.offsets[lo + i + 1];
     }
-    xSemaphoreGive(s_pages_lock);
 
     s_cur_page = idx;
 
@@ -558,13 +611,11 @@ static void reader_prev_page(void) {
 /** 重新初始化分页（字号变化后），保留当前页索引（越界自动钳制）。 */
 static void reader_reinit_pages(void) {
     reader_pcache_reset(); /* 旧字号页文本失效 */
-    xSemaphoreTake(s_pages_lock, portMAX_DELAY);
     reader_pages_free_locked();
     if (s_font != NULL && s_text != NULL && s_text_len > 0) {
         (void)reader_pages_init_locked();
         reader_compute_pages_locked(1);
     }
-    xSemaphoreGive(s_pages_lock);
     if (s_ready) {
         reader_show_page(s_cur_page);
         reader_total_task_start();
@@ -845,10 +896,11 @@ static void reader_jump_open(void) {
     const int kb_y = scr_h - kb_h - 6;
     const int panel_y = kb_y - panel_h - 6;
 
+    /* 全屏覆盖层：背景透明，避免 BW 模式下浅灰渲染成纯白盖掉正文。 */
     s_jump_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_jump_modal, scr_w, scr_h);
     lv_obj_set_pos(s_jump_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_jump_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_jump_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_jump_modal, 0, 0);
     lv_obj_set_style_radius(s_jump_modal, 0, 0);
     lv_obj_set_style_pad_all(s_jump_modal, 0, 0);
@@ -1006,7 +1058,7 @@ static void reader_enter(void) {
     lv_obj_set_style_text_align(s_page_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(s_page_label, LV_PCT(100));
     lv_obj_set_pos(s_page_label, 0, scr_h - READER_FOOTER_H + 6);
-    lv_label_set_text(s_page_label, "");
+    lv_label_set_text(s_page_label, "加载中…");
 
     /* 提示标签（无文档/空文件） */
     s_hint_label = lv_label_create(scr);
@@ -1033,28 +1085,12 @@ static void reader_enter(void) {
     s_jump_modal = NULL;
     s_jump_ta = NULL;
     s_gray4_timer = NULL;         /* 退出已取消；防御性复位 */
+    s_loading_modal = NULL;
+    s_loading_timer = NULL;
+    s_loading = false;
+    s_pending_start = 0;
     reader_gray4_mode_set(false); /* 防御：确保状态栏刷新恢复、灰度标志复位 */
     reader_pcache_reset();        /* 旧文档/旧字号的窗口页缓冲失效 */
-
-    if (s_pages_lock == NULL) {
-        s_pages_lock = xSemaphoreCreateMutex();
-    }
-
-    xSemaphoreTake(s_pages_lock, portMAX_DELAY);
-    reader_pages_free_locked();
-    const bool ok = reader_pages_init_locked();
-    reader_compute_pages_locked(1);
-    xSemaphoreGive(s_pages_lock);
-    if (!ok) {
-        lv_label_set_text(s_hint_label, "内存不足");
-        lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_content_label, "");
-        lv_label_set_text(s_page_label, "0 / 0");
-        s_ready = true;
-        ESP_LOGE(TAG, "reader: pages alloc failed");
-        return;
-    }
-    s_ready = true;
 
     if (s_text == NULL || s_text_len == 0) {
         const char *hint = espaperplay_reader_is_open() ? "空文件" : "无文档";
@@ -1062,24 +1098,33 @@ static void reader_enter(void) {
         lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_content_label, "");
         lv_label_set_text(s_page_label, "0 / 0");
+        s_ready = true;
         ESP_LOGI(TAG, "reader: no document");
-    } else {
-        lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
-        /* 从历史恢复进度 */
-        uint32_t start = 0;
-        const char *path = espaperplay_reader_get_path();
-        if (path != NULL) {
-            espaperplay_reader_history_entry_t e;
-            if (espaperplay_reader_history_find(path, &e) == ESP_OK) {
-                start = e.page;
-            }
-        }
-        reader_show_page((int)start);
-        reader_total_task_start();
+        s_touch_down = false;
+        ESP_LOGI(TAG, "reader view entered (%u bytes)", (unsigned)s_text_len);
+        return;
     }
 
+    /* 有文档：先显示“加载中”弹窗，重量级分页推迟到下一帧，避免阻塞首帧 */
+    lv_label_set_text(s_content_label, "");
+    lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+    uint32_t start = 0;
+    const char *path = espaperplay_reader_get_path();
+    if (path != NULL) {
+        espaperplay_reader_history_entry_t e;
+        if (espaperplay_reader_history_find(path, &e) == ESP_OK) {
+            start = e.page;
+        }
+    }
+    s_pending_start = start;
+    reader_loading_open();
+    /* 延迟 30ms 后执行分页与首屏渲染，让“加载中”先完成一次 PART 刷新 */
+    s_loading_timer = lv_timer_create(reader_loading_timer_cb, 30, NULL);
+    lv_timer_set_repeat_count(s_loading_timer, 1);
+
     s_touch_down = false;
-    ESP_LOGI(TAG, "reader view entered (%u bytes)", (unsigned)s_text_len);
+    ESP_LOGI(TAG, "reader view entered (%u bytes), loading start page %u", (unsigned)s_text_len,
+             (unsigned)start + 1);
 }
 
 /** 阅读视图退出：保存进度、停后台任务、释放资源。 */
@@ -1093,21 +1138,18 @@ static void reader_exit(void) {
             ESP_LOGI(TAG, "reader: save progress page %d", s_cur_page + 1);
         }
     }
-    /* 停后台总页数任务（任务每次迭代都检查停止标志，很快退出） */
-    if (s_total_task != NULL) {
-        s_total_stop = true;
-        for (int i = 0; i < 60 && s_total_task != NULL; i++) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+    if (s_total_timer != NULL) {
+        lv_timer_delete(s_total_timer);
+        s_total_timer = NULL;
     }
-    s_total_stop = false;
+    if (s_loading_timer != NULL) {
+        lv_timer_delete(s_loading_timer);
+        s_loading_timer = NULL;
+    }
+    reader_loading_close();
     reader_gray4_mode_set(false); /* 退出灰度显示模式：恢复状态栏刷新 */
     reader_pcache_reset();        /* 释放窗口页文本缓冲 */
-    if (s_pages_lock != NULL) {
-        xSemaphoreTake(s_pages_lock, portMAX_DELAY);
-        reader_pages_free_locked();
-        xSemaphoreGive(s_pages_lock);
-    }
+    reader_pages_free_locked();
     if (s_bar_overlay != NULL) {
         lv_obj_del(s_bar_overlay);
         s_bar_overlay = NULL;
@@ -1143,6 +1185,9 @@ static void reader_on_key(const espaperplay_input_event_t *event) {
     if (event->type != ESPAPERPLAY_INPUT_EVENT_KEY) {
         return;
     }
+    if (s_loading) {
+        return;
+    }
     switch (event->key_action) {
     case ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK:
         if (s_jump_modal != NULL) {
@@ -1170,6 +1215,9 @@ static void reader_on_key(const espaperplay_input_event_t *event) {
 
 /** 触摸处理：边缘滑动返回；左滑上一页 / 右滑下一页；点击左/中/右 1/3 分区。 */
 static void reader_on_touch(const espaperplay_input_event_t *event) {
+    if (s_loading) {
+        return;
+    }
     lv_point_t p;
     espaperplay_ui_touch_map_to_lv(event->point.x, event->point.y, &p);
 

@@ -971,12 +971,12 @@ static lv_obj_t *files_modal_base(const char *title, const char *msg, int card_h
     int32_t scr_h = 0;
     files_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸。浅灰底在 BW 阈值模式下显示为白色（L>=128 判白），
-     * 模态靠卡片黑边框区分；GRAY4 模式下显示浅灰。 */
+    /* 全屏覆盖层：拦截触摸，背景透明——卡片靠黑边框区分，避免 BW 模式下浅灰
+     * 背景渲染成纯白把页面内容整片盖掉（与阅读器底边栏同款修复）。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);
@@ -1368,11 +1368,11 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     int32_t scr_h = 0;
     files_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层（不点空白关闭） */
+    /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_modal, scr_w, scr_h);
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0xE8E8E8), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);
