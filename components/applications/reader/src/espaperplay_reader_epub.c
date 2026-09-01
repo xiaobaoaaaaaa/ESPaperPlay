@@ -36,6 +36,10 @@ static const char *TAG = "ESPaperPlay_READER";
  * ZIP 容器层（只解析中央目录，条目按需 inflate）
  * ==================================================================== */
 
+#define EPUB_CACHE_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader"
+#define EPUB_CACHE_MAGIC 0x43525045u /* "EPRC" */
+#define EPUB_PAGEN_VER 2u /* 分页缓存头版本（magic = CACHE_MAGIC + 1） */
+
 #define EPUB_ZIP_EOCD_SIG 0x06054b50UL
 #define EPUB_ZIP_CDH_SIG 0x02014b50UL
 #define EPUB_ZIP_LFH_SIG 0x04034b50UL
@@ -1905,6 +1909,17 @@ static int s_req_ch = -1;      /* 待产出章节（-1=无） */
 static int s_loading_ch = -1;  /* worker 正在产出的章节 */
 static epub_packet_t s_ready;  /* 就绪槽（chapter=-1 空） */
 
+/* 分页缓存落盘任务（单槽；数组已堆复制，写完释放） */
+typedef struct {
+    int chapter;
+    uint32_t font_key;
+    int cnt;
+    uint32_t *blocks;
+    uint16_t *lines;
+} epub_pagen_job_t;
+static epub_pagen_job_t s_pagen_job;
+static volatile bool s_pagen_pending = false;
+
 /** worker 主循环：等待请求 → 产出（缓存优先）→ 放入就绪槽。 */
 
 static void epub_worker_task(void *arg);
@@ -1946,6 +1961,71 @@ static void epub_worker_ensure(void) {
     s_worker_state = 2;
     s_worker_task = NULL;
     ESP_LOGW(TAG, "epub: prefetch worker unavailable, fallback to sync loading");
+}
+
+int espaperplay_reader_epub_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
+                                       uint16_t *lines, int max_cnt) {
+    if (!s_epub.open) {
+        return -1;
+    }
+    char path[96];
+    snprintf(path, sizeof(path), "%s/%08x.ch%03d.f%08x.pag", EPUB_CACHE_DIR,
+             (unsigned)s_epub.token, chapter, (unsigned)font_key);
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        return 0;
+    }
+    uint32_t hdr[6] = {0};
+    int cnt = -1;
+    if (fread(hdr, sizeof(uint32_t), 6, f) == 6 && hdr[0] == EPUB_CACHE_MAGIC + 1u &&
+        hdr[1] == EPUB_PAGEN_VER && hdr[2] == s_epub.token && hdr[3] == font_key &&
+        hdr[4] == (uint32_t)chapter && hdr[5] <= (uint32_t)max_cnt && hdr[5] > 0) {
+        const int n = (int)hdr[5];
+        if (fread(blocks, sizeof(uint32_t), (size_t)n, f) == (size_t)n &&
+            fread(lines, sizeof(uint16_t), (size_t)n, f) == (size_t)n) {
+            cnt = n;
+        }
+    }
+    fclose(f);
+    if (cnt < 0) {
+        remove(path); /* 损坏：删除待重建 */
+    }
+    return cnt;
+}
+
+void espaperplay_reader_epub_pagen_save_async(int chapter, uint32_t font_key, int cnt,
+                                              const uint32_t *blocks, const uint16_t *lines) {
+    if (!s_epub.open || cnt <= 0 || s_slot_mutex == NULL || s_req_sem == NULL) {
+        return;
+    }
+    epub_worker_ensure();
+    if (!epub_worker_available()) {
+        return; /* 无 worker：放弃缓存（下次重算） */
+    }
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    const bool busy = s_pagen_pending;
+    xSemaphoreGive(s_slot_mutex);
+    if (busy) {
+        return; /* 上一任务还没写完：放弃（罕见） */
+    }
+    uint32_t *bcpy = heap_caps_malloc((size_t)cnt * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint16_t *lcpy = heap_caps_malloc((size_t)cnt * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (bcpy == NULL || lcpy == NULL) {
+        heap_caps_free(bcpy);
+        heap_caps_free(lcpy);
+        return;
+    }
+    memcpy(bcpy, blocks, (size_t)cnt * sizeof(uint32_t));
+    memcpy(lcpy, lines, (size_t)cnt * sizeof(uint16_t));
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    s_pagen_job.chapter = chapter;
+    s_pagen_job.font_key = font_key;
+    s_pagen_job.cnt = cnt;
+    s_pagen_job.blocks = bcpy;
+    s_pagen_job.lines = lcpy;
+    s_pagen_pending = true;
+    xSemaphoreGive(s_slot_mutex);
+    xSemaphoreGive(s_req_sem);
 }
 
 /** 预取章节（异步；重复 / 已就绪请求忽略；worker 不可用时静默跳过）。 */
@@ -2120,8 +2200,6 @@ int espaperplay_reader_epub_chapter_count(void) { return s_epub.open ? s_epub.sp
 
 /* ---------------- SD 解析缓存 ---------------- */
 
-#define EPUB_CACHE_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader"
-#define EPUB_CACHE_MAGIC 0x43525045u /* "EPRC" */
 #define EPUB_CACHE_VER 1u
 
 /** 缓存路径：书指纹 + 章节号（指纹含 mtime/size，书变更自动换名失效）。 */
@@ -2400,6 +2478,46 @@ static void epub_worker_task(void *arg) {
     (void)arg;
     for (;;) {
         xSemaphoreTake(s_req_sem, portMAX_DELAY);
+
+        /* 分页缓存落盘（优先：纯写操作，快） */
+        xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+        const bool pagen = s_pagen_pending;
+        xSemaphoreGive(s_slot_mutex);
+        if (pagen) {
+            xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+            const int pch = s_pagen_job.chapter;
+            const uint32_t pfk = s_pagen_job.font_key;
+            const int pcnt = s_pagen_job.cnt;
+            uint32_t *pblk = s_pagen_job.blocks;
+            uint16_t *pln = s_pagen_job.lines;
+            s_pagen_pending = false;
+            xSemaphoreGive(s_slot_mutex);
+            if (pblk != NULL && pln != NULL && pcnt > 0) {
+                char ppath[96];
+                snprintf(ppath, sizeof(ppath), "%s/%08x.ch%03d.f%08x.pag", EPUB_CACHE_DIR,
+                         (unsigned)s_epub.token, pch, (unsigned)pfk);
+                char ptmp[104];
+                snprintf(ptmp, sizeof(ptmp), "%s.tmp", ppath);
+                FILE *pf = fopen(ptmp, "wb");
+                if (pf != NULL) {
+                    const uint32_t hdr[6] = {EPUB_CACHE_MAGIC + 1u, EPUB_PAGEN_VER,
+                                             (unsigned)s_epub.token, pfk, (uint32_t)pch,
+                                             (uint32_t)pcnt};
+                    bool ok = fwrite(hdr, sizeof(uint32_t), 6, pf) == 6;
+                    ok = ok && fwrite(pblk, sizeof(uint32_t), (size_t)pcnt, pf) == (size_t)pcnt;
+                    ok = ok && fwrite(pln, sizeof(uint16_t), (size_t)pcnt, pf) == (size_t)pcnt;
+                    fclose(pf);
+                    if (ok) {
+                        rename(ptmp, ppath);
+                    } else {
+                        remove(ptmp);
+                    }
+                }
+            }
+            heap_caps_free(pblk);
+            heap_caps_free(pln);
+        }
+
         xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
         const int idx = s_req_ch;
         const uint32_t token = s_epub.token;

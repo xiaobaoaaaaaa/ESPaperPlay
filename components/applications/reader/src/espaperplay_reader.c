@@ -256,6 +256,22 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
     return espaperplay_reader_epub_image(img_id, max_w, max_h, out_dsc);
 }
 
+int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
+                                  uint16_t *lines, int max_cnt) {
+    if (!s_open || s_fmt != ESPAPERPLAY_READER_FMT_EPUB) {
+        return 0;
+    }
+    return espaperplay_reader_epub_pagen_load(chapter, font_key, blocks, lines, max_cnt);
+}
+
+void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
+                                         const uint32_t *blocks, const uint16_t *lines) {
+    if (!s_open || s_fmt != ESPAPERPLAY_READER_FMT_EPUB) {
+        return;
+    }
+    espaperplay_reader_epub_pagen_save_async(chapter, font_key, cnt, blocks, lines);
+}
+
 esp_err_t espaperplay_reader_get_text(const char **out_buf, size_t *out_len) {
     if (!s_open) {
         return ESP_ERR_INVALID_STATE;

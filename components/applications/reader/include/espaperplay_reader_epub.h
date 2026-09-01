@@ -79,6 +79,33 @@ int espaperplay_reader_epub_chapter_count(void);
  */
 esp_err_t espaperplay_reader_epub_load_chapter(int idx);
 
+/* ---------------- 分页数据 SD 缓存（页边界表） ---------------- */
+
+/**
+ * @brief 读取章节分页缓存（LVGL 线程可调，只读）。
+ *
+ * @param chapter  章节号。
+ * @param font_key 版式指纹（字号档位 + 内容区宽高；版式变化自动失效）。
+ * @param blocks   输出数组（每页起始块号，容量 max_cnt）。
+ * @param lines    输出数组（每页起始块内行号，容量 max_cnt）。
+ * @param max_cnt  数组容量。
+ * @return 缓存的页数（>0 命中）；0=无缓存；<0=读取失败（文件已删除待重建）。
+ */
+int espaperplay_reader_epub_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
+                                       uint16_t *lines, int max_cnt);
+
+/**
+ * @brief 异步保存章节分页缓存（LVGL 线程调用；数组复制后由 worker 落盘）。
+ *
+ * @param chapter  章节号。
+ * @param font_key 版式指纹。
+ * @param cnt      页数（页 0 恒为 (0,0)，调用方仍需完整给出 cnt 项）。
+ * @param blocks   页起始块号数组。
+ * @param lines    页起始块内行号数组。
+ */
+void espaperplay_reader_epub_pagen_save_async(int chapter, uint32_t font_key, int cnt,
+                                              const uint32_t *blocks, const uint16_t *lines);
+
 /** 当前驻留章节号（未驻留返回 -1）。 */
 int espaperplay_reader_epub_chapter_current(void);
 

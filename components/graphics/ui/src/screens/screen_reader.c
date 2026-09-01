@@ -274,6 +274,12 @@ static void reader_pstarts_free(void) {
 
 static uint32_t s_paginate_t0 = 0; /*!< 当前章分页计时起点（进度日志用） */
 
+/** 版式指纹：字号档位 + 内容区宽高（变化使分页缓存失效）。 */
+static uint32_t reader_layout_key(void) {
+    return ((uint32_t)s_font_idx & 0x3u) | ((uint32_t)s_content_w << 2) |
+           ((uint32_t)s_content_h << 12);
+}
+
 /** 重置驻留章分页（章加载后调用）。 */
 static bool reader_pstarts_init(void) {
     reader_pstarts_free();
@@ -292,6 +298,38 @@ static bool reader_pstarts_init(void) {
     s_pstarts[0].line = 0;
     s_pstart_cnt = 1;
     s_paginate_t0 = lv_tick_get();
+
+    /* 分页缓存：命中则整章页边界即刻就绪（省去 FreeType 逐行测量） */
+    if (espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB) {
+        uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint32_t),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint16_t),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (bt != NULL && lt != NULL) {
+            const int cnt =
+                espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(), bt, lt,
+                                              s_pstart_cap);
+            if (cnt > 0) {
+                for (int i = 0; i < cnt; i++) {
+                    s_pstarts[i].block = bt[i];
+                    s_pstarts[i].line = lt[i];
+                }
+                s_pstart_cnt = cnt;
+                s_ch_total_known = true;
+                if (s_ch_pages != NULL && s_pstart_ch >= 0 && s_pstart_ch < s_chapter_cnt &&
+                    s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
+                    s_ch_pages[s_pstart_ch] = (uint32_t)cnt;
+                }
+                ESP_LOGI(TAG, "reader: pagination ch %d from cache: %d page(s)",
+                         s_pstart_ch + 1, cnt);
+                heap_caps_free(bt);
+                heap_caps_free(lt);
+                return true;
+            }
+        }
+        heap_caps_free(bt);
+        heap_caps_free(lt);
+    }
     return true;
 }
 
@@ -464,6 +502,24 @@ static bool rdr_advance_page(void) {
             s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
             s_ch_pages[s_pstart_ch] = (uint32_t)s_pstart_cnt;
         }
+        /* 分页缓存异步落盘（EPUB；字号/内容区变化经 font_key 自动失效） */
+        if (espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB &&
+            s_pstart_ch >= 0 && s_pstart_cnt > 1) {
+            uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint32_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint16_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (bt != NULL && lt != NULL) {
+                for (int i = 0; i < s_pstart_cnt; i++) {
+                    bt[i] = s_pstarts[i].block;
+                    lt[i] = s_pstarts[i].line;
+                }
+                espaperplay_reader_pagen_save_async(s_pstart_ch, reader_layout_key(),
+                                                    s_pstart_cnt, bt, lt);
+            }
+            heap_caps_free(bt);
+            heap_caps_free(lt);
+        }
         return false;
     }
     if (!rdr_pstart_push(next)) {
@@ -571,20 +627,27 @@ static int reader_global_total(void) {
  */
 static int s_count_ch = -1;   /*!< 正在数的章节（-1=无） */
 static int s_poll_ch = -1;    /*!< 轮询等待的章节 */
-static int s_poll_tries = 0;  /*!< 连续未就绪次数（坏章超时判定） */
-#define READER_POLL_MAX 40    /*!< ~2s：预取仍无结果按坏章处理 */
+static int s_poll_tries = 0;  /*!< 连续未就绪次数（超时走同步兜底） */
+#define READER_POLL_MAX 120   /*!< ~6s：预取超时后同步装载兜底 */
 
 /** 视图章是否驻留（计数可能换出）。 */
 static bool reader_view_resident(void) {
     return s_pstarts != NULL && espaperplay_reader_chapter_current() == s_ch;
 }
 
-/** 确保视图章驻留（打断计数并按需重载 + 重建分页表）。 */
+/**
+ * 确保视图章驻留且页起点就绪（不渲染）。
+ *
+ * 后台计数会把驻留章换成被数章（epub 单驻留槽），此时 s_pstarts 描述的是
+ * 计数章——任何交互翻页前必须先恢复视图章，否则会把计数章的页数/边界
+ * 套在视图章上（表现为「点下一页重新加载当前页」）。恢复走章节包缓存 +
+ * 分页缓存，命中时毫秒级。
+ */
 static bool reader_ensure_view_resident(void) {
     if (reader_view_resident()) {
         return true;
     }
-    s_count_ch = -1;
+    s_count_ch = -1; /* 打断计数：驻留槽让给视图章，稍后自动继续 */
     if (espaperplay_reader_load_chapter(s_ch) != ESP_OK) {
         return false;
     }
@@ -592,6 +655,10 @@ static bool reader_ensure_view_resident(void) {
         return false;
     }
     s_pstart_ch = s_ch;
+    reader_compute_local(s_local_page + 1);
+    if (s_local_page >= s_pstart_cnt) {
+        s_local_page = s_pstart_cnt > 0 ? s_pstart_cnt - 1 : 0;
+    }
     return true;
 }
 
@@ -628,9 +695,18 @@ static void reader_total_timer_cb(lv_timer_t *t) {
                     if (++s_poll_tries < READER_POLL_MAX) {
                         goto footer_tick;
                     }
-                    s_ch_pages[next] = 0; /* 预取超时：按坏章处理 */
+                    /* 超时（worker 繁忙，如首次打开时逐章写缓存）：同步装载
+                     * 兜底，绝不误标 0 页损坏总页数 */
+                    ESP_LOGW(TAG, "reader: chapter %d prefetch timeout, sync fallback", next + 1);
+                    if (espaperplay_reader_load_chapter(next) == ESP_OK &&
+                        reader_pstarts_init()) {
+                        s_count_ch = next;
+                        s_pstart_ch = next;
+                    } else {
+                        s_ch_pages[next] = 0; /* 真坏章 */
+                    }
                     s_poll_ch = -1;
-                    ESP_LOGW(TAG, "reader: chapter %d prefetch timeout", next);
+                    goto footer_tick;
                 } else if (espaperplay_reader_chapter_current() != next ||
                            espaperplay_reader_blocks(NULL) == NULL) {
                     /* 装载失败（驻留仍是别章）或解包为空：按坏章计 0 页，
@@ -900,6 +976,9 @@ static void reader_next_page(void) {
     if (!s_ready) {
         return;
     }
+    if (!reader_ensure_view_resident()) {
+        return; /* 恢复失败（罕见）：本次忽略，下次重试 */
+    }
     const int total = reader_local_total(); /* -1=本章分页未完成 */
     if (total < 0) {
         /* 分页未完成：只要下一页边界已算出就直接翻；算不出时尝试推进一步
@@ -939,6 +1018,9 @@ static void reader_next_page(void) {
 
 static void reader_prev_page(void) {
     if (!s_ready) {
+        return;
+    }
+    if (!reader_ensure_view_resident()) {
         return;
     }
     if (s_local_page > 0) {
