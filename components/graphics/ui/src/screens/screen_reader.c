@@ -280,8 +280,14 @@ static uint32_t reader_layout_key(void) {
            ((uint32_t)s_content_h << 12);
 }
 
-/** 重置驻留章分页（章加载后调用）。 */
-static bool reader_pstarts_init(void) {
+/**
+ * 重置指定章的分页表（章加载后调用）。
+ *
+ * @param ch 分页表归属章节；必须在此处（查缓存之前）设定 s_pstart_ch——
+ *           归属滞后会把别的章的缓存页边界/页数套到本章（历史缺陷）。
+ */
+static bool reader_pstarts_init(int ch) {
+    s_pstart_ch = ch;
     reader_pstarts_free();
     s_pstart_cap = READER_PSTART_CAP_INIT;
     s_pstarts = heap_caps_malloc((size_t)s_pstart_cap * sizeof(reader_pos_t),
@@ -306,7 +312,7 @@ static bool reader_pstarts_init(void) {
         uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint16_t),
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (bt != NULL && lt != NULL) {
-            int cnt = espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(), bt, lt,
+            int cnt = espaperplay_reader_pagen_load(ch, reader_layout_key(), bt, lt,
                                                     s_pstart_cap);
             if (cnt < 0) {
                 /* 大章节：缓存有效但表容量不足 → 扩表后重读一次 */
@@ -328,8 +334,8 @@ static bool reader_pstarts_init(void) {
                     lt = heap_caps_malloc((size_t)need * sizeof(uint16_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                     cnt = (bt != NULL && lt != NULL)
-                              ? espaperplay_reader_pagen_load(s_pstart_ch, reader_layout_key(),
-                                                              bt, lt, need)
+                              ? espaperplay_reader_pagen_load(ch, reader_layout_key(), bt, lt,
+                                                              need)
                               : 0;
                 } else {
                     cnt = 0;
@@ -342,12 +348,11 @@ static bool reader_pstarts_init(void) {
                 }
                 s_pstart_cnt = cnt;
                 s_ch_total_known = true;
-                if (s_ch_pages != NULL && s_pstart_ch >= 0 && s_pstart_ch < s_chapter_cnt &&
-                    s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
-                    s_ch_pages[s_pstart_ch] = (uint32_t)cnt;
+                if (s_ch_pages != NULL && ch >= 0 && ch < s_chapter_cnt &&
+                    s_ch_pages[ch] == READER_CH_PAGES_UNSET) {
+                    s_ch_pages[ch] = (uint32_t)cnt;
                 }
-                ESP_LOGI(TAG, "reader: pagination ch %d from cache: %d page(s)",
-                         s_pstart_ch + 1, cnt);
+                ESP_LOGI(TAG, "reader: pagination ch %d from cache: %d page(s)", ch + 1, cnt);
                 heap_caps_free(bt);
                 heap_caps_free(lt);
                 return true;
@@ -686,10 +691,9 @@ static bool reader_ensure_view_resident(void) {
     if (espaperplay_reader_load_chapter(s_ch) != ESP_OK) {
         return false;
     }
-    if (!reader_pstarts_init()) {
+    if (!reader_pstarts_init(s_ch)) {
         return false;
     }
-    s_pstart_ch = s_ch;
     reader_compute_local(s_local_page + 1);
     if (s_local_page >= s_pstart_cnt) {
         s_local_page = s_pstart_cnt > 0 ? s_pstart_cnt - 1 : 0;
@@ -734,9 +738,8 @@ static void reader_total_timer_cb(lv_timer_t *t) {
                      * 兜底，绝不误标 0 页损坏总页数 */
                     ESP_LOGW(TAG, "reader: chapter %d prefetch timeout, sync fallback", next + 1);
                     if (espaperplay_reader_load_chapter(next) == ESP_OK &&
-                        reader_pstarts_init()) {
+                        reader_pstarts_init(next)) {
                         s_count_ch = next;
-                        s_pstart_ch = next;
                     } else {
                         s_ch_pages[next] = 0; /* 真坏章 */
                     }
@@ -748,9 +751,8 @@ static void reader_total_timer_cb(lv_timer_t *t) {
                      * 防止把驻留章页数误记到坏章头上 */
                     s_ch_pages[next] = 0;
                     s_poll_ch = -1;
-                } else if (reader_pstarts_init()) {
+                } else if (reader_pstarts_init(next)) {
                     s_count_ch = next;
-                    s_pstart_ch = next;
                     s_poll_ch = -1;
                 } else {
                     s_count_ch = -1;
@@ -1001,12 +1003,11 @@ static void reader_show_page(int ch, int local) {
         ESP_LOGI(TAG, "reader: chapter %d loaded in %u ms", ch + 1,
                  (unsigned)lv_tick_elaps(t0));
         s_ch = ch;
-        if (!reader_pstarts_init()) {
+        if (!reader_pstarts_init(ch)) {
             lv_label_set_text(s_hint_label, "内存不足");
             lv_obj_remove_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
             return;
         }
-        s_pstart_ch = ch;
         s_local_page = 0;
     }
     if (local < 0) {
@@ -1078,10 +1079,9 @@ static void reader_prev_page(void) {
         s_count_ch = -1;
         if (espaperplay_reader_load_chapter(s_ch - 1) == ESP_OK) {
             s_ch--;
-            if (!reader_pstarts_init()) {
+            if (!reader_pstarts_init(s_ch)) {
                 return;
             }
-            s_pstart_ch = s_ch;
             reader_compute_local(1 << 20);
             reader_show_page(s_ch, s_pstart_cnt - 1);
             ESP_LOGI(TAG, "reader: pagination ch %d done: %d page(s), %u ms (prev-chapter)",
@@ -1115,10 +1115,9 @@ static void reader_set_font(int idx) {
         return; /* 重载失败：放弃重排（保持旧渲染） */
     }
     if (s_pstarts != NULL) {
-        if (!reader_pstarts_init()) {
+        if (!reader_pstarts_init(s_ch)) {
             return;
         }
-        s_pstart_ch = s_ch;
         reader_compute_local(s_local_page + 1);
         if (s_local_page >= s_pstart_cnt) {
             s_local_page = s_pstart_cnt - 1;
