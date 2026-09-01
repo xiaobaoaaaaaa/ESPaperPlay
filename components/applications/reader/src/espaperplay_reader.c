@@ -256,19 +256,6 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
     return espaperplay_reader_epub_image(img_id, max_w, max_h, out_dsc);
 }
 
-bool espaperplay_reader_image_poll(int expect_id) {
-    if (!s_open || s_fmt != ESPAPERPLAY_READER_FMT_EPUB) {
-        return false;
-    }
-    return espaperplay_reader_epub_image_poll(expect_id);
-}
-
-void espaperplay_reader_image_cancel(void) {
-    if (s_open && s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
-        espaperplay_reader_epub_image_cancel();
-    }
-}
-
 esp_err_t espaperplay_reader_get_text(const char **out_buf, size_t *out_len) {
     if (!s_open) {
         return ESP_ERR_INVALID_STATE;
