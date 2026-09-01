@@ -31,6 +31,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_BOOT_LP_ACTION "boot_lp_action"
 #define NVS_KEY_BOOT_LP_TIME_MS "boot_lp_time_ms"
 #define NVS_KEY_SETUP_DONE "setup_done"
+#define NVS_KEY_READER_IMG_GRAY4 "rd_img_gray4"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -54,6 +55,7 @@ static espaperplay_system_config_t s_config = {
     .weather_location = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
     .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
     .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
+    .reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4,
     .setup_done = false, /* 出厂状态：首次开机进入引导页 */
 };
 
@@ -177,6 +179,10 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_u8(handle, NVS_KEY_SETUP_DONE, s_config.setup_done ? 1 : 0);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_READER_IMG_GRAY4,
+                         s_config.reader_img_gray4 ? 1 : 0);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -289,6 +295,19 @@ static esp_err_t system_load(void) {
     load_str_field(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host,
                    sizeof(s_config.weather_api_host), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
                    &missing);
+
+    uint8_t img_gray4 = 0;
+    err = nvs_get_u8(handle, NVS_KEY_READER_IMG_GRAY4, &img_gray4);
+    if (err == ESP_OK) {
+        s_config.reader_img_gray4 = img_gray4 != 0;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_READER_IMG_GRAY4,
+                     esp_err_to_name(err));
+        }
+        s_config.reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4;
+        missing = true;
+    }
 
     uint8_t setup_done = 0;
     err = nvs_get_u8(handle, NVS_KEY_SETUP_DONE, &setup_done);
@@ -433,6 +452,22 @@ espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action
 espaperplay_boot_long_press_action_t espaperplay_system_get_boot_long_press_action(void) {
     return s_config.boot_long_press_action;
 }
+
+esp_err_t espaperplay_system_set_reader_img_gray4(bool enable) {
+    if (s_config.reader_img_gray4 == enable) {
+        return ESP_OK;
+    }
+    s_config.reader_img_gray4 = enable;
+    const esp_err_t err = save_u8_field(NVS_KEY_READER_IMG_GRAY4, enable ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save reader img gray4: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "reader img gray4: %s", enable ? "on" : "off");
+    return ESP_OK;
+}
+
+bool espaperplay_system_get_reader_img_gray4(void) { return s_config.reader_img_gray4; }
 
 bool espaperplay_system_is_setup_done(void) { return s_config.setup_done; }
 

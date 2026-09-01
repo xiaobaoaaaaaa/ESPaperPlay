@@ -829,6 +829,7 @@ static void reader_render_page(void) {
     }
 
     lv_obj_clean(s_content);
+    bool page_has_image = false; /* 本页含插图（已就绪显示）：灰度刷新判定用 */
     reader_pos_t next;
     int seg_cnt = 0;
     const bool has_more = reader_paginate_from(s_pstarts[s_local_page], &next, &seg_cnt);
@@ -862,6 +863,7 @@ static void reader_render_page(void) {
                 lv_image_set_scale(img, (uint32_t)((int64_t)tw * 256 / iw));
                 lv_obj_set_size(img, tw, th);
                 lv_obj_center(img);
+                page_has_image = true;
             } else {
                 lv_obj_t *lbl = lv_label_create(s_content);
                 lv_label_set_text(lbl, "[图片]");
@@ -899,6 +901,15 @@ static void reader_render_page(void) {
         }
     }
     (void)has_more;
+
+    /* 插图页自动灰度：延后一拍触发（当前帧 BW 局刷先完成，随后对已显示的
+     * 插图执行一次 GRAY4 全屏灰阶刷新，避免拍到中间帧）。 */
+    if (page_has_image && espaperplay_system_get_reader_img_gray4()) {
+        if (s_gray4_timer == NULL) {
+            s_gray4_timer = lv_timer_create(reader_gray4_deferred_cb, 60, NULL);
+            lv_timer_set_repeat_count(s_gray4_timer, 1);
+        }
+    }
 }
 
 /** 刷新页码显示（底部 + 底边栏；文本未变化时不触发重绘）。 */

@@ -658,6 +658,13 @@
                         <label>连续局刷 N 次后强制全刷清残影（0 = 禁用，只局刷）</label>
                         <input type="number" name="gui_full_force_after" min="0" max="255" step="1" placeholder="20">
                     </div>
+                    <div class="field">
+                        <label>阅读器插图页自动灰度刷新（插图以四灰阶显示，更细腻）</label>
+                        <select name="reader_img_gray4">
+                            <option value="1">开</option>
+                            <option value="0">关</option>
+                        </select>
+                    </div>
                     <div class="actions">
                         <button type="submit" class="primary">保存</button>
                     </div>
@@ -1296,6 +1303,8 @@
                     ? d.auto_sleep_timeout_s : '';
                 $('input[name=gui_full_force_after]').value = d.gui_full_force_after != null
                     ? d.gui_full_force_after : '';
+                $('select[name=reader_img_gray4]').value =
+                    (d.reader_img_gray4 === false || d.reader_img_gray4 === '0') ? '0' : '1';
                 $('select[name=boot_long_press_action]').value = d.boot_long_press_action || 'full_refresh';
                 $('input[name=boot_long_press_time_ms]').value = d.boot_long_press_time_ms != null
                     ? d.boot_long_press_time_ms : 1000;

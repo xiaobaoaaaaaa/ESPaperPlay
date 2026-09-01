@@ -65,6 +65,9 @@ extern "C" {
 /** 出厂默认"连续局刷 N 次后强制全刷"阈值（0=禁用，只局刷）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER 20
 
+/** 阅读器插图页自动灰度刷新默认值（开）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4 true
+
 /** 出厂默认和风天气 API Key（空 = 未配置，天气服务不工作）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY ""
 /** 出厂默认和风天气位置（空 = 按公网 IP 自动定位）。 */
@@ -132,6 +135,7 @@ typedef struct {
                                                                        Host（空=公共地址） */
     char selected_font[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN]; /*!< 当前选用字体文件名（空=出厂默认）
                                                                */
+    bool reader_img_gray4; /*!< 阅读器：插图页自动触发一次灰度（GRAY4）刷新 */
     bool setup_done; /*!< 首次开机引导是否已完成（false=下次开机仍进入引导页） */
 } espaperplay_system_config_t;
 
@@ -301,6 +305,21 @@ esp_err_t espaperplay_system_set_selected_font(const char *name);
  *
  * @return 已完成返回 true；出厂状态 / 恢复出厂后返回 false（下次开机进入引导页）。
  */
+/**
+ * @brief 设置阅读器插图页自动灰度刷新开关并持久化。
+ *
+ * @param enable true=插图页渲染后自动触发一次 GRAY4 灰度刷新。
+ * @return 成功返回 ESP_OK；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_reader_img_gray4(bool enable);
+
+/**
+ * @brief 获取阅读器插图页自动灰度刷新开关。
+ *
+ * @return 当前开关状态。
+ */
+bool espaperplay_system_get_reader_img_gray4(void);
+
 bool espaperplay_system_is_setup_done(void);
 
 /**

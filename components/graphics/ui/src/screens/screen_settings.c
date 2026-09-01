@@ -247,6 +247,26 @@ static void settings_fmt_boot_lp_time(int32_t v, char *buf, size_t size) {
     snprintf(buf, size, "%d ms", (int)v);
 }
 
+/* ---- 设备组：阅读器 ---- */
+
+static const char *const s_reader_img_gray4_options[] = {"开", "关"};
+
+static int32_t settings_get_reader_img_gray4(void) {
+    return espaperplay_system_get_reader_img_gray4() ? 1 : 0;
+}
+
+static esp_err_t settings_set_reader_img_gray4(int32_t v) {
+    return espaperplay_system_set_reader_img_gray4(v != 0);
+}
+
+static void settings_fmt_reader_img_gray4(int32_t v, char *buf, size_t size) {
+    if (v >= 0 && v < (int32_t)(sizeof(s_reader_img_gray4_options) / sizeof(s_reader_img_gray4_options[0]))) {
+        snprintf(buf, size, "%s", s_reader_img_gray4_options[v]);
+    } else {
+        snprintf(buf, size, "未知");
+    }
+}
+
 /* ---- 系统组：网络 ---- */
 
 static const char *const s_wifi_mode_options[] = {"热点 (AP)", "站点 (STA)"};
@@ -350,6 +370,14 @@ static settings_row_t s_rows[] = {
      .get_value = settings_get_boot_lp_time,
      .set_value = settings_set_boot_lp_time,
      .fmt_value = settings_fmt_boot_lp_time},
+    /* 设备：阅读器 */
+    {.name = "插图灰度刷新",
+     .type = SETTINGS_ROW_CYCLE,
+     .get_value = settings_get_reader_img_gray4,
+     .set_value = settings_set_reader_img_gray4,
+     .fmt_value = settings_fmt_reader_img_gray4,
+     .options = s_reader_img_gray4_options,
+     .option_count = (int)(sizeof(s_reader_img_gray4_options) / sizeof(s_reader_img_gray4_options[0]))},
     /* 系统：网络 */
     {.name = "WiFi 模式",
      .type = SETTINGS_ROW_CYCLE,
@@ -391,16 +419,17 @@ typedef struct {
 static const settings_subgroup_t s_dev_subgroups[] = {
     {"显示", 0, 2},
     {"按键", 2, 2},
+    {"阅读器", 4, 1},
 };
 
 static const settings_subgroup_t s_sys_subgroups[] = {
-    {"网络", 4, 3},
-    {"字体", 7, 1},
-    {"开发者", 8, 2},
+    {"网络", 5, 3},
+    {"字体", 8, 1},
+    {"开发者", 9, 2},
 };
 
 static const settings_subgroup_t s_svc_subgroups[] = {
-    {"天气", 10, 3},
+    {"天气", 11, 3},
 };
 
 /* 全部大类（顺序即显示顺序）。 */

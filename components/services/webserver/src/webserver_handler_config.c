@@ -96,6 +96,7 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
                             boot_long_press_action_str(cfg->boot_long_press_action));
     /* BOOT 键长按判定时间（毫秒）。 */
     cJSON_AddNumberToObject(root, "boot_long_press_time_ms", (double)cfg->boot_long_press_time_ms);
+    cJSON_AddBoolToObject(root, "reader_img_gray4", cfg->reader_img_gray4);
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -166,6 +167,9 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
                                                       boot_lp_action, sizeof(boot_lp_action));
     const bool has_boot_lp_ms = webserver_form_get_field(body, "boot_long_press_time_ms",
                                                          boot_lp_time_s, sizeof(boot_lp_time_s));
+    char reader_img_gray4_s[8] = {0};
+    const bool has_reader_img_gray4 = webserver_form_get_field(
+        body, "reader_img_gray4", reader_img_gray4_s, sizeof(reader_img_gray4_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -327,6 +331,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
             }
         }
     }
+    /* 阅读器插图自动灰度刷新（开/关）。 */
+    if (err == ESP_OK && has_reader_img_gray4) {
+        if (strcmp(reader_img_gray4_s, "1") == 0 || strcasecmp(reader_img_gray4_s, "true") == 0 ||
+            strcasecmp(reader_img_gray4_s, "on") == 0) {
+            err = espaperplay_system_set_reader_img_gray4(true);
+        } else if (strcmp(reader_img_gray4_s, "0") == 0 ||
+                   strcasecmp(reader_img_gray4_s, "false") == 0 ||
+                   strcasecmp(reader_img_gray4_s, "off") == 0) {
+            err = espaperplay_system_set_reader_img_gray4(false);
+        } else {
+            webserver_send_json_err(req, "无效的 reader_img_gray4（1/0）");
+            return ESP_FAIL;
+        }
+    }
+
     /* 和风天气：字段出现时应用。API Key 语义与密码一致——输入非空 → 设置新值；
      * 输入为空且勾选"清除" → 置空；否则保留当前值。位置留空 + 勾选清除 =
      * 恢复自动定位（按公网 IP）。API Host 同理（留空 + 勾选清除 = 公共地址）。 */
