@@ -272,6 +272,8 @@ static void reader_pstarts_free(void) {
     s_sparse_cnt = 0;
 }
 
+static uint32_t s_paginate_t0 = 0; /*!< 当前章分页计时起点（进度日志用） */
+
 /** 重置驻留章分页（章加载后调用）。 */
 static bool reader_pstarts_init(void) {
     reader_pstarts_free();
@@ -289,6 +291,7 @@ static bool reader_pstarts_init(void) {
     s_pstarts[0].block = 0;
     s_pstarts[0].line = 0;
     s_pstart_cnt = 1;
+    s_paginate_t0 = lv_tick_get();
     return true;
 }
 
@@ -489,16 +492,26 @@ static void reader_compute_local(int want) {
     }
     while (!s_ch_total_known && s_pstart_cnt <= want) {
         if (!rdr_advance_page()) {
+            if (s_pstart_ch >= 0) {
+                ESP_LOGI(TAG, "reader: pagination ch %d/%d done: %d page(s), %u ms (sync)",
+                         s_pstart_ch + 1, s_chapter_cnt, s_pstart_cnt,
+                         (unsigned)lv_tick_elaps(s_paginate_t0));
+            }
             break;
         }
     }
 }
 
-/** 时间预算内推进分页（后台计数用；返回章节是否已算完）。 */
+/** 时间预算内推进分页（后台计数用；返回章节是否已算完；完成时打进度日志）。 */
 static bool reader_compute_budget(uint32_t budget_ms) {
     const uint32_t t0 = lv_tick_get();
     while (!s_ch_total_known) {
         if (!rdr_advance_page()) {
+            if (s_pstart_ch >= 0) {
+                ESP_LOGI(TAG, "reader: pagination ch %d/%d done: %d page(s), %u ms",
+                         s_pstart_ch + 1, s_chapter_cnt, s_pstart_cnt,
+                         (unsigned)lv_tick_elaps(s_paginate_t0));
+            }
             return true;
         }
         if ((uint32_t)(lv_tick_get() - t0) >= budget_ms) {
@@ -604,6 +617,7 @@ static void reader_total_timer_cb(lv_timer_t *t) {
         }
         if (next >= 0) {
             if (s_count_ch != next) {
+                ESP_LOGD(TAG, "reader: counting ch %d/%d", next + 1, s_chapter_cnt);
                 /* 新开一章：轮询装载（worker 异步预取，LVGL 线程零解析）；
                  * 未就绪本 tick 跳过，下一 tick 再试；长时间无结果按坏章计 0 页 */
                 if (s_poll_ch != next) {
@@ -855,10 +869,15 @@ static void reader_show_page(int ch, int local) {
     }
     if (ch != s_ch || !reader_view_resident()) {
         s_count_ch = -1; /* 打断后台计数 */
-        if (espaperplay_reader_load_chapter(ch) != ESP_OK) {
-            ESP_LOGW(TAG, "reader: chapter %d load failed", ch);
+        const uint32_t t0 = lv_tick_get();
+        const esp_err_t lerr = espaperplay_reader_load_chapter(ch);
+        if (lerr != ESP_OK) {
+            ESP_LOGW(TAG, "reader: chapter %d load failed (%s), %u ms", ch + 1, esp_err_to_name(lerr),
+                     (unsigned)lv_tick_elaps(t0));
             return;
         }
+        ESP_LOGI(TAG, "reader: chapter %d loaded in %u ms", ch + 1,
+                 (unsigned)lv_tick_elaps(t0));
         s_ch = ch;
         if (!reader_pstarts_init()) {
             lv_label_set_text(s_hint_label, "内存不足");
@@ -881,12 +900,36 @@ static void reader_next_page(void) {
     if (!s_ready) {
         return;
     }
-    reader_compute_local(s_local_page + 2);
-    if (s_local_page + 1 < s_pstart_cnt) {
+    const int total = reader_local_total(); /* -1=本章分页未完成 */
+    if (total < 0) {
+        /* 分页未完成：只要下一页边界已算出就直接翻；算不出时尝试推进一步
+         * （单页测量，~几 ms），仍不可得则下一 tick 由计数定时器补齐 */
+        if (s_local_page + 1 < s_pstart_cnt) {
+            reader_show_page(s_ch, s_local_page + 1);
+            return;
+        }
+        if (rdr_advance_page() && s_local_page + 1 < s_pstart_cnt) {
+            reader_show_page(s_ch, s_local_page + 1);
+            return;
+        }
+        /* 本章边界暂时到头：翻到下一章开头（预取通常已就绪）；没有下一章
+         * 则确实已是最后一页 */
+        if (s_ch + 1 < s_chapter_cnt) {
+            ESP_LOGI(TAG, "reader: next chapter (pagination in progress, %d page(s) so far)",
+                     s_pstart_cnt);
+            reader_show_page(s_ch + 1, 0);
+        } else if (s_ch_total_known) {
+            ESP_LOGI(TAG, "reader: already last page");
+        } else {
+            ESP_LOGD(TAG, "reader: at computed end, waiting for pagination");
+        }
+        return;
+    }
+    /* 分页已完成：精确判断 */
+    if (s_local_page + 1 < total) {
         reader_show_page(s_ch, s_local_page + 1);
         return;
     }
-    /* 章末 → 下一章 */
     if (s_ch + 1 < s_chapter_cnt) {
         reader_show_page(s_ch + 1, 0);
     } else {
@@ -903,8 +946,7 @@ static void reader_prev_page(void) {
         return;
     }
     if (s_ch > 0) {
-        /* 上一章末页（需全量分页该章：后台计数可能已知页数，但分页表已释放，
-         * 仍需重建；切换章会打断后台计数） */
+        /* 上一章末页（需全量分页该章；切换章会打断后台计数） */
         s_count_ch = -1;
         if (espaperplay_reader_load_chapter(s_ch - 1) == ESP_OK) {
             s_ch--;
@@ -914,6 +956,8 @@ static void reader_prev_page(void) {
             s_pstart_ch = s_ch;
             reader_compute_local(1 << 20);
             reader_show_page(s_ch, s_pstart_cnt - 1);
+            ESP_LOGI(TAG, "reader: pagination ch %d done: %d page(s), %u ms (prev-chapter)",
+                     s_ch + 1, s_pstart_cnt, (unsigned)lv_tick_elaps(s_paginate_t0));
         }
     } else {
         ESP_LOGI(TAG, "reader: already first page");
