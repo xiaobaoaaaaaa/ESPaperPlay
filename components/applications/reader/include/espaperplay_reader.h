@@ -163,6 +163,12 @@ const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt);
 esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
                                    const lv_image_dsc_t **out_dsc);
 
+/** 轮询异步图片解码结果（expect_id=当前页图片 id；详见 reader_epub.h）。 */
+bool espaperplay_reader_image_poll(int expect_id);
+
+/** 撤销未开始的图片解码请求。 */
+void espaperplay_reader_image_cancel(void);
+
 #ifdef __cplusplus
 }
 #endif

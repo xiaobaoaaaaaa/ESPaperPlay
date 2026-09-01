@@ -101,11 +101,15 @@ const char *espaperplay_reader_epub_chapter_text(size_t *out_len);
 const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *out_cnt);
 
 /**
- * @brief 解码当前章节的一张图片（单张缓存，重复调用同 id 直接命中）。
+ * @brief 请求解码当前章节的一张图片（异步；单张 live 缓存）。
  *
- * JPEG：TJpgD 逐 MCU 流式解码，输出回调内最近邻抽样缩放进 max_w×max_h 预算框；
- * PNG：zlib 流式逐行 unfilter + 行内抽样（整图 RGBA 解码在 LVGL 分配器下
- * 不可行，大图会 lodepng alloc 失败）。
+ * live 缓存命中立即返回 dsc；否则向 worker 投递解码请求并返回
+ * ESP_ERR_NOT_FINISHED（渲染先出占位）。worker 完成后经
+ * espaperplay_reader_epub_image_poll() 取回发布。worker 不可用时降级为
+ * 同步解码（阻塞 LVGL，仅兜底）。
+ *
+ * 解码：JPEG 走 TJpgD 逐 MCU 流式、PNG 走 zlib 流式逐行，均在解码中
+ * 最近邻抽样进 max_w×max_h 预算框（峰值内存 = 目标缓冲 + KB 级工作区）。
  *
  * @param img_id 块表中的 image id（章节内序号）。
  * @param max_w 解码预算框宽（像素；渲染层可再等比缩放至实际显示框）。
@@ -115,6 +119,18 @@ const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *out_cnt);
  */
 esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
                                         const lv_image_dsc_t **out_dsc);
+
+/**
+ * @brief 轮询异步解码结果（LVGL 线程调用）。
+ *
+ * @param expect_id 期望的图片 id（当前渲染页的图片）；结果不匹配（已翻页）
+ *                  则丢弃并返回 false。
+ * @return 已发布到 live 缓存返回 true（调用方重渲染即可命中）。
+ */
+bool espaperplay_reader_epub_image_poll(int expect_id);
+
+/** 撤销未开始的解码请求（翻页/关页时调用；进行中的解码自然完成并丢弃）。 */
+void espaperplay_reader_epub_image_cancel(void);
 
 #ifdef __cplusplus
 }

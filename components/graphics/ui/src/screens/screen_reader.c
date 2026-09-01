@@ -126,6 +126,8 @@ static reader_sparse_t s_sparse[READER_SPARSE_MAX];
 static int s_sparse_cnt = 0;
 
 static lv_timer_t *s_total_timer = NULL;  /*!< 总页数分片计算定时器 */
+static lv_timer_t *s_img_timer = NULL;    /*!< 图片解码就绪轮询定时器 */
+static int s_cur_img_id = -1;             /*!< 当前页图片 id（-1=非图片页） */
 static lv_timer_t *s_loading_timer = NULL; /*!< 延迟初始化定时器 */
 static lv_obj_t *s_loading_modal = NULL;
 static uint32_t s_pending_start = 0;      /*!< 待恢复的全局起始页 */
@@ -148,6 +150,7 @@ static lv_point_t s_touch_last = {0, 0};
 
 /* 前向声明 */
 static void reader_show_page(int ch, int local);
+static void reader_render_page(void);
 static void reader_footer_update(void);
 static void reader_bar_close(void);
 static void reader_jump_open(void);
@@ -739,6 +742,33 @@ static void reader_loading_open(void) {
 /* 页渲染                                                               */
 /* ------------------------------------------------------------------ */
 
+/** 图片解码就绪轮询：就绪则重渲染当前页（live 缓存命中，直接出图）。 */
+static void reader_img_timer_cb(lv_timer_t *t) {
+    if (s_cur_img_id < 0 || !s_ready) {
+        return;
+    }
+    if (espaperplay_reader_image_poll(s_cur_img_id)) {
+        lv_timer_delete(t);
+        s_img_timer = NULL;
+        reader_render_page();
+        ESP_LOGI(TAG, "reader: image %d ready, re-render", s_cur_img_id);
+    }
+}
+
+static void reader_img_timer_start(void) {
+    if (s_img_timer != NULL) {
+        return;
+    }
+    s_img_timer = lv_timer_create(reader_img_timer_cb, 120, NULL);
+}
+
+static void reader_img_timer_stop(void) {
+    if (s_img_timer != NULL) {
+        lv_timer_delete(s_img_timer);
+        s_img_timer = NULL;
+    }
+}
+
 /** 渲染章内当前页（分页 → 片段 → 控件）。 */
 static void reader_render_page(void) {
     if (s_content == NULL || s_pstarts == NULL) {
@@ -753,6 +783,7 @@ static void reader_render_page(void) {
     }
 
     lv_obj_clean(s_content);
+    s_cur_img_id = -1; /* 非图片页复位；图片段渲染时设置 */
     reader_pos_t next;
     int seg_cnt = 0;
     const bool has_more = reader_paginate_from(s_pstarts[s_local_page], &next, &seg_cnt);
@@ -762,11 +793,17 @@ static void reader_render_page(void) {
         const reader_seg_t *sg = &s_segs[i];
         if (sg->image >= 0) {
             /* 图片页：按 2 倍内容区预算解码（抽样步长小、留足缩放质量），
-             * 再等比缩放到恰好内接内容区并居中。 */
+             * 再等比缩放到恰好内接内容区并居中。解码在 epub worker 执行：
+             * 首次请求返回 NOT_FINISHED，先出占位，poll 定时器就绪后重渲染 */
             const lv_image_dsc_t *dsc = NULL;
             const int budget_w = s_content_w * 2;
             const int budget_h = s_content_h * 2;
-            const esp_err_t err = espaperplay_reader_image(sg->image, budget_w, budget_h, &dsc);
+            esp_err_t err = espaperplay_reader_image(sg->image, budget_w, budget_h, &dsc);
+            if (err == ESP_ERR_NOT_FINISHED) {
+                s_cur_img_id = sg->image;
+                reader_img_timer_start();
+                err = ESP_ERR_NOT_FOUND; /* 走占位分支 */
+            }
             if (err == ESP_OK && dsc != NULL && dsc->header.w > 0 && dsc->header.h > 0) {
                 const int iw = dsc->header.w;
                 const int ih = dsc->header.h;
@@ -788,7 +825,7 @@ static void reader_render_page(void) {
                 lv_obj_center(img);
             } else {
                 lv_obj_t *lbl = lv_label_create(s_content);
-                lv_label_set_text(lbl, "[图片]");
+                lv_label_set_text(lbl, s_cur_img_id >= 0 ? "插图解码中…" : "[图片]");
                 lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
                 lv_obj_set_style_text_font(lbl, s_font, 0);
                 lv_obj_center(lbl);
@@ -1592,6 +1629,9 @@ static void reader_exit(void) {
         s_loading_timer = NULL;
     }
     reader_loading_close();
+    reader_img_timer_stop();
+    espaperplay_reader_image_cancel();
+    s_cur_img_id = -1;
     reader_gray4_mode_set(false);
     reader_pstarts_free();
     if (s_ch_pages != NULL) {

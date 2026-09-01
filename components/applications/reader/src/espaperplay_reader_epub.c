@@ -1599,8 +1599,10 @@ static bool png_handle_row(uint8_t *cur, const uint8_t *prev, uint32_t w, uint8_
     return true;
 }
 
-/** PNG：zlib 流式逐行解码 + unfilter + 行内最近邻抽样（峰值内存 ≈ 2 行扫描线）。 */
-static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, int max_h) {
+/** PNG：zlib 流式逐行解码 + unfilter + 行内最近邻抽样（峰值内存 ≈ 2 行扫描线）。
+ * 结果写入 out_*（缓冲归调用方释放）；线程中立，可在 worker 调用。 */
+static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, int max_h,
+                                 uint8_t **out_buf, int *out_w, int *out_h) {
     /* 文件签名 + IHDR */
     if (src_len < 33 || src[0] != 0x89 || src[1] != 'P' || src[2] != 'N' || src[3] != 'G' ||
         memcmp(&src[12], "IHDR", 4) != 0) {
@@ -1733,9 +1735,9 @@ static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, 
         heap_caps_free(dst);
         return ESP_FAIL;
     }
-    s_epub.img_buf = (uint8_t *)dst;
-    s_epub.img_dsc.header.w = dw;
-    s_epub.img_dsc.header.h = dh;
+    *out_buf = (uint8_t *)dst;
+    *out_w = dw;
+    *out_h = dh;
     return ESP_OK;
 }
 
@@ -1790,8 +1792,10 @@ static int jpg_out_func(JDEC *jd, void *bitmap, JRECT *rect) {
     return 1; /* 继续解码 */
 }
 
-/** JPEG：TJpgD 逐 MCU 解码 + 解码回调内最近邻抽样（峰值内存 = 目标缓冲）。 */
-static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w, int max_h) {
+/** JPEG：TJpgD 逐 MCU 解码 + 解码回调内最近邻抽样（峰值内存 = 目标缓冲）。
+ * 结果写入 out_*（缓冲归调用方释放）；线程中立，可在 worker 调用。 */
+static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w, int max_h,
+                                  uint8_t **out_buf, int *out_w, int *out_h) {
     uint8_t *work = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (work == NULL) {
         return ESP_ERR_NO_MEM;
@@ -1840,9 +1844,9 @@ static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w,
         ESP_LOGW(TAG, "epub: jd_decomp failed (%d)", r);
         return ESP_FAIL;
     }
-    s_epub.img_buf = (uint8_t *)ctx.dst;
-    s_epub.img_dsc.header.w = dw;
-    s_epub.img_dsc.header.h = dh;
+    *out_buf = (uint8_t *)ctx.dst;
+    *out_w = dw;
+    *out_h = dh;
     return ESP_OK;
 }
 
@@ -1905,6 +1909,17 @@ static int s_req_ch = -1;      /* 待产出章节（-1=无） */
 static int s_loading_ch = -1;  /* worker 正在产出的章节 */
 static epub_packet_t s_ready;  /* 就绪槽（chapter=-1 空） */
 
+/* 图片解码请求/完成（slot_mutex 保护；完成缓冲所有权移交 LVGL 轮询方） */
+static SemaphoreHandle_t s_img_sem;
+static volatile bool s_img_req_pending = false;
+static volatile int s_img_req_id = -1;
+static volatile int s_img_req_w = 0, s_img_req_h = 0;
+static volatile bool s_img_done_pending = false;
+static volatile int s_img_done_id = -1;
+static volatile int s_img_done_w = 0, s_img_done_h = 0;
+static uint8_t *s_img_done_buf = NULL;
+static volatile bool s_img_done_err = false;
+
 /** worker 主循环：等待请求 → 产出（缓存优先）→ 放入就绪槽。 */
 
 static void epub_worker_task(void *arg);
@@ -1923,7 +1938,10 @@ static void epub_worker_ensure(void) {
     if (s_req_sem == NULL) {
         s_req_sem = xSemaphoreCreateBinary();
     }
-    if (s_slot_mutex == NULL || s_req_sem == NULL) {
+    if (s_img_sem == NULL) {
+        s_img_sem = xSemaphoreCreateBinary();
+    }
+    if (s_slot_mutex == NULL || s_req_sem == NULL || s_img_sem == NULL) {
         return;
     }
     if (s_worker_state != 0) {
@@ -2087,6 +2105,13 @@ void espaperplay_reader_epub_close(void) {
         epub_packet_free(&s_ready);
         s_req_ch = -1;
         s_loading_ch = -1;
+        s_img_req_pending = false;
+        if (s_img_done_pending && s_img_done_buf != NULL) {
+            /* LVGL 线程安全释放：完成缓冲尚未移交 */
+            heap_caps_free((void *)s_img_done_buf);
+            s_img_done_buf = NULL;
+        }
+        s_img_done_pending = false;
         xSemaphoreGive(s_slot_mutex);
     }
 #endif
@@ -2395,11 +2420,79 @@ static void epub_install_packet(epub_packet_t *pkt) {
 
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
 
-/** worker 主循环：等待请求 → 产出（缓存优先）→ 放入就绪槽。 */
+static esp_err_t epub_image_decode_dispatch(const char *name, uint8_t *data, size_t data_len,
+                                            int max_w, int max_h, uint8_t **out_buf, int *out_w,
+                                            int *out_h);
+
+/** worker：解码一张图片（zip 解压 + TJpgD/PNG 流式解码，全 PSRAM 堆）。 */
+static void epub_worker_decode_image(void) {
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    const int id = s_img_req_id;
+    const int w = s_img_req_w;
+    const int h = s_img_req_h;
+    const uint32_t token = s_epub.token;
+    const int ch = s_epub.cur_ch;
+    s_img_req_pending = false;
+    xSemaphoreGive(s_slot_mutex);
+    if (id < 0 || !s_epub.open || ch < 0 || id >= s_epub.ch_image_cnt) {
+        return;
+    }
+
+    /* live 缓存仍指同一章（图片 id 章内有效；换章后 id 语义失效，丢弃） */
+    char name[600];
+    const int zi = (ch == s_epub.cur_ch && id < s_epub.ch_image_cnt) ? s_epub.ch_images[id] : -1;
+    if (zi < 0 || !epub_zip_ent_name(&s_epub.zip, zi, name, sizeof(name))) {
+        xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+        s_img_done_pending = true;
+        s_img_done_id = id;
+        s_img_done_buf = NULL;
+        s_img_done_err = true;
+        xSemaphoreGive(s_slot_mutex);
+        return;
+    }
+
+    uint8_t *data = NULL;
+    size_t data_len = 0;
+    uint8_t *buf = NULL;
+    int dw = 0, dh = 0;
+    const uint32_t t0 = xTaskGetTickCount();
+    esp_err_t err = epub_zip_extract(&s_epub.zip, zi, (char **)&data, &data_len);
+    if (err == ESP_OK) {
+        err = epub_image_decode_dispatch(name, data, data_len, w, h, &buf, &dw, &dh);
+        heap_caps_free(data);
+    }
+    (void)token;
+    ESP_LOGI(TAG, "epub: image %d decoded %s (%dx%d, %u ms)", id,
+             err == ESP_OK ? "ok" : "failed", dw, dh,
+             (unsigned)pdTICKS_TO_MS(xTaskGetTickCount() - t0));
+
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    s_img_done_pending = true;
+    s_img_done_id = id;
+    s_img_done_w = dw;
+    s_img_done_h = dh;
+    s_img_done_buf = buf; /* 失败时为 NULL */
+    s_img_done_err = err != ESP_OK;
+    xSemaphoreGive(s_slot_mutex);
+}
+
+/** worker 主循环：等待章节请求或图片请求 → 处理。 */
 static void epub_worker_task(void *arg) {
     (void)arg;
     for (;;) {
         xSemaphoreTake(s_req_sem, portMAX_DELAY);
+        /* 图片请求优先（交互等待方） */
+        bool img = false;
+        xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+        if (s_img_req_pending) {
+            img = true;
+        }
+        xSemaphoreGive(s_slot_mutex);
+        if (img) {
+            epub_worker_decode_image();
+            continue;
+        }
+
         xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
         const int idx = s_req_ch;
         const uint32_t token = s_epub.token;
@@ -2515,7 +2608,7 @@ const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *out_cnt) {
 }
 
 #ifdef ESPAPERPLAY_READER_EPUB_HOST
-/* 主机测试：PNG 走真实流式解码器（zlib 可用）；JPEG 不编译 */
+/* 主机测试：PNG 同步解码（无 worker） */
 esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
                                         const lv_image_dsc_t **out_dsc) {
     if (!s_epub.open || s_epub.cur_ch < 0 || out_dsc == NULL) {
@@ -2523,6 +2616,10 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
     }
     if (img_id < 0 || img_id >= s_epub.ch_image_cnt) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (img_id == s_epub.img_cached_id && s_epub.img_buf != NULL) {
+        *out_dsc = &s_epub.img_dsc;
+        return ESP_OK;
     }
     char name[600];
     const int zi = s_epub.ch_images[img_id];
@@ -2536,19 +2633,65 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
     }
     memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
     s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-    const esp_err_t err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
+    uint8_t *buf = NULL;
+    int dw = 0, dh = 0;
+    const esp_err_t err =
+        epub_decode_png((const uint8_t *)data, data_len, max_w, max_h, &buf, &dw, &dh);
     heap_caps_free(data);
     if (err != ESP_OK) {
         return err;
     }
-    s_epub.img_dsc.header.stride = s_epub.img_dsc.header.w * 2;
-    s_epub.img_dsc.data_size = (uint32_t)(s_epub.img_dsc.header.w * s_epub.img_dsc.header.h * 2);
-    s_epub.img_dsc.data = s_epub.img_buf;
+    s_epub.img_buf = buf;
+    s_epub.img_dsc.header.w = dw;
+    s_epub.img_dsc.header.h = dh;
+    s_epub.img_dsc.header.stride = dw * 2;
+    s_epub.img_dsc.data_size = (uint32_t)(dw * dh * 2);
+    s_epub.img_dsc.data = buf;
     s_epub.img_cached_id = img_id;
     *out_dsc = &s_epub.img_dsc;
     return ESP_OK;
 }
+
+bool espaperplay_reader_epub_image_poll(int expect_id) {
+    (void)expect_id;
+    return false;
+}
+
+void espaperplay_reader_epub_image_cancel(void) {}
+
 #else
+
+/** 解码按扩展名 / 魔数分派（worker 与 LVGL 兜底路径共用）。 */
+static esp_err_t epub_image_decode_dispatch(const char *name, uint8_t *data, size_t data_len,
+                                            int max_w, int max_h, uint8_t **out_buf, int *out_w,
+                                            int *out_h) {
+    const char *dot = strrchr(name, '.');
+    if ((dot != NULL && (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0)) ||
+        (data_len > 3 && data[0] == 0xFF && data[1] == 0xD8)) {
+        return epub_decode_jpeg(data, data_len, max_w, max_h, out_buf, out_w, out_h);
+    }
+    if ((dot != NULL && strcasecmp(dot, ".png") == 0) ||
+        (data_len > 8 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G')) {
+        return epub_decode_png(data, data_len, max_w, max_h, out_buf, out_w, out_h);
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+/** live 缓存发布（仅 LVGL 线程调用；旧缓冲在 LVGL 线程释放——刷新串行保证
+ * 上一张图已绘制完成）。 */
+static void epub_image_publish(int img_id, uint8_t *buf, int w, int h) {
+    epub_image_cache_free();
+    s_epub.img_buf = buf;
+    memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
+    s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_epub.img_dsc.header.w = w;
+    s_epub.img_dsc.header.h = h;
+    s_epub.img_dsc.header.stride = w * 2;
+    s_epub.img_dsc.data_size = (uint32_t)(w * h * 2);
+    s_epub.img_dsc.data = buf;
+    s_epub.img_cached_id = img_id;
+}
+
 esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
                                         const lv_image_dsc_t **out_dsc) {
     if (!s_epub.open || s_epub.cur_ch < 0 || out_dsc == NULL) {
@@ -2557,50 +2700,91 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
     if (img_id < 0 || img_id >= s_epub.ch_image_cnt) {
         return ESP_ERR_INVALID_ARG;
     }
+    /* live 缓存命中（上次 worker 解码结果） */
     if (img_id == s_epub.img_cached_id && s_epub.img_buf != NULL) {
         *out_dsc = &s_epub.img_dsc;
         return ESP_OK;
     }
-    epub_image_cache_free();
-
+    /* worker 可用：投递解码请求，渲染先出占位，解码完成后 poll 重渲染 */
+    if (epub_worker_available()) {
+        bool post = false;
+        xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+        if (!(s_img_req_pending && s_img_req_id == img_id && s_img_req_w == max_w &&
+              s_img_req_h == max_h)) {
+            s_img_req_id = img_id;
+            s_img_req_w = max_w;
+            s_img_req_h = max_h;
+            s_img_req_pending = true;
+            post = true;
+        }
+        xSemaphoreGive(s_slot_mutex);
+        if (post) {
+            xSemaphoreGive(s_img_sem);
+        }
+        return ESP_ERR_NOT_FINISHED; /* 解码中：渲染占位 */
+    }
+    /* 降级：LVGL 线程内联解码（阻塞但功能可用） */
     char name[600];
     if (!epub_zip_ent_name(&s_epub.zip, s_epub.ch_images[img_id], name, sizeof(name))) {
         return ESP_ERR_NOT_FOUND;
     }
-    const int zi = s_epub.ch_images[img_id];
-    char *data = NULL;
+    uint8_t *data = NULL;
     size_t data_len = 0;
-    esp_err_t err = epub_zip_extract(&s_epub.zip, zi, &data, &data_len);
+    esp_err_t err = epub_zip_extract(&s_epub.zip, s_epub.ch_images[img_id], (char **)&data,
+                                     &data_len);
     if (err != ESP_OK) {
         return err;
     }
-
-    memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
-    s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-    const char *dot = strrchr(name, '.');
-    if (dot != NULL && (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0)) {
-        err = epub_decode_jpeg((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (dot != NULL && strcasecmp(dot, ".png") == 0) {
-        err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (data_len > 3 && (uint8_t)data[0] == 0xFF && (uint8_t)data[1] == 0xD8) {
-        err = epub_decode_jpeg((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (data_len > 8 && (uint8_t)data[1] == 'P' && (uint8_t)data[2] == 'N' &&
-               (uint8_t)data[3] == 'G') {
-        err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
-    } else {
-        err = ESP_ERR_NOT_SUPPORTED;
-    }
+    uint8_t *buf = NULL;
+    int dw = 0, dh = 0;
+    const uint32_t t0 = xTaskGetTickCount();
+    err = epub_image_decode_dispatch(name, data, data_len, max_w, max_h, &buf, &dw, &dh);
     heap_caps_free(data);
     if (err != ESP_OK) {
         return err;
     }
-    s_epub.img_dsc.header.stride = s_epub.img_dsc.header.w * 2;
-    s_epub.img_dsc.data_size = (uint32_t)(s_epub.img_dsc.header.w * s_epub.img_dsc.header.h * 2);
-    s_epub.img_dsc.data = s_epub.img_buf;
-    s_epub.img_cached_id = img_id;
+    epub_image_publish(img_id, buf, dw, dh);
+    ESP_LOGW(TAG, "epub: image %d decoded inline (%dx%d, %u ms) - worker unavailable", img_id, dw,
+             dh, (unsigned)pdTICKS_TO_MS(xTaskGetTickCount() - t0));
     *out_dsc = &s_epub.img_dsc;
-    ESP_LOGI(TAG, "epub: image %d decoded (%dx%d)", img_id, s_epub.img_dsc.header.w,
-             s_epub.img_dsc.header.h);
     return ESP_OK;
 }
+
+bool espaperplay_reader_epub_image_poll(int expect_id) {
+    if (s_slot_mutex == NULL) {
+        return false;
+    }
+    uint8_t *buf = NULL;
+    int id = -1, w = 0, h = 0;
+    bool done = false;
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    if (s_img_done_pending) {
+        s_img_done_pending = false;
+        id = s_img_done_id;
+        buf = s_img_done_buf;
+        w = s_img_done_w;
+        h = s_img_done_h;
+        done = true;
+    }
+    xSemaphoreGive(s_slot_mutex);
+    if (!done) {
+        return false;
+    }
+    if (id != expect_id || buf == NULL) {
+        heap_caps_free(buf); /* 页面已翻走 / 解码失败：丢弃 */
+        return false;
+    }
+    epub_image_publish(id, buf, w, h);
+    return true;
+}
+
+void espaperplay_reader_epub_image_cancel(void) {
+    if (s_slot_mutex == NULL) {
+        return;
+    }
+    xSemaphoreTake(s_slot_mutex, portMAX_DELAY);
+    s_img_req_pending = false; /* 撤销未开始的请求 */
+    xSemaphoreGive(s_slot_mutex);
+}
+
 #endif
