@@ -308,8 +308,8 @@ static bool reader_pstarts_init(int ch) {
     s_pstart_cnt = 1;
     s_paginate_t0 = lv_tick_get();
 
-    /* 分页缓存：命中则整章页边界即刻就绪（省去 FreeType 逐行测量） */
-    if (espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB) {
+    /* 分页缓存：命中则整章页边界即刻就绪（省去 FreeType 逐行测量；TXT/EPUB 通用） */
+    {
         uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint32_t),
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cap * sizeof(uint16_t),
@@ -542,9 +542,8 @@ static bool rdr_advance_page(void) {
             s_pstart_ch < s_chapter_cnt && s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
             s_ch_pages[s_pstart_ch] = (uint32_t)s_pstart_cnt;
         }
-        /* 分页缓存异步落盘（EPUB；字号/内容区变化经 font_key 自动失效） */
-        if (reached_end && espaperplay_reader_get_fmt() == ESPAPERPLAY_READER_FMT_EPUB &&
-            s_pstart_ch >= 0 && s_pstart_cnt > 1) {
+        /* 分页缓存异步落盘（字号/内容区变化经 font_key 自动失效） */
+        if (reached_end && s_pstart_ch >= 0 && s_pstart_cnt > 1) {
             uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint32_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint16_t),

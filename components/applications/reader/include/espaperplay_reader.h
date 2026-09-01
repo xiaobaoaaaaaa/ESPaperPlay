@@ -170,13 +170,17 @@ const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt);
 esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
                                    const lv_image_dsc_t **out_dsc);
 
-/* ---------------- 分页数据 SD 缓存（EPUB 专用；TXT 为 no-op） ---------------- */
+/* ---------------- 分页数据 SD 缓存（TXT / EPUB 通用） ---------------- */
 
-/** 读取章节分页缓存；返回页数（>0 命中，0=无，<0=失败）。详见 reader_epub.h。 */
+/**
+ * @brief 读取章节分页缓存（TXT 章节号恒为 0；键含书指纹 + 版式指纹）。
+ *
+ * @return 页数（>0 命中）；0=无缓存；<0=读取失败或 -所需容量（扩表重读）。
+ */
 int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
                                   uint16_t *lines, int max_cnt);
 
-/** 异步保存章节分页缓存（worker 落盘）。 */
+/** 异步保存章节分页缓存（内部 worker 落盘）。 */
 void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
                                          const uint32_t *blocks, const uint16_t *lines);
 

@@ -18,6 +18,7 @@
 #include "espaperplay_config.h"
 #include "espaperplay_reader_epub.h"
 #include "espaperplay_reader_history.h"
+#include "espaperplay_reader_pagen.h"
 #include "espaperplay_reader_txt.h"
 #include "espaperplay_storage.h"
 
@@ -34,6 +35,7 @@ static int s_txt_block_cnt = 0;
 
 static espaperplay_reader_fmt_t s_fmt = ESPAPERPLAY_READER_FMT_NONE;
 static char s_path[256] = {0}; /*!< 当前文档绝对路径 */
+static uint32_t s_txt_token = 0; /*!< TXT 书指纹（分页缓存键；EPUB 用 epub 模块的 token） */
 static char s_title[128] = {0};
 static bool s_open = false;    /*!< 是否已打开 */
 
@@ -155,6 +157,18 @@ static esp_err_t reader_open_txt(const char *abs_path, size_t file_size) {
     if (dot != NULL) {
         *dot = '\0';
     }
+
+    /* 书指纹：路径哈希 ^ mtime ^ size（分页缓存键；文件变更自动失效） */
+    struct stat st;
+    uint32_t token = 1073741827u;
+    for (const char *c = abs_path; *c != '\0'; c++) {
+        token = (token ^ (uint32_t)(unsigned char)*c) * 16777619u; /* FNV-1a */
+    }
+    if (stat(abs_path, &st) == 0) {
+        token ^= (uint32_t)st.st_mtime ^ (uint32_t)st.st_size;
+    }
+    s_txt_token = token;
+
     strlcpy(s_path, abs_path, sizeof(s_path));
     s_open = true;
 
@@ -272,18 +286,22 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
 
 int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
                                   uint16_t *lines, int max_cnt) {
-    if (!s_open || s_fmt != ESPAPERPLAY_READER_FMT_EPUB) {
+    if (!s_open) {
         return 0;
     }
-    return espaperplay_reader_epub_pagen_load(chapter, font_key, blocks, lines, max_cnt);
+    const uint32_t token =
+        s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_token() : s_txt_token;
+    return espaperplay_pagen_load(token, chapter, font_key, blocks, lines, max_cnt);
 }
 
 void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
                                          const uint32_t *blocks, const uint16_t *lines) {
-    if (!s_open || s_fmt != ESPAPERPLAY_READER_FMT_EPUB) {
+    if (!s_open) {
         return;
     }
-    espaperplay_reader_epub_pagen_save_async(chapter, font_key, cnt, blocks, lines);
+    const uint32_t token =
+        s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_token() : s_txt_token;
+    espaperplay_pagen_save_async(token, chapter, font_key, cnt, blocks, lines);
 }
 
 esp_err_t espaperplay_reader_get_text(const char **out_buf, size_t *out_len) {
