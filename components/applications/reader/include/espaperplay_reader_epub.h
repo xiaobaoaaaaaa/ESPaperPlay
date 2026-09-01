@@ -66,8 +66,18 @@ bool espaperplay_reader_epub_is_open(void);
 /** 书名（OPF dc:title；无则空串）。生命周期至 close。 */
 const char *espaperplay_reader_epub_title(void);
 
-/** 章节数（spine 中的 XHTML 文档数）。 */
+/** 章节数（目录项数；无目录时 = spine 文档数）。 */
 int espaperplay_reader_epub_chapter_count(void);
+
+/**
+ * @brief 获取章节的目录标题（打开时已从目录解析，无需装载章节）。
+ *
+ * @param idx  章节号（0 基）。
+ * @param buf  输出缓冲（NUL 结尾）。
+ * @param len  缓冲长度。
+ * @return 有非空标题返回 true；无目录 / 空标题 / 越界返回 false。
+ */
+bool espaperplay_reader_epub_toc_title(int idx, char *buf, size_t len);
 
 /**
  * @brief 加载并驻留一个章节（XHTML 解析为块模型）。

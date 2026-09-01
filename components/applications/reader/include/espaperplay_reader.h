@@ -124,6 +124,13 @@ const char *espaperplay_reader_get_title(void);
 int espaperplay_reader_chapter_count(void);
 
 /**
+ * @brief 获取章节的目录标题（打开时已解析，无需装载章节；TXT 返回书名）。
+ *
+ * @return 有非空标题返回 true；无 / 空标题返回 false（调用方显示“第 N 章”）。
+ */
+bool espaperplay_reader_toc_title(int idx, char *buf, size_t len);
+
+/**
  * @brief 加载并驻留一个章节（TXT 仅支持 0）。
  *
  * 同一时刻仅驻留一个章节；再次调用释放上一章。EPUB 章节正文按需解压解析。

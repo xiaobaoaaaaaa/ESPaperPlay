@@ -148,6 +148,9 @@ static lv_point_t s_touch_last = {0, 0};
 
 /* 前向声明 */
 static void reader_show_page(int ch, int local);
+static void reader_toc_close(void);
+static void reader_toc_open(void);
+static void reader_toc_row_cb(lv_event_t *e);
 static void reader_footer_update(void);
 static void reader_bar_close(void);
 static void reader_jump_open(void);
@@ -1157,11 +1160,26 @@ typedef enum {
     READER_BAR_PREV = 0,
     READER_BAR_NEXT,
     READER_BAR_JUMP,
+    READER_BAR_TOC,
     READER_BAR_FONT_DOWN,
     READER_BAR_FONT_UP,
     READER_BAR_GRAY4,
     READER_BAR_BACK,
 } reader_bar_action_t;
+
+/* ---- 目录覆盖层 ---- */
+#define READER_TOC_ROW_H 38
+#define READER_TOC_MAX_ROWS 12
+static lv_obj_t *s_toc_overlay = NULL;   /*!< 目录全屏覆盖层（NULL=未打开） */
+static lv_obj_t *s_toc_rows[READER_TOC_MAX_ROWS];
+static int s_toc_row_ch[READER_TOC_MAX_ROWS]; /*!< 行 → 章节号（-1=空行） */
+static int s_toc_row_cnt = 0;
+static lv_obj_t *s_toc_page_label = NULL;
+static lv_obj_t *s_toc_prev = NULL;
+static lv_obj_t *s_toc_next = NULL;
+static int s_toc_page = 0;
+static int s_toc_page_cnt = 1;
+static int s_toc_per_page = 8;
 
 static void reader_bar_action_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -1175,6 +1193,10 @@ static void reader_bar_action_cb(lv_event_t *e) {
         break;
     case READER_BAR_JUMP:
         reader_jump_open();
+        break;
+    case READER_BAR_TOC:
+        reader_bar_close();
+        reader_toc_open();
         break;
     case READER_BAR_FONT_DOWN:
         reader_set_font(s_font_idx - 1);
@@ -1288,8 +1310,11 @@ static void reader_bar_open(void) {
     reader_bar_button(s_bar_panel, "▶", pad + 2 * (w1 + gap), y, w1, bh, READER_BAR_NEXT);
     y += bh + gap;
 
-    const int w2 = (pw - 2 * pad - 3 * gap) / 4;
+    /* 行 2：目录 / A- / A+ / 灰度 / 返回（5 键） */
+    const int w2 = (pw - 2 * pad - 4 * gap) / 5;
     int x = pad;
+    reader_bar_button(s_bar_panel, "目录", x, y, w2, bh, READER_BAR_TOC);
+    x += w2 + gap;
     reader_bar_button(s_bar_panel, "A-", x, y, w2, bh, READER_BAR_FONT_DOWN);
     x += w2 + gap;
     reader_bar_button(s_bar_panel, "A+", x, y, w2, bh, READER_BAR_FONT_UP);
@@ -1308,6 +1333,224 @@ static void reader_bar_toggle(void) {
     } else {
         reader_bar_open();
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* 目录覆盖层（分页列表 + 点击跳转）                                      */
+/* ------------------------------------------------------------------ */
+
+static lv_obj_t *s_toc_panel = NULL; /*!< 目录白底面板（行挂载点） */
+
+/** 行点击：关闭目录并跳转到对应章首。 */
+static void reader_toc_row_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    const int ch = (int)(intptr_t)lv_event_get_user_data(e);
+    if (ch < 0 || ch >= espaperplay_reader_chapter_count()) {
+        return;
+    }
+    reader_toc_close();
+    reader_bar_close();
+    reader_show_page(ch, 0);
+    ESP_LOGI(TAG, "reader: toc jump -> chapter %d", ch + 1);
+}
+
+/** 按 s_toc_page 重建目录行（面板已存在）。 */
+static void reader_toc_build_rows(void) {
+    /* 清旧行 */
+    for (int i = 0; i < s_toc_row_cnt; i++) {
+        if (s_toc_rows[i] != NULL) {
+            lv_obj_del(s_toc_rows[i]);
+            s_toc_rows[i] = NULL;
+        }
+        s_toc_row_ch[i] = -1;
+    }
+    s_toc_row_cnt = 0;
+
+    const int total = espaperplay_reader_chapter_count();
+    const int row_w = lv_obj_get_width(s_toc_panel) - 24;
+    for (int i = 0; i < s_toc_per_page; i++) {
+        const int ch = s_toc_page * s_toc_per_page + i;
+        if (ch >= total) {
+            break;
+        }
+        char title[96];
+        char text[128];
+        if (espaperplay_reader_toc_title(ch, title, sizeof(title))) {
+            snprintf(text, sizeof(text), "%d. %s", ch + 1, title);
+        } else {
+            snprintf(text, sizeof(text), "%d. 第 %d 章", ch + 1, ch + 1);
+        }
+        lv_obj_t *row = lv_button_create(s_toc_panel);
+        lv_obj_set_size(row, row_w, READER_TOC_ROW_H - 8);
+        lv_obj_set_pos(row, 12, 36 + i * READER_TOC_ROW_H);
+        lv_obj_set_style_bg_color(row, lv_color_white(), 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_t *lbl = lv_label_create(row);
+        lv_label_set_text(lbl, text);
+        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+        lv_obj_set_style_text_font(lbl, s_font, 0);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(lbl, row_w - 8);
+        lv_obj_center(lbl);
+        lv_obj_add_event_cb(row, reader_toc_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)ch);
+        s_toc_rows[i] = row;
+        s_toc_row_ch[i] = ch;
+        s_toc_row_cnt = i + 1;
+    }
+
+    /* 页码与翻页按钮状态 */
+    char pl[24];
+    snprintf(pl, sizeof(pl), "%d / %d", s_toc_page + 1, s_toc_page_cnt);
+    lv_label_set_text(s_toc_page_label, pl);
+    lv_label_set_text(lv_obj_get_child(s_toc_prev, 0), s_toc_page > 0 ? "◀" : "─");
+    lv_label_set_text(lv_obj_get_child(s_toc_next, 0), s_toc_page + 1 < s_toc_page_cnt ? "▶" : "─");
+}
+
+/** 目录翻页按钮。 */
+static void reader_toc_page_btn_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    const intptr_t dir = e != NULL ? (intptr_t)lv_event_get_user_data(e) : 0;
+    const int np = s_toc_page + (int)dir;
+    if (np < 0 || np >= s_toc_page_cnt) {
+        return;
+    }
+    s_toc_page = np;
+    reader_toc_build_rows();
+}
+
+static void reader_toc_overlay_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    reader_toc_close();
+}
+
+static void reader_toc_close(void) {
+    if (s_toc_overlay != NULL) {
+        lv_obj_del(s_toc_overlay);
+        s_toc_overlay = NULL;
+    }
+    s_toc_panel = NULL;
+    for (int i = 0; i < READER_TOC_MAX_ROWS; i++) {
+        s_toc_rows[i] = NULL;
+        s_toc_row_ch[i] = -1;
+    }
+    s_toc_row_cnt = 0;
+    s_toc_page_label = NULL;
+    s_toc_prev = NULL;
+    s_toc_next = NULL;
+    s_toc_page = 0;
+}
+
+/** 打开目录覆盖层（底边栏触发；行点击跳章首，自动定位到当前章所在页）。 */
+static void reader_toc_open(void) {
+    int32_t scr_w = 0;
+    int32_t scr_h = 0;
+    reader_screen_size(&scr_w, &scr_h);
+    const int total = espaperplay_reader_chapter_count();
+    if (total <= 0) {
+        return;
+    }
+
+    reader_gray4_mode_set(false);
+
+    /* 全屏透明覆盖层：点空白关闭 */
+    s_toc_overlay = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_toc_overlay, scr_w, scr_h);
+    lv_obj_set_pos(s_toc_overlay, 0, 0);
+    lv_obj_set_style_bg_opa(s_toc_overlay, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_toc_overlay, 0, 0);
+    lv_obj_set_style_radius(s_toc_overlay, 0, 0);
+    lv_obj_set_style_pad_all(s_toc_overlay, 0, 0);
+    lv_obj_remove_flag(s_toc_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_toc_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_toc_overlay, reader_toc_overlay_cb, LV_EVENT_CLICKED, NULL);
+
+    /* 白底面板（状态栏与页码之间） */
+    const int margin = READER_MARGIN;
+    const int pw = scr_w - 2 * margin;
+    const int ph = scr_h - READER_STATUS_H - READER_FOOTER_H - 12;
+    s_toc_panel = lv_obj_create(s_toc_overlay);
+    lv_obj_set_size(s_toc_panel, pw, ph);
+    lv_obj_set_pos(s_toc_panel, margin, READER_STATUS_H + 6);
+    lv_obj_set_style_bg_color(s_toc_panel, lv_color_white(), 0);
+    lv_obj_set_style_border_color(s_toc_panel, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_toc_panel, 2, 0);
+    lv_obj_set_style_radius(s_toc_panel, 12, 0);
+    lv_obj_set_style_pad_all(s_toc_panel, 0, 0);
+    lv_obj_remove_flag(s_toc_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 标题 */
+    lv_obj_t *title = lv_label_create(s_toc_panel);
+    lv_label_set_text(title, "目录");
+    lv_obj_set_style_text_color(title, lv_color_black(), 0);
+    if (s_font != NULL) {
+        lv_obj_set_style_text_font(title, s_font, 0);
+    }
+    lv_obj_set_pos(title, 12, 8);
+
+    /* 每页行数由面板高度决定 */
+    const int list_top = 34;
+    const int nav_h = 44;
+    s_toc_per_page = (ph - list_top - nav_h) / READER_TOC_ROW_H;
+    if (s_toc_per_page < 1) {
+        s_toc_per_page = 1;
+    }
+    if (s_toc_per_page > READER_TOC_MAX_ROWS) {
+        s_toc_per_page = READER_TOC_MAX_ROWS;
+    }
+    s_toc_page_cnt = (total + s_toc_per_page - 1) / s_toc_per_page;
+    s_toc_page = s_ch / s_toc_per_page; /* 定位到当前章所在页 */
+    if (s_toc_page >= s_toc_page_cnt) {
+        s_toc_page = s_toc_page_cnt - 1;
+    }
+
+    /* 底部导航：◀ 页码 ▶ */
+    const int nav_y = ph - nav_h;
+    const int bw = 64;
+    s_toc_prev = lv_button_create(s_toc_panel);
+    lv_obj_set_size(s_toc_prev, bw, 36);
+    lv_obj_set_pos(s_toc_prev, 12, nav_y);
+    lv_obj_set_style_bg_color(s_toc_prev, lv_color_white(), 0);
+    lv_obj_set_style_border_color(s_toc_prev, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_toc_prev, 2, 0);
+    lv_obj_set_style_radius(s_toc_prev, 8, 0);
+    lv_obj_set_style_shadow_width(s_toc_prev, 0, 0);
+    lv_obj_t *pl1 = lv_label_create(s_toc_prev);
+    lv_label_set_text(pl1, "◀");
+    lv_obj_set_style_text_color(pl1, lv_color_black(), 0);
+    lv_obj_set_style_text_font(pl1, s_font, 0);
+    lv_obj_center(pl1);
+    lv_obj_add_event_cb(s_toc_prev, reader_toc_page_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)-1);
+
+    s_toc_page_label = lv_label_create(s_toc_panel);
+    char pl[24];
+    snprintf(pl, sizeof(pl), "%d / %d", s_toc_page + 1, s_toc_page_cnt);
+    lv_label_set_text(s_toc_page_label, pl);
+    lv_obj_set_style_text_color(s_toc_page_label, lv_color_black(), 0);
+    lv_obj_set_style_text_font(s_toc_page_label, s_font, 0);
+    lv_obj_set_width(s_toc_page_label, pw - 2 * bw - 32);
+    lv_obj_set_style_text_align(s_toc_page_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_toc_page_label, 12 + bw + 4, nav_y + 8);
+
+    s_toc_next = lv_button_create(s_toc_panel);
+    lv_obj_set_size(s_toc_next, bw, 36);
+    lv_obj_set_pos(s_toc_next, pw - 12 - bw, nav_y);
+    lv_obj_set_style_bg_color(s_toc_next, lv_color_white(), 0);
+    lv_obj_set_style_border_color(s_toc_next, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_toc_next, 2, 0);
+    lv_obj_set_style_radius(s_toc_next, 8, 0);
+    lv_obj_set_style_shadow_width(s_toc_next, 0, 0);
+    lv_obj_t *pl2 = lv_label_create(s_toc_next);
+    lv_label_set_text(pl2, "▶");
+    lv_obj_set_style_text_color(pl2, lv_color_black(), 0);
+    lv_obj_set_style_text_font(pl2, s_font, 0);
+    lv_obj_center(pl2);
+    lv_obj_add_event_cb(s_toc_next, reader_toc_page_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)+1);
+
+    reader_toc_build_rows();
+    ESP_LOGI(TAG, "reader: toc open (%d chapter(s), %d page(s))", total, s_toc_page_cnt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1637,6 +1880,8 @@ static void reader_enter(void) {
     s_bar_page_label = NULL;
     s_jump_modal = NULL;
     s_jump_ta = NULL;
+    s_toc_overlay = NULL;
+    s_toc_panel = NULL;
     s_gray4_timer = NULL;
     s_loading_modal = NULL;
     s_loading_timer = NULL;
@@ -1737,6 +1982,7 @@ static void reader_exit(void) {
         s_jump_modal = NULL;
         s_jump_ta = NULL;
     }
+    reader_toc_close();
     if (s_gray4_timer != NULL) {
         lv_timer_delete(s_gray4_timer);
         s_gray4_timer = NULL;
@@ -1763,7 +2009,9 @@ static void reader_on_key(const espaperplay_input_event_t *event) {
     }
     switch (event->key_action) {
     case ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK:
-        if (s_jump_modal != NULL) {
+        if (s_toc_overlay != NULL) {
+            reader_toc_close();
+        } else if (s_jump_modal != NULL) {
             reader_jump_close();
         } else if (s_bar_overlay != NULL) {
             reader_bar_close();
@@ -1772,12 +2020,12 @@ static void reader_on_key(const espaperplay_input_event_t *event) {
         }
         break;
     case ESPAPERPLAY_INPUT_KEY_ACTION_DOUBLE_CLICK:
-        if (s_bar_overlay == NULL && s_jump_modal == NULL) {
+        if (s_bar_overlay == NULL && s_jump_modal == NULL && s_toc_overlay == NULL) {
             reader_prev_page();
         }
         break;
     case ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_START:
-        if (s_bar_overlay == NULL && s_jump_modal == NULL) {
+        if (s_bar_overlay == NULL && s_jump_modal == NULL && s_toc_overlay == NULL) {
             reader_do_gray4_once();
         }
         break;
@@ -1793,7 +2041,7 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
     lv_point_t p;
     espaperplay_ui_touch_map_to_lv(event->point.x, event->point.y, &p);
 
-    if (s_bar_overlay != NULL || s_jump_modal != NULL) {
+    if (s_bar_overlay != NULL || s_jump_modal != NULL || s_toc_overlay != NULL) {
         return;
     }
 

@@ -2540,6 +2540,18 @@ const char *espaperplay_reader_epub_title(void) { return s_epub.title; }
 
 int espaperplay_reader_epub_chapter_count(void) { return s_epub.open ? s_epub.chap_cnt : 0; }
 
+bool espaperplay_reader_epub_toc_title(int idx, char *buf, size_t len) {
+    if (buf == NULL || len == 0) {
+        return false;
+    }
+    buf[0] = '\0';
+    if (!s_epub.open || idx < 0 || idx >= s_epub.chap_cnt || s_epub.chap_titles == NULL) {
+        return false;
+    }
+    strlcpy(buf, s_epub.chap_titles[idx], len);
+    return buf[0] != '\0'; /* 空标题（如目录缺失的退化模式）返回 false */
+}
+
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
 
 /* ---------------- SD 解析缓存 ---------------- */

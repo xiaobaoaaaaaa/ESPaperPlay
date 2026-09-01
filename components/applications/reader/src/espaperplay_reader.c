@@ -182,6 +182,20 @@ int espaperplay_reader_chapter_count(void) {
     return s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_chapter_count() : 1;
 }
 
+bool espaperplay_reader_toc_title(int idx, char *buf, size_t len) {
+    if (!s_open || buf == NULL || len == 0) {
+        return false;
+    }
+    if (s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
+        return espaperplay_reader_epub_toc_title(idx, buf, len);
+    }
+    if (idx != 0) {
+        return false;
+    }
+    strlcpy(buf, s_title, len); /* TXT 单章：目录项即书名 */
+    return buf[0] != '\0';
+}
+
 esp_err_t espaperplay_reader_load_chapter(int idx) {
     if (!s_open) {
         return ESP_ERR_INVALID_STATE;
