@@ -148,6 +148,17 @@ static lv_font_t *home_font(int size_px) {
     return espaperplay_fonts_load(HOME_FONT_NAME, (uint32_t)size_px, ESPAPERPLAY_FONT_STYLE_NORMAL);
 }
 
+/** 时钟字号按屏宽自适应：窄屏缩小防溢出。 */
+static int home_clock_font_px(int32_t scr_w) {
+    if (scr_w >= 400) {
+        return 80;
+    }
+    if (scr_w >= 300) {
+        return 56;
+    }
+    return 40;
+}
+
 /** 通用标签创建：白底黑字 + FreeType 字体 + 给定对齐。 */
 static lv_obj_t *home_label_create(lv_obj_t *parent, const char *text, int font_px,
                                    lv_text_align_t align) {
@@ -219,10 +230,14 @@ static int home_clock_area_h(int32_t avail_h) {
 
 /** 时钟区构建：行距按实际占用高度相对基准等比收缩。 */
 static void home_clock_area_create(lv_obj_t *scr, int x, int y, int area_h) {
-    s_clock_h = home_label_create(scr, "--", 80, LV_TEXT_ALIGN_LEFT);
+    int32_t scr_w, scr_h;
+    home_screen_size(&scr_w, &scr_h);
+    const int clock_px = home_clock_font_px(scr_w);
+
+    s_clock_h = home_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_clock_h, x, y);
 
-    s_clock_m = home_label_create(scr, "--", 80, LV_TEXT_ALIGN_LEFT);
+    s_clock_m = home_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_clock_m, x, y + area_h * 90 / HOME_CLOCK_AREA_H_BASE);
 
     s_week_label = home_label_create(scr, "---", 20, LV_TEXT_ALIGN_LEFT);
@@ -358,8 +373,9 @@ static void home_page1_create(lv_obj_t *scr) {
     lv_obj_remove_flag(s_page1, LV_OBJ_FLAG_SCROLLABLE);
 
     const int32_t area_h = scr_h - HOME_STATUS_H_PX;
+    const int clock_px = home_clock_font_px(scr_w);
 
-    s_clock_big = home_label_create(s_page1, "--:--", 80, LV_TEXT_ALIGN_CENTER);
+    s_clock_big = home_label_create(s_page1, "--:--", clock_px, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_clock_big, 0, area_h * 13 / 100);
 
     s_info_date = home_label_create(s_page1, "", 20, LV_TEXT_ALIGN_CENTER);

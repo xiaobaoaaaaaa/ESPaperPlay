@@ -395,12 +395,12 @@ static const settings_subgroup_t s_dev_subgroups[] = {
 
 static const settings_subgroup_t s_sys_subgroups[] = {
     {"网络", 4, 3},
-    {"字体", 6, 1},
-    {"开发者", 7, 2},
+    {"字体", 7, 1},
+    {"开发者", 8, 2},
 };
 
 static const settings_subgroup_t s_svc_subgroups[] = {
-    {"天气", 9, 3},
+    {"天气", 10, 3},
 };
 
 /* 全部大类（顺序即显示顺序）。 */
@@ -661,14 +661,15 @@ static void settings_row_create(lv_obj_t *parent, settings_row_t *row, int x, in
     lv_obj_remove_flag(row_obj, LV_OBJ_FLAG_SCROLLABLE);
     row->row_obj = row_obj;
 
-    /* 名称（左，垂直居中与右侧值对齐） */
+    /* 名称（左，垂直居中与右侧值对齐）；值标签宽度随屏宽缩放防窄屏溢出 */
+    const int value_w = w < 300 ? w / 3 : (w < 400 ? 140 : 160);
     lv_obj_t *name = settings_label_create(row_obj, row->name, 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_width(name, w - 170);
+    lv_obj_set_width(name, w - value_w - 8);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 4, 0);
 
     /* 值（右，垂直居中，超长省略号截断） */
     lv_obj_t *value = settings_label_create(row_obj, "", 16, LV_TEXT_ALIGN_RIGHT);
-    lv_obj_set_width(value, 160);
+    lv_obj_set_width(value, value_w);
     lv_obj_align(value, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
     row->value_label = value;

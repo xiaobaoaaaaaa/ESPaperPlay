@@ -382,8 +382,8 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     /* 温度大字（96px）：文本右对齐；°C 与体感（两行）文本左对齐，
      * 三者组成一个块并整体居中于屏宽（temp_w + 间隔 + side_w），
      * 适配任意分辨率；体感第二行（温度值）底部与温度大字底部对齐 */
-    const int temp_w = 170;
-    const int side_w = 120;
+    const int temp_w = w >= 400 ? 170 : (w * 42 / 100);
+    const int side_w = w >= 400 ? 120 : (w - temp_w - 8);
     const int temp_h = 120; /* 96px 行高估算 */
     const int feel_h = 58;  /* 两行 20px 高 */
     const int block_w = temp_w + 8 + side_w;
