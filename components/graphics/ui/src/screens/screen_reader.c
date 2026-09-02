@@ -1341,6 +1341,35 @@ static void reader_bar_toggle(void) {
 
 static lv_obj_t *s_toc_panel = NULL; /*!< 目录白底面板（行挂载点） */
 
+/**
+ * 按行宽单行截断文本（原地；UTF-8 边界 + 省略号）。
+ *
+ * CJK 字符宽 ≈ 字号像素，按字号估算可容纳字符数（ASCII 偏保守早截断）；
+ * 不依赖 LV_LABEL_LONG_DOT——CJK 长串在点号模式下渲染异常。
+ */
+static void reader_toc_fit_one_line(char *text, size_t len, int row_w) {
+    const int px = reader_base_size() > 0 ? reader_base_size() : 20;
+    int max_chars = (row_w - 8) / px;
+    if (max_chars < 4) {
+        max_chars = 4;
+    }
+    int chars = 0;
+    size_t bytes = 0;
+    while (text[bytes] != '\0') {
+        if (chars >= max_chars - 1) {
+            /* 还有剩余内容：在此截断并加省略号 */
+            if (text[bytes] != '\0') {
+                text[bytes] = '\0';
+                strlcat(text, "…", len);
+            }
+            return;
+        }
+        const unsigned char c = (unsigned char)text[bytes];
+        bytes += (size_t)(c < 0x80 ? 1 : ((c >> 5) == 0x6 ? 2 : ((c >> 4) == 0xE ? 3 : 4)));
+        chars++;
+    }
+}
+
 /** 行点击：关闭目录并跳转到对应章首。 */
 static void reader_toc_row_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -1374,12 +1403,13 @@ static void reader_toc_build_rows(void) {
             break;
         }
         char title[96];
-        char text[128];
+        char text[160];
         if (espaperplay_reader_toc_title(ch, title, sizeof(title))) {
             snprintf(text, sizeof(text), "%d. %s", ch + 1, title);
         } else {
             snprintf(text, sizeof(text), "%d. 第 %d 章", ch + 1, ch + 1);
         }
+        reader_toc_fit_one_line(text, sizeof(text), row_w);
         lv_obj_t *row = lv_button_create(s_toc_panel);
         lv_obj_set_size(row, row_w, READER_TOC_ROW_H - 8);
         lv_obj_set_pos(row, 12, 36 + i * READER_TOC_ROW_H);
@@ -1392,7 +1422,7 @@ static void reader_toc_build_rows(void) {
         lv_label_set_text(lbl, text);
         lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
         lv_obj_set_style_text_font(lbl, s_font, 0);
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(lbl, row_w - 8);
         lv_obj_center(lbl);
         lv_obj_add_event_cb(row, reader_toc_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)ch);
