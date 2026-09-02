@@ -1179,6 +1179,7 @@ static lv_obj_t *s_toc_next = NULL;
 static int s_toc_page = 0;
 static int s_toc_page_cnt = 1;
 static int s_toc_per_page = 8;
+static int s_toc_row_w = 0;       /*!< 行宽（打开时算术求得；新面板坐标未布局前读宽为 0） */
 
 static void reader_bar_action_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -1366,7 +1367,7 @@ static void reader_toc_build_rows(void) {
     s_toc_row_cnt = 0;
 
     const int total = espaperplay_reader_chapter_count();
-    const int row_w = lv_obj_get_width(s_toc_panel) - 24;
+    const int row_w = s_toc_row_w; /* 布局前面板读宽为 0，须用算术值 */
     for (int i = 0; i < s_toc_per_page; i++) {
         const int ch = s_toc_page * s_toc_per_page + i;
         if (ch >= total) {
@@ -1470,6 +1471,7 @@ static void reader_toc_open(void) {
     const int margin = READER_MARGIN;
     const int pw = scr_w - 2 * margin;
     const int ph = scr_h - READER_STATUS_H - READER_FOOTER_H - 12;
+    s_toc_row_w = pw - 24; /* 行左右各留 12；此刻面板坐标未布局，不可读宽 */
     s_toc_panel = lv_obj_create(s_toc_overlay);
     lv_obj_set_size(s_toc_panel, pw, ph);
     lv_obj_set_pos(s_toc_panel, margin, READER_STATUS_H + 6);
