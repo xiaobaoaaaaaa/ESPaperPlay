@@ -311,11 +311,15 @@ static void rdh_build_rows(void) {
             rdh_disp(rdh_basename(s_hist[idx].path), title, sizeof(title));
             const unsigned hch = (unsigned)(s_hist[idx].page >> 20);
             const unsigned hlp = (unsigned)(s_hist[idx].page & 0xFFFFF);
-            if (hch > 0 && s_hist[idx].total > 0) {
-                snprintf(sub, sizeof(sub), "第%u章 %u/%u页", hch + 1, hlp + 1,
-                         (unsigned)s_hist[idx].total);
+            /* 新格式（EPUB）：total = bit31 | 章内总页数 → 「第 N 章 x/y 页」
+             *（x/y 同为章内页号，自洽）；旧格式无章内总数，只显示页号 */
+            const bool has_ch_total =
+                (s_hist[idx].total & 0x80000000u) != 0 && hch > 0;
+            const unsigned hlt = s_hist[idx].total & 0x7FFFFFFFu;
+            if (has_ch_total && hlt > 0) {
+                snprintf(sub, sizeof(sub), "第%u章 %u/%u页", hch + 1, hlp + 1, hlt);
             } else if (hch > 0) {
-                snprintf(sub, sizeof(sub), "第%u章 %u页", hch + 1, hlp + 1);
+                snprintf(sub, sizeof(sub), "第%u章 第%u页", hch + 1, hlp + 1);
             } else if (s_hist[idx].total > 0) {
                 snprintf(sub, sizeof(sub), "第 %u / %u 页", hlp + 1, (unsigned)s_hist[idx].total);
             } else {

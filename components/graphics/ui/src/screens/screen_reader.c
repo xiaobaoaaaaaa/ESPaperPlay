@@ -1976,12 +1976,30 @@ static void reader_exit(void) {
         const char *path = espaperplay_reader_get_path();
         const int gtotal = reader_global_total();
         if (path != NULL) {
-            /* 进度存打包位置（章 << 20 | 章内页）：恢复无需预数前缀章节 */
+            /* 进度存打包位置（章 << 20 | 章内页）：恢复无需预数前缀章节。
+             * EPUB 的 total 打包为 bit31 | 章内总页数——主页才能显示自洽的
+             * 「第 N 章 x/y 页」（y 是章内页数，与全书页数不可比）；
+             * TXT 无章节概念，total 仍存全书页数。 */
             const uint32_t page = ((uint32_t)s_ch << 20) | (uint32_t)s_local_page;
-            const uint32_t total = gtotal >= 0 ? (uint32_t)gtotal : 0;
+            uint32_t ch_lt = 0; /* 视图章的章内总页数（可能被计数换出） */
+            if (reader_view_resident()) {
+                const int lt = reader_local_total();
+                if (lt >= 0) {
+                    ch_lt = (uint32_t)lt;
+                }
+            } else if (s_ch_pages != NULL && s_ch < s_chapter_cnt &&
+                       s_ch_pages[s_ch] != READER_CH_PAGES_UNSET) {
+                ch_lt = s_ch_pages[s_ch];
+            }
+            uint32_t total;
+            if (s_chapter_cnt > 1) {
+                total = 0x80000000u | (ch_lt & 0x7FFFFFFFu);
+            } else {
+                total = gtotal >= 0 ? (uint32_t)gtotal : 0;
+            }
             (void)espaperplay_reader_history_update(path, page, total);
-            ESP_LOGI(TAG, "reader: save progress ch %u page %u (global total %d)",
-                     (unsigned)s_ch + 1, (unsigned)s_local_page + 1, gtotal);
+            ESP_LOGI(TAG, "reader: save progress ch %u page %u (ch total %u, global %d)",
+                     (unsigned)s_ch + 1, (unsigned)s_local_page + 1, (unsigned)ch_lt, gtotal);
         }
     }
     if (s_total_timer != NULL) {
