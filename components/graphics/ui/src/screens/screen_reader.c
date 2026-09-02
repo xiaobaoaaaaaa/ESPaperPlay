@@ -1601,9 +1601,7 @@ static void reader_jump_ok_cb(lv_event_t *e) {
         }
         cum += cnt;
     }
-    if (ch == s_chapter_cnt - 1 && s_ch_pages[ch] > 0) {
-        local = (int)(s_ch_pages[ch] - 1);
-    }
+    /* 无需末页钳制：p ≤ total 时循环已给出正确章内页号（p == total 即末页） */
     reader_show_page(ch, local);
 }
 
