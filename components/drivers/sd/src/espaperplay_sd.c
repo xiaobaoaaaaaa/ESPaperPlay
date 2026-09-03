@@ -13,8 +13,7 @@
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h" /* SDMMC 主机（SDIO）驱动，legacy 公共 API */
 
-#include "sd_protocol_defs.h" /* SD/MMC 命令号定义（MMC_GO_IDLE_STATE 等） */
-#include "sdmmc_cmd.h"        /* 卡片级 API：sdmmc_card_init / 扇区读写 / 信息打印 */
+#include "sdmmc_cmd.h" /* 卡片级 API：sdmmc_card_init / 扇区读写 / 信息打印 */
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -31,11 +30,11 @@ static const char *TAG = "ESPaperPlay_SD";
  * 内部状态
  * ==================================================================== */
 
-static sdmmc_host_t s_host;       /*!< SDMMC 主机配置（SDMMC_HOST_DEFAULT + 板级参数） */
-static sdmmc_card_t s_card;       /*!< 卡片信息（sdmmc_card_init 填充，内部已清零+拷贝 host） */
-static bool s_host_ready = false; /*!< 主机已初始化（sdmmc_host_init） */
-static bool s_slot_ready = false; /*!< 槽位已初始化（sdmmc_host_init_slot） */
-static bool s_card_ready = false; /*!< 卡片已探测成功（sdmmc_card_init） */
+static sdmmc_host_t s_host;        /*!< SDMMC 主机配置（SDMMC_HOST_DEFAULT + 板级参数） */
+static sdmmc_card_t s_card;        /*!< 卡片信息（sdmmc_card_init 填充，内部已清零+拷贝 host） */
+static bool s_host_ready = false;  /*!< 主机已初始化（sdmmc_host_init） */
+static bool s_slot_ready = false;  /*!< 槽位已初始化（sdmmc_host_init_slot） */
+static bool s_card_ready = false;  /*!< 卡片已探测成功（sdmmc_card_init） */
 
 /* ====================================================================
  * 电源轨
@@ -74,33 +73,6 @@ static esp_err_t sd_power_rail_disable(void) {
     return ESP_OK;
 }
 
-/**
- * @brief 发送 CMD0（GO_IDLE_STATE）让卡片回到空闲态——协议级"模拟断电"。
- *
- * 硬件尚未配备负载开关，无法真正切断 SD 卡电源；此处在停止主机前先发
- * CMD0 把卡片复位到 idle 态。前提是所有写操作均已完成：FatFs 侧由
- * f_sync / f_mount(NULL) 保证，SDMMC 侧 sdmmc_write_sectors 本身阻塞等待
- * 卡片 busy 结束后才返回。复位后卡片不再持有任何事务状态，与断电重启后
- * 的初始状态等效；未来接入负载开关后，同一代码路径即可平滑过渡为真实
- * 下电（CMD0 → 停主机 → 切电源轨）。
- *
- * 发送方式与 IDF 内部 sdmmc_send_cmd_go_idle_state 一致：广播命令、无
- * 响应（R0），超时走驱动默认值。
- *
- * @return ESP_OK 表示命令已发出；卡片已离线等情况返回错误码（调用方仅
- *         记录告警，不阻断下电流程）。
- */
-static esp_err_t sd_card_to_idle(void) {
-    /* 注意：sdmmc_host_do_transaction 的参数不带 const（驱动会回写
-     * error/timeout 等字段），此处不能声明为 const。 */
-    sdmmc_command_t cmd = {
-        .opcode = MMC_GO_IDLE_STATE, /*!< CMD0：GO_IDLE_STATE，无响应 */
-        .arg = 0,
-        .flags = SCF_CMD_BC | SCF_RSP_R0,
-    };
-    return sdmmc_host_do_transaction(ESPAPERPLAY_SDMMC_HOST_SLOT, &cmd);
-}
-
 /* ====================================================================
  * 驱动级自检（仅 ESPAPERPLAY_SD_ENABLE_SELFTEST=1 时启用）
  *
@@ -119,8 +91,8 @@ static void sd_selftest_task(void *arg) {
 
     const size_t sector_size = (size_t)s_card.csd.sector_size;
     const size_t sector_count = (size_t)s_card.csd.capacity;
-    ESP_LOGI(TAG, "self-test: card has %u sectors x %u bytes", (unsigned)sector_count,
-             (unsigned)sector_size);
+    ESP_LOGI(TAG, "self-test: card has %u sectors x %u bytes",
+             (unsigned)sector_count, (unsigned)sector_size);
 
     uint8_t *buf = malloc(sector_size);
     if (buf == NULL) {
@@ -136,8 +108,8 @@ static void sd_selftest_task(void *arg) {
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "self-test: sector 0 head: %02X %02X %02X %02X %02X %02X %02X %02X", buf[0],
-             buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+    ESP_LOGI(TAG, "self-test: sector 0 head: %02X %02X %02X %02X %02X %02X %02X %02X",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
 
     if (sector_count > 1) {
         err = sdmmc_read_sectors(&s_card, buf, sector_count - 1, 1);
@@ -266,21 +238,8 @@ esp_err_t espaperplay_sd_deinit(void) {
         return ESP_OK;
     }
 
-    /* 1. 协议级软下电：CMD0 让卡片回到 idle 态（模拟断电后的初始状态）。
-     *    失败（如卡片已被拔出）仅告警，不阻断后续下电流程。 */
-    if (s_card_ready) {
-        esp_err_t idle_ret = sd_card_to_idle();
-        if (idle_ret != ESP_OK) {
-            ESP_LOGW(TAG, "CMD0 (go idle) failed: %s (card already offline?)",
-                     esp_err_to_name(idle_ret));
-        } else {
-            ESP_LOGD(TAG, "card reset to idle state (simulated power-off)");
-        }
-    }
-
-    /* 2. 停止 SDMMC 主机：时钟停止、引脚释放。同样只用 sdmmc_host_deinit()
-     *    收尾（切勿 deinit_slot+deinit 连用，见 espaperplay_sd_init 失败路径
-     *    的注释：会双重删除控制器）。 */
+    /* 同样只用 sdmmc_host_deinit() 收尾（切勿 deinit_slot+deinit 连用，
+     * 见 espaperplay_sd_init 失败路径的注释：会双重删除控制器）。 */
     if (s_host_ready || s_slot_ready || s_card_ready) {
         sdmmc_host_deinit();
     }
@@ -288,8 +247,6 @@ esp_err_t espaperplay_sd_deinit(void) {
     s_slot_ready = false;
     s_card_ready = false;
 
-    /* 3. 切断电源轨。当前板级未配负载开关时为空操作（卡片保持供电但处于
-     *    idle 态）；硬件接入后此处即为真实下电点，无需再改代码。 */
     sd_power_rail_disable();
 
     ESP_LOGI(TAG, "MicroSD deinitialized (SDIO)");
@@ -298,7 +255,9 @@ esp_err_t espaperplay_sd_deinit(void) {
 
 bool espaperplay_sd_is_detected(void) { return s_card_ready; }
 
-sdmmc_card_t *espaperplay_sd_get_card(void) { return s_card_ready ? &s_card : NULL; }
+sdmmc_card_t *espaperplay_sd_get_card(void) {
+    return s_card_ready ? &s_card : NULL;
+}
 
 esp_err_t espaperplay_sd_read_sectors(size_t start_sector, size_t sector_count, void *dst) {
     if (!s_card_ready) {
@@ -311,7 +270,8 @@ esp_err_t espaperplay_sd_read_sectors(size_t start_sector, size_t sector_count, 
     return sdmmc_read_sectors(&s_card, dst, start_sector, sector_count);
 }
 
-esp_err_t espaperplay_sd_write_sectors(size_t start_sector, size_t sector_count, const void *src) {
+esp_err_t espaperplay_sd_write_sectors(size_t start_sector, size_t sector_count,
+                                       const void *src) {
     if (!s_card_ready) {
         ESP_LOGE(TAG, "card not ready, cannot write");
         return ESP_ERR_INVALID_STATE;

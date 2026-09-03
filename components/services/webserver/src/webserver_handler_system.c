@@ -7,7 +7,6 @@
 #include <string.h>
 
 #include "esp_chip_info.h"
-#include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -15,7 +14,6 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_power.h"
-#include "espaperplay_storage.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
 
@@ -117,16 +115,8 @@ esp_err_t webserver_handle_reboot_post(httpd_req_t *req) {
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
 
-    /* 稍作延时让响应有机会发出；随后安全下电 SD 卡（刷盘 + 卸载 + CMD0
-     * 软下电）再重启，避免重启瞬间卡片上有未收尾的事务。失败不阻断重启。 */
+    /* 稍作延时让响应有机会发出，再触发重启。 */
     vTaskDelay(pdMS_TO_TICKS(200));
-    if (espaperplay_storage_is_mounted()) {
-        esp_err_t um_ret = espaperplay_storage_unmount();
-        if (um_ret != ESP_OK) {
-            ESP_LOGW("ESPaperPlay_WEBSRV", "SD unmount before reboot failed: %s",
-                     esp_err_to_name(um_ret));
-        }
-    }
     esp_restart();
     return ESP_OK; /* 不会执行到这里 */
 }

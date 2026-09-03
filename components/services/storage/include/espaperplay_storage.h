@@ -44,23 +44,6 @@ extern "C" {
 #endif
 
 /**
- * @brief 启用「下电-重挂载」自检（验收用，默认关闭）。
- *
- * 使能后，espaperplay_storage_mount() 在挂载成功后执行一轮完整下电验证：
- * 写入标记文件 → 完整下电（espaperplay_storage_unmount()：CTRL_SYNC 刷盘
- * → 卸载 FAT/VFS → SD 驱动 CMD0 软下电 + 停主机）→ 重新挂载 → 读回校验
- * 内容一致 → 删除标记文件。用于确认 SD 卡下电不丢数据、且软下电后的卡片
- * 可被重新探测挂载。验收完成后置 0 关闭（默认）。
- *
- * @note 自检期间 SD 卡会短暂经历一次卸载-重挂载；此时字体组件的 SD 完整
- *       字库盘符 'B:' 会瞬时不可用（访问失败自动回退 Flash 字体），自检
- *       结束后恢复正常。仅在验收时开启即可。
- */
-#ifndef ESPAPERPLAY_STORAGE_ENABLE_PWR_CYCLE_SELFTEST
-#define ESPAPERPLAY_STORAGE_ENABLE_PWR_CYCLE_SELFTEST 0
-#endif
-
-/**
  * @brief 挂载 SD 卡并注册到 VFS（FAT 文件系统）。
  *
  * 依次完成：SD 驱动初始化（电源轨 + SDMMC 主机/槽位 + SDIO 卡片探测）
@@ -77,18 +60,10 @@ extern "C" {
 esp_err_t espaperplay_storage_mount(void);
 
 /**
- * @brief 卸载 SD 卡并执行完整下电序列（模拟断电）。
+ * @brief 卸载 SD 卡并释放相关资源。
  *
- * 下电顺序：
- *  1. disk_ioctl(CTRL_SYNC)：全局刷盘，确保 FATFS 无未落盘数据；
- *  2. f_mount(NULL) + 注销底层磁盘驱动；
- *  3. 注销 VFS 挂载点；
- *  4. SD 驱动下电（espaperplay_sd_deinit()）：CMD0 让卡片回到 idle 态
- *     （协议级"模拟断电"，硬件暂无负载开关时的等效断电）→ 停止 SDMMC
- *     主机 → 电源轨下电（接入负载开关后自动变为真实断电）。
- *
- * 调用前应确保所有文件句柄已关闭（f_close 内部会同步数据）；本函数再以
- * CTRL_SYNC 兜底。适用于重启前、深度睡眠前等需要安全下电的场景。
+ * 先卸载 FATFS 卷并注销 VFS 挂载点，再反初始化 SD 驱动（主机/槽位 +
+ * 电源轨下电）。
  *
  * @return 成功返回 ESP_OK，否则返回对应错误码。
  */

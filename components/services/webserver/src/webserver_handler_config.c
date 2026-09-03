@@ -17,7 +17,6 @@
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
-#include "espaperplay_storage.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -441,14 +440,6 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     cJSON_Delete(root);
 
     vTaskDelay(pdMS_TO_TICKS(200));
-    /* 安全下电 SD 卡（刷盘 + 卸载 + 软下电）再重启，避免重启瞬间卡片上有未收尾的事务。
-     * 失败不阻断重启。 */
-    if (espaperplay_storage_is_mounted()) {
-        esp_err_t um_ret = espaperplay_storage_unmount();
-        if (um_ret != ESP_OK) {
-            ESP_LOGW(TAG, "SD unmount before reboot failed: %s", esp_err_to_name(um_ret));
-        }
-    }
     esp_restart();
     return ESP_OK; /* 不会执行到这里 */
 }
