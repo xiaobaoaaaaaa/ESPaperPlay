@@ -14,6 +14,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_power.h"
+#include "espaperplay_touch.h"
 #include "espaperplay_wifi.h"
 #include "webserver_internal.h"
 
@@ -119,6 +120,34 @@ esp_err_t webserver_handle_reboot_post(httpd_req_t *req) {
     vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();
     return ESP_OK; /* 不会执行到这里 */
+}
+
+/**
+ * POST /api/system/touch_diag —— 触发触摸子系统诊断。
+ *
+ * 在触摸「无响应」失效的现场（重启前）远程调用：驱动输出完整诊断现场
+ * 到串口日志（[diag/manual] 行，含双地址探测、寄存器快照与结论），响应
+ * 仅确认已触发。需鉴权：诊断会探测 I2C 总线，属于运维操作。
+ */
+esp_err_t webserver_handle_touch_diag_post(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    const esp_err_t diag_ret = espaperplay_touch_diag();
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddBoolToObject(root, "ok", diag_ret == ESP_OK);
+    cJSON_AddStringToObject(root, "detail",
+                            diag_ret == ESP_OK ? "diag dumped to serial log ([diag/manual])"
+                                               : "touch driver not initialized");
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
+    return ESP_OK;
 }
 
 /** GET/POST * (HTTP:80) —— 302 重定向到 HTTPS，杜绝明文访问。 */

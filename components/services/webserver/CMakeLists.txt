@@ -12,6 +12,6 @@ idf_component_register(
          "src/webserver_tls.c"
     INCLUDE_DIRS "include"
     EMBED_TXTFILES "www/index.html"
-    REQUIRES esp_http_server esp_https_server mbedtls nvs_flash esp_event esp_netif system wifi board auth session epd ui weather input storage fonts power
+    REQUIRES esp_http_server esp_https_server mbedtls nvs_flash esp_event esp_netif system wifi board auth session epd ui weather input storage fonts power touch
     PRIV_REQUIRES espressif__cjson esp_timer esp_system
 )
