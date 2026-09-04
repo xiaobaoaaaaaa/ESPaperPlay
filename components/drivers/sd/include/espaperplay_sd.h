@@ -26,21 +26,10 @@ extern "C" {
  * 见 espaperplay_config.h 的 SD 节；上层文件系统（FAT + VFS）由 storage
  * 服务在 driver 之上构建（espaperplay_storage_mount()）。
  *
- * 时序：上电（电源轨拉高）→ sdmmc_host_init() → sdmmc_host_init_slot()
+ * 时序：sdmmc_host_init() → sdmmc_host_init_slot()
  * → sdmmc_card_init()（SDIO 初始化序列，含 CMD0/CMD8/ACMD41/CMD2/CMD3/
  * CMD9/CMD7）。全部成功后方可进行扇区读写。
  */
-
-/**
- * @brief 初始化时是否使能 SD 卡电源轨（ESPAPERPLAY_PIN_SD_PWR 拉高）。
- *
- * 默认关闭：板级默认未配置电源轨引脚（-1），且 GPIO20=USB D+ 等引脚可能
- * 被板载 USB 占用，贸然拉高会导致设备断连甚至复位。仅当原理图确认 SD 供电
- * 由某 GPIO 控制时，配置 ESPAPERPLAY_PIN_SD_PWR 并置本项为 1。
- */
-#ifndef ESPAPERPLAY_SD_ENABLE_POWER_PIN
-#define ESPAPERPLAY_SD_ENABLE_POWER_PIN 0
-#endif
 
 /**
  * @brief 启用驱动级自检（验收用，默认关闭）。
@@ -57,7 +46,7 @@ extern "C" {
 /**
  * @brief 初始化 MicroSD 卡（SDIO/SDMMC）。
  *
- * 依次完成：电源轨上电 → SDMMC 主机初始化 → 槽位配置（引脚/总线宽度/
+ * 依次完成：SDMMC 主机初始化 → 槽位配置（引脚/总线宽度/
  * 内部上拉）→ SDIO 卡片初始化（探测并识别卡片）。成功后打印卡片信息
  * （卡型 / 容量 / 支持的速率等）。
  *
@@ -69,7 +58,7 @@ esp_err_t espaperplay_sd_init(void);
 /**
  * @brief 反初始化 MicroSD 卡（SDIO/SDMMC）。
  *
- * 释放槽位与主机，并关闭电源轨。调用前必须确保文件系统已卸载
+ * 释放槽位与主机。调用前必须确保文件系统已卸载
  * （espaperplay_storage_unmount() 负责在卸载 VFS/FAT 后调用本函数）。
  *
  * @return 成功返回 ESP_OK，否则返回对应错误码。

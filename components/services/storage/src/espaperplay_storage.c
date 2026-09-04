@@ -78,7 +78,7 @@ esp_err_t espaperplay_storage_mount(void) {
         return ESP_OK;
     }
 
-    /* 1. 底层 SDIO 驱动：电源轨 + SDMMC 主机/槽位 + 卡片探测 */
+    /* 1. 底层 SDIO 驱动：SDMMC 主机/槽位 + 卡片探测 */
     esp_err_t ret = espaperplay_sd_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "SD card init failed: %s (is a card inserted?)", esp_err_to_name(ret));

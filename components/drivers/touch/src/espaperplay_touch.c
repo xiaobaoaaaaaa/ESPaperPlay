@@ -73,7 +73,6 @@ static const char *TAG = "ESPaperPlay_TOUCH";
  *   - RST 释放后 INT 保持地址选择电平 ≥55ms 再转为输入——时序不足时
  *     GT911 会应答 I2C 但内部状态机不完成上电，触摸数据恒为 0，可能
  *     数分钟后才自行恢复（实测 4 分钟）。 */
-#define GT911_POWER_ON_DELAY_MS 5     /*!< 电源轨上电后等待（毫秒） */
 #define GT911_RESET_ASSERT_MS 20      /*!< RST 低电平保持时间（≥12ms） */
 #define GT911_INT_ADDR_HOLD_MS 60     /*!< RST 释放后 INT 保持地址电平时间（≥55ms） */
 #define GT911_BOOT_SETTLE_MS 100      /*!< 复位结束后等待固件启动（毫秒） */
@@ -966,31 +965,11 @@ esp_err_t espaperplay_touch_init(void) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "[init] start: SDA=%d SCL=%d INT=%d RST=%d PWR=%d, addr candidate 0x%02X",
+    ESP_LOGI(TAG, "[init] start: SDA=%d SCL=%d INT=%d RST=%d, addr candidate 0x%02X",
              ESPAPERPLAY_PIN_TOUCH_SDA, ESPAPERPLAY_PIN_TOUCH_SCL, ESPAPERPLAY_PIN_TOUCH_INT,
-             ESPAPERPLAY_PIN_TOUCH_RST, ESPAPERPLAY_PIN_TOUCH_PWR, ESPAPERPLAY_GT911_I2C_ADDR);
+             ESPAPERPLAY_PIN_TOUCH_RST, ESPAPERPLAY_GT911_I2C_ADDR);
 
-    /* 1. 触摸电源轨上电。 */
-    if (ESPAPERPLAY_PIN_TOUCH_PWR >= 0) {
-        const gpio_config_t pwr_cfg = {
-            .pin_bit_mask = BIT64(ESPAPERPLAY_PIN_TOUCH_PWR),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = false,
-            .pull_down_en = false,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        ESP_RETURN_ON_ERROR(gpio_config(&pwr_cfg), TAG, "touch power GPIO%d config failed",
-                            ESPAPERPLAY_PIN_TOUCH_PWR);
-        ESP_RETURN_ON_ERROR(gpio_set_level(ESPAPERPLAY_PIN_TOUCH_PWR, 1), TAG,
-                            "touch power enable failed");
-        vTaskDelay(pdMS_TO_TICKS(GT911_POWER_ON_DELAY_MS));
-        ESP_LOGI(TAG, "[init] step 1/5 OK: touch power GPIO%d driven high",
-                 ESPAPERPLAY_PIN_TOUCH_PWR);
-    } else {
-        ESP_LOGI(TAG, "[init] step 1/5: no touch power GPIO (always on assumed)");
-    }
-
-    /* 2. I2C 主机（GT911 专用，见 board 组件注释）。 */
+    /* 1. I2C 主机（GT911 专用，见 board 组件注释）。 */
     const i2c_master_bus_config_t bus_cfg = {
         .i2c_port = ESPAPERPLAY_I2C_PORT_ID,
         .sda_io_num = ESPAPERPLAY_PIN_TOUCH_SDA,
@@ -1003,10 +982,10 @@ esp_err_t espaperplay_touch_init(void) {
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_bus), TAG,
                         "I2C master bus (port %d) init failed", ESPAPERPLAY_I2C_PORT_ID);
-    ESP_LOGI(TAG, "[init] step 2/5 OK: I2C master port %d @ %u Hz (internal pull-ups on)",
+    ESP_LOGI(TAG, "[init] step 1/4 OK: I2C master port %d @ %u Hz (internal pull-ups on)",
              ESPAPERPLAY_I2C_PORT_ID, (unsigned int)ESPAPERPLAY_TOUCH_I2C_CLK_HZ);
 
-    /* 3. 复位 + 地址锁存 + 产品 ID 探测（0x5D 失败则回退 0x14）。 */
+    /* 2. 复位 + 地址锁存 + 产品 ID 探测（0x5D 失败则回退 0x14）。 */
     const uint8_t addr_candidates[2] = {
         ESPAPERPLAY_GT911_I2C_ADDR,
         (ESPAPERPLAY_GT911_I2C_ADDR == GT911_I2C_ADDR_INT_LOW) ? GT911_I2C_ADDR_INT_HIGH
@@ -1017,7 +996,7 @@ esp_err_t espaperplay_touch_init(void) {
     for (int attempt = 0; attempt < 2 && !found; attempt++) {
         /* INT 低电平复位 → 0x5D；INT 高电平复位 → 0x14（规格书第 6.1 节）。 */
         const int int_level = addr_candidates[attempt] == GT911_I2C_ADDR_INT_HIGH ? 1 : 0;
-        ESP_LOGI(TAG, "[init] step 3/5 attempt %d/2: reset with INT held %s -> try addr 0x%02X",
+        ESP_LOGI(TAG, "[init] step 2/4 attempt %d/2: reset with INT held %s -> try addr 0x%02X",
                  attempt + 1, int_level ? "HIGH" : "LOW", addr_candidates[attempt]);
         gt911_hw_reset(int_level);
         ESP_LOGI(TAG, "  after reset: INT level = %d (expect 1 when idle)",
@@ -1048,15 +1027,15 @@ esp_err_t espaperplay_touch_init(void) {
     if (!found) {
         ESP_LOGE(TAG,
                  "GT911 not found on I2C port %d (SDA=%d SCL=%d). "
-                 "Check touch power / RST / INT wiring and pull-ups",
+                 "Check RST / INT wiring and pull-ups",
                  ESPAPERPLAY_I2C_PORT_ID, ESPAPERPLAY_PIN_TOUCH_SDA, ESPAPERPLAY_PIN_TOUCH_SCL);
         ret = ESP_ERR_NOT_FOUND;
         goto fail;
     }
 
-    ESP_LOGI(TAG, "[init] step 3/5 OK: GT911 found at 0x%02X", s_i2c_addr);
+    ESP_LOGI(TAG, "[init] step 2/4 OK: GT911 found at 0x%02X", s_i2c_addr);
 
-    /* 4. 回读配置：版本、X/Y 输出最大值、触摸点数与 INT 触发模式，
+    /* 3. 回读配置：版本、X/Y 输出最大值、触摸点数与 INT 触发模式，
      *    用于坐标换算与中断配置。
      *    若配置区为空/无效（复位后常见，芯片无法扫描报点），按 GT911
      *    编程指南写入厂商面板配置表并软复位，然后回读验证。 */
@@ -1088,12 +1067,12 @@ esp_err_t espaperplay_touch_init(void) {
     /* 竖屏配置（如 X=480/Y=800）上报的坐标轴与横屏显示互换。 */
     s_swap_xy = s_x_max < s_y_max;
     ESP_LOGI(TAG,
-             "[init] step 4/5 OK: GT911 at 0x%02X, config v0x%02X, "
+             "[init] step 3/4 OK: GT911 at 0x%02X, config v0x%02X, "
              "resolution %ux%u, max %u touches, INT mode %u%s",
              s_i2c_addr, cfg_version, s_x_max, s_y_max, touch_num, int_mode,
              s_swap_xy ? ", swap XY" : "");
 
-    /* 5. INT 中断（触发沿随芯片配置）+ 内部读取任务。
+    /* 4. INT 中断（触发沿随芯片配置）+ 内部读取任务。
      *    主机侧统一用低电平触发（面板配置为下降沿有效/数据未消费保持
      *    低）：电平触发跨浅睡眠边界可靠（边沿中断在睡眠边界会丢失，
      *    见 IDF #9932/#11686），且与电源服务的低电平唤醒同型——
@@ -1120,7 +1099,7 @@ esp_err_t espaperplay_touch_init(void) {
     }
     s_int_trig = int_trig;
 
-    ESP_LOGI(TAG, "[init] step 5/5: INT mode %u -> GPIO trigger %d, active %s", int_mode,
+    ESP_LOGI(TAG, "[init] step 4/4: INT mode %u -> GPIO trigger %d, active %s", int_mode,
              (int)int_trig, s_int_active_low ? "low" : "high");
     ESP_LOGI(TAG, "  INT level before ISR install: %d", gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
 

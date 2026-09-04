@@ -98,6 +98,18 @@
     自动回退出厂内置字体，渲染不会中断。页面同时给出 Noto Sans SC 的下载入口提示。
     字体选择重启设备后生效。
 
+### 移除
+
+- **TOUCH / EPD / SD 电源轨（MOS 管关断）支持**：板上后续不再用 MOS 管控制
+  这三个部件的供电，固件按常供电处理。删除 `espaperplay_config.h` 中的
+  `ESPAPERPLAY_PIN_EPD_PWR` / `ESPAPERPLAY_PIN_TOUCH_PWR` /
+  `ESPAPERPLAY_PIN_SD_PWR` 引脚宏；EPD 驱动的上电函数与
+  `espaperplay_epd_power_off()` API、touch 初始化的电源轨上电步骤、SD 驱动
+  的 `sd_power_rail_enable/disable()` 及编译开关
+  `ESPAPERPLAY_EPD/SD_ENABLE_POWER_PIN` 一并移除；power 服务删除
+  `espaperplay_power_domain_t` 电源域枚举与 `espaperplay_power_domain_set()`
+  桩（均无调用者）。睡眠/唤醒流程不依赖电源轨，行为不变。
+
 ## [0.1.0] - 2026-08-20
 
 首个公开版本：ESP32-S3 电子纸设备平台（7.5" 800×480 EPD，16MB flash / 8MB PSRAM）。

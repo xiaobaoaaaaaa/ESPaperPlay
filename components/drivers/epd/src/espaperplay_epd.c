@@ -169,25 +169,6 @@ static esp_err_t epd_gpio_init(void) {
     return ESP_OK;
 }
 
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-/**
- * @brief 使能 EPD 电源轨（ESPAPERPLAY_PIN_EPD_PWR 拉高）。
- */
-static esp_err_t epd_enable_power(void) {
-    gpio_config_t io = {
-        .pin_bit_mask = 1ULL << ESPAPERPLAY_PIN_EPD_PWR,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "EPD power pin config failed");
-    gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_PWR, 1);
-    ESP_LOGI(TAG, "EPD power rail enabled (GPIO%d)", ESPAPERPLAY_PIN_EPD_PWR);
-    return ESP_OK;
-}
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
 /**
  * @brief 写一个 UC8179 命令字节（DC=0）。
  */
@@ -1094,14 +1075,6 @@ esp_err_t espaperplay_epd_init(void) {
         return ESP_ERR_TIMEOUT;
     }
 
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-    ret = epd_enable_power();
-    if (ret != ESP_OK) {
-        xSemaphoreGive(s_lock);
-        return ret;
-    }
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
     ret = epd_gpio_init();
     if (ret != ESP_OK) {
         xSemaphoreGive(s_lock);
@@ -1438,23 +1411,3 @@ esp_err_t espaperplay_epd_set_idle_sleep_timeout_ms(uint32_t timeout_ms) {
 
 uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void) { return s_idle_sleep_timeout_ms; }
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
-
-esp_err_t espaperplay_epd_power_off(void) {
-    esp_err_t ret = ESP_OK;
-
-    if (s_initialized && !s_asleep) {
-        ret = espaperplay_epd_sleep();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "sleep before power-off failed: %s", esp_err_to_name(ret));
-        }
-    }
-
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-    gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_PWR, 0);
-    ESP_LOGI(TAG, "EPD power rail disabled (GPIO%d)", ESPAPERPLAY_PIN_EPD_PWR);
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
-    s_initialized = false;
-    s_asleep = true;
-    return ret;
-}

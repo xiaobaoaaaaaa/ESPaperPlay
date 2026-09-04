@@ -62,8 +62,8 @@ typedef void (*espaperplay_touch_event_cb_t)(const espaperplay_touch_point_t *po
 /**
  * @brief 初始化触摸控制器。
  *
- * 依次完成：触摸电源轨上电 → GT911 硬件复位（INT 电平锁存 I2C 地址）→
- * 初始化 I2C 主机 → 探测 GT911（回读产品 ID "911" 与配置版本/分辨率）→
+ * 依次完成：初始化 I2C 主机 → GT911 硬件复位（INT 电平锁存 I2C 地址）→
+ * 探测 GT911（回读产品 ID "911" 与配置版本/分辨率）→
  * 按芯片配置 0x804D 的 INT 触发模式配置 GPIO 中断并创建内部读取任务。
  *
  * 默认按 INT 低电平复位锁存地址 0x5D（与厂商 STM32 demo 一致）；若探测

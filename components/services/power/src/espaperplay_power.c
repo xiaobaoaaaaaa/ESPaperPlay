@@ -92,14 +92,6 @@ esp_err_t espaperplay_power_init(void) {
     return ESP_OK;
 }
 
-esp_err_t espaperplay_power_domain_set(espaperplay_power_domain_t domain, bool enable) {
-    (void)domain;
-    (void)enable;
-
-    ESP_LOGW(TAG, "power_domain_set not implemented yet");
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
 esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *config) {
     esp_err_t ret = ESP_OK;
 

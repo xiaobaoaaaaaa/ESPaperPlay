@@ -360,19 +360,17 @@ host (SDIO protocol stack)**, and the storage service
 under the mount point `/sdcard` through standard C file APIs (`fopen` /
 `fread` / `fwrite` …).
 
-**Driver layer (`espaperplay_sd_*`)** — optionally powers the card rail
-(`ESPAPERPLAY_PIN_SD_PWR`, off by default — no pin is driven until the
-schematic-confirmed power pin is configured), then runs the SDIO bring-up
-sequence: `sdmmc_host_init()` → `sdmmc_host_init_slot()` →
+**Driver layer (`espaperplay_sd_*`)** — runs the SDIO bring-up sequence:
+`sdmmc_host_init()` → `sdmmc_host_init_slot()` →
 `sdmmc_card_init()` (CMD0/CMD8/ACMD41/CMD2/CMD3/CMD9/CMD7), prints card info
 and exposes raw sector I/O (`espaperplay_sd_read/write_sectors()`). All SDMMC
 signals are routed through the GPIO matrix, so any GPIO works; the pins chosen
 here (see `espaperplay_config.h` "SD" section) deliberately avoid the EPD SPI
-(6–13), touch (1–5) and UART0 (43/44) pins, unlike the IDF defaults
+(7–13), touch (2–5) and UART0 (43/44) pins, unlike the IDF defaults
 (D0=2/D1=4/D2=12/D3=13 would collide). **GPIO19/20 are the chip's USB D-/D+
 pads** (board USB / secondary USB-Serial-JTAG console) and must never be used
-for SD — an earlier draft mapped D3=19 / PWR=20 and the device lost USB and
-reset-looped immediately. 4-bit mode needs external pull-ups on CMD+D0-D3; the
+for SD — an earlier draft mapped D3=19 and a card-power pin on 20, and the
+device lost USB and reset-looped immediately. 4-bit mode needs external pull-ups on CMD+D0-D3; the
 driver also enables the internal pull-ups (`SDMMC_SLOT_FLAG_INTERNAL_PULLUP`).
 SDIO needs no chip-select; GPIO21 (the old SPI-mode CS guess) is reused for
 D3 since it was already expected to reach the SD socket.
@@ -385,7 +383,6 @@ D3 since it was already expected to reach the SD socket.
 | D1     | 17   |
 | D2     | 18   |
 | D3     | 21   |
-| PWR    | n/a (off by default, set per schematic) |
 
 Clock is 20 MHz by default (SDMMC_FREQ_DEFAULT); 4-bit SDIO at 20 MHz already
 outperforms the old SPI plan (≈10 MB/s vs ≈2.5 MB/s peak), and the host
@@ -891,17 +888,15 @@ read 周期（~30ms）全量排空触摸队列，积压有界。
 `/sdcard` 挂载点，通过标准 C 文件 API（`fopen` / `fread` / `fwrite` ...）
 直接访问。
 
-**驱动层（`espaperplay_sd_*`）** —— 可选使能卡片电源轨
-（`ESPAPERPLAY_PIN_SD_PWR`，默认关闭：未按原理图确认电源引脚前不驱动任何
-引脚），随后执行 SDIO 上电时序：`sdmmc_host_init()` →
+**驱动层（`espaperplay_sd_*`）** —— 执行 SDIO 上电时序：`sdmmc_host_init()` →
 `sdmmc_host_init_slot()` → `sdmmc_card_init()`（CMD0/CMD8/ACMD41/CMD2/CMD3/
 CMD9/CMD7），并打印卡片信息，对外暴露底层扇区读写
 （`espaperplay_sd_read/write_sectors()`）。SDMMC 信号经 GPIO 矩阵路由、可
 任意选脚；本板选用的引脚（见 `espaperplay_config.h` 的 SD 节）刻意避开 EPD
-SPI（6-13）、触摸（1-5）与 UART0（43/44），而 IDF 默认引脚（D0=2/D1=4/
+SPI（7-13）、触摸（2-5）与 UART0（43/44），而 IDF 默认引脚（D0=2/D1=4/
 D2=12/D3=13）会与它们冲突。**GPIO19/20 是芯片内置 USB D-/D+ 焊盘**（板载
-USB / 次级 USB-Serial-JTAG 串口），严禁用于 SD——先前版本曾把 D3=19 /
-PWR=20，设备立即失去 USB 并复位循环。4-bit 模式要求 CMD 与 D0-D3 外接上拉，
+USB / 次级 USB-Serial-JTAG 串口），严禁用于 SD——先前版本曾把 D3=19 与卡片
+电源脚放在 20，设备立即失去 USB 并复位循环。4-bit 模式要求 CMD 与 D0-D3 外接上拉，
 驱动同时开启内部上拉（`SDMMC_SLOT_FLAG_INTERNAL_PULLUP`）作为补充。SDIO
 模式不需要片选——GPIO21（原 SPI 方案的片选猜测脚）被复用作 D3，因为它
 最可能已连到 SD 卡座。
@@ -914,7 +909,6 @@ PWR=20，设备立即失去 USB 并复位循环。4-bit 模式要求 CMD 与 D0-
 | D1   | 17   |
 | D2   | 18   |
 | D3   | 21   |
-| PWR  | 无（默认关闭，按原理图配置） |
 
 时钟默认 20MHz（SDMMC_FREQ_DEFAULT）。4-bit SDIO 在 20MHz 下吞吐已远超原
 SPI 方案（峰值约 10MB/s 对 2.5MB/s），主机最高支持 40MHz SDR（视卡片与
