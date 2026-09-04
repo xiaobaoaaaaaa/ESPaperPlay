@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdint.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -15,8 +16,10 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_diaglog.h"
 #include "espaperplay_touch.h"
 
 static const char *TAG = "ESPaperPlay_TOUCH";
@@ -81,6 +84,32 @@ static const char *TAG = "ESPaperPlay_TOUCH";
 #define GT911_POLL_MODE_PERIOD_MS 20
 
 /* ====================================================================
+ * 运行期诊断（失效现场分析，无需重启）
+ *
+ * 背景：触摸「高概率无响应」失效时，INT 引脚实测 ~2.53V（约等于 ESP32
+ * 45k 内部上拉与 GT911 异常态弱下拉的分压），说明芯片侧进入异常状态。
+ * 诊断目标是在失效现场回答四个互斥问题：
+ *   1. 芯片应答哪个地址——GT911 任何一次复位（含内部复位）都会在复位
+ *      释放瞬间按 INT 电平重锁存地址：INT 高 → 0x14，主机仍访问 0x5D
+ *      则表现为触摸全死；
+ *   2. 总线上是否还有设备应答——全无应答 = 芯片掉电 / 卡在复位态 /
+ *      I2C 引擎挂死（区分：探测超时 vs NACK）；
+ *   3. 缓冲状态是否卡在「有数据未消费」——INT 空闲却有待读帧，是主机
+ *      中断事件丢失的直接证据；
+ *   4. 寄存器快照是否还健康（产品 ID / 配置版本 / 刷新标志）。
+ * ==================================================================== */
+
+#define GT911_DIAG_PROBE_TIMEOUT_MS 50        /*!< 总线单地址探测超时（毫秒） */
+#define GT911_DIAG_AUTO_MIN_INTERVAL_MS 10000 /*!< 自动诊断最小间隔（限流，毫秒） */
+#define GT911_HEALTH_CHECK_PERIOD_MS 5000     /*!< 中断模式下无帧健康巡检周期（毫秒） */
+#define GT911_HEALTH_CHECK_HEARTBEAT_CHECKS \
+    ((3600U * 1000U) / GT911_HEALTH_CHECK_PERIOD_MS) /*!< SD 心跳间隔（换算为巡检次数，约 1 小时） */
+#define GT911_DIAG_FAIL_STREAK_LIMIT 3        /*!< 连续 I2C 错误触发自动诊断的次数 */
+#define GT911_HC_FAIL_RECOVER_LIMIT 2         /*!< 健康巡检连续失败触发自动恢复的次数 */
+#define GT911_RECOVER_MIN_INTERVAL_MS 5000    /*!< 自动恢复最小间隔（限流，毫秒） */
+#define GT911_RECOVER_MAX_INTERVAL_MS 60000   /*!< 连续失败指数退避上限（毫秒） */
+
+/* ====================================================================
  * 内部状态
  * ==================================================================== */
 
@@ -112,6 +141,16 @@ static volatile espaperplay_touch_event_cb_t s_event_cb = NULL; /*!< 帧回调 *
 
 static bool s_initialized = false;
 
+/* 运行期诊断状态。 */
+static int64_t s_last_diag_us = INT64_MIN; /*!< 上次自动诊断时刻（限流用，微秒） */
+static uint32_t s_i2c_fail_streak = 0;     /*!< 连续 I2C 读错误计数 */
+static uint32_t s_hc_fail_streak = 0;      /*!< 健康巡检连续失败计数 */
+static int64_t s_last_recover_us = INT64_MIN; /*!< 上次自动恢复时刻（限流用，微秒） */
+static int64_t s_recover_interval_us =
+    (int64_t)GT911_RECOVER_MIN_INTERVAL_MS * 1000LL; /*!< 当前恢复重试间隔（连续失败指数退避） */
+static gpio_int_type_t s_int_trig =
+    GPIO_INTR_LOW_LEVEL; /*!< 当前生效的 INT 触发方式（运行期恢复后需重放） */
+
 /* ====================================================================
  * I2C 访问原语
  * ==================================================================== */
@@ -137,6 +176,20 @@ static esp_err_t gt911_write_reg(uint16_t reg, const uint8_t *data, size_t len) 
 }
 
 /**
+ * @brief 从指定 I2C 设备读 GT911 寄存器（16 位大端寄存器地址）。
+ *
+ * 诊断时需要对备用地址建临时设备句柄读寄存器，故拆出带设备参数的底层。
+ */
+static esp_err_t gt911_read_reg_dev(i2c_master_dev_handle_t dev, uint16_t reg, uint8_t *data,
+                                    size_t len) {
+    const uint8_t reg_addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit(dev, reg_addr, sizeof(reg_addr), ESPAPERPLAY_I2C_TIMEOUT_MS), TAG,
+        "write register address 0x%04X failed", reg);
+    return i2c_master_receive(dev, data, len, ESPAPERPLAY_I2C_TIMEOUT_MS);
+}
+
+/**
  * @brief 读 GT911 寄存器（16 位大端寄存器地址 + 连续数据）。
  *
  * 严格按《GT911 Datasheet》Rev.10 第 6 章读时序（c) Reading Data from
@@ -144,11 +197,7 @@ static esp_err_t gt911_write_reg(uint16_t reg, const uint8_t *data, size_t len) 
  * S | Addr_W | Reg_H | Reg_L | E，随后 S | Addr_R | Data... | NACK | E。
  */
 static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *data, size_t len) {
-    const uint8_t reg_addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
-    ESP_RETURN_ON_ERROR(
-        i2c_master_transmit(s_dev, reg_addr, sizeof(reg_addr), ESPAPERPLAY_I2C_TIMEOUT_MS), TAG,
-        "write register address 0x%04X failed", reg);
-    return i2c_master_receive(s_dev, data, len, ESPAPERPLAY_I2C_TIMEOUT_MS);
+    return gt911_read_reg_dev(s_dev, reg, data, len);
 }
 
 /* ====================================================================
@@ -172,9 +221,11 @@ static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *data, size_t len) {
  *                               1 → 锁存 0x14。
  */
 static void gt911_hw_reset(int int_level_during_reset) {
+    /* RST 用 INPUT_OUTPUT：输出驱动之外使能输入缓冲，诊断时软件可回读
+     * pad 实际电平（纯 OUTPUT 模式下 gpio_get_level 读不到外部电平）。 */
     const gpio_config_t out_cfg = {
         .pin_bit_mask = BIT64(ESPAPERPLAY_PIN_TOUCH_INT) | BIT64(ESPAPERPLAY_PIN_TOUCH_RST),
-        .mode = GPIO_MODE_OUTPUT,
+        .mode = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en = false,
         .pull_down_en = false,
         .intr_type = GPIO_INTR_DISABLE,
@@ -489,13 +540,330 @@ static void gt911_deliver_frame(const espaperplay_touch_point_t *points, uint8_t
     }
 }
 
+/* ====================================================================
+ * 运行期诊断
+ * ==================================================================== */
+
+/**
+ * @brief 输出一份完整诊断现场（GPIO 电平 / 双地址探测 / 寄存器快照 / 结论）。
+ *
+ * 可在任意任务上下文调用；所有 I2C 访问都带超时，芯片挂死时也会在数百
+ * 毫秒内返回。结论按「地址翻转 / 无设备应答 / 缓冲卡帧 / 健康」输出，
+ * 全部落在串口日志（TAG = 本文件 TAG，行首 [diag/原因]）。
+ *
+ * @param reason 触发原因标签，如 "manual" / "alt-addr-ack"。
+ */
+static void gt911_diag_dump(const char *reason) {
+    if (s_bus == NULL) {
+        return;
+    }
+
+    const int int_level = gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT);
+    const int rst_level = gpio_get_level(ESPAPERPLAY_PIN_TOUCH_RST);
+
+    /* 1. 双地址探测：NOT_FOUND=该地址无人应答；TIMEOUT=总线被卡死
+     *    （典型如芯片挂死拉住 SDA）。 */
+    const esp_err_t probe_5d =
+        i2c_master_probe(s_bus, GT911_I2C_ADDR_INT_LOW, GT911_DIAG_PROBE_TIMEOUT_MS);
+    const esp_err_t probe_14 =
+        i2c_master_probe(s_bus, GT911_I2C_ADDR_INT_HIGH, GT911_DIAG_PROBE_TIMEOUT_MS);
+    ESP_LOGW(TAG, "[diag/%s] GPIO: INT=%d RST=%d | probe: 0x%02X=%s, 0x%02X=%s", reason, int_level,
+             rst_level, GT911_I2C_ADDR_INT_LOW, esp_err_to_name(probe_5d),
+             GT911_I2C_ADDR_INT_HIGH, esp_err_to_name(probe_14));
+    espaperplay_diaglog_write("TOUCH", "diag/%s: INT=%d RST=%d probe 0x5D=%s 0x14=%s", reason,
+                              int_level, rst_level, esp_err_to_name(probe_5d),
+                              esp_err_to_name(probe_14));
+
+    if (probe_5d != ESP_OK && probe_14 != ESP_OK) {
+        ESP_LOGE(TAG, "[diag] verdict: NO DEVICE ACKs — GT911 unpowered / stuck in reset / "
+                      "I2C engine crashed (TIMEOUT=bus stuck, NOT_FOUND=no answer at all)");
+        espaperplay_diaglog_write("TOUCH", "diag/%s VERDICT: no device ACKs (0x5D=%s, 0x14=%s)",
+                                  reason, esp_err_to_name(probe_5d), esp_err_to_name(probe_14));
+        return;
+    }
+
+    /* 2. 地址翻转检测：期望地址无人应答而备用地址应答——芯片发生过一次
+     *    复位（外部 RST 脉冲或内部复位），且复位释放瞬间采样到 INT=高，
+     *    地址被重锁存为 0x14。 */
+    const bool expect_low = (s_i2c_addr == GT911_I2C_ADDR_INT_LOW);
+    const esp_err_t probe_expect = expect_low ? probe_5d : probe_14;
+    const esp_err_t probe_alt = expect_low ? probe_14 : probe_5d;
+    const uint8_t alt_addr =
+        expect_low ? GT911_I2C_ADDR_INT_HIGH : GT911_I2C_ADDR_INT_LOW;
+    if (probe_expect != ESP_OK && probe_alt == ESP_OK) {
+        ESP_LOGE(TAG, "[diag] verdict: ADDRESS FLIP — GT911 answers 0x%02X but driver uses "
+                      "0x%02X; chip was reset while INT sampled HIGH, touch dead until "
+                      "re-reset with INT low",
+                 alt_addr, s_i2c_addr);
+        espaperplay_diaglog_write("TOUCH",
+                                  "diag/%s VERDICT: ADDRESS FLIP, GT911 at 0x%02X (driver "
+                                  "uses 0x%02X) — chip reset with INT sampled HIGH",
+                                  reason, alt_addr, s_i2c_addr);
+    }
+
+    /* 3. 当前地址下的寄存器快照。 */
+    uint8_t id[4] = {0};
+    const esp_err_t id_ret = gt911_read_reg(GT911_REG_PRODUCT_ID, id, sizeof(id));
+    uint8_t status = 0;
+    const esp_err_t status_ret = gt911_read_reg(GT911_REG_STATUS, &status, 1);
+    uint8_t cfg[7] = {0};
+    const esp_err_t cfg_ret = gt911_read_reg(GT911_REG_CONFIG_VERSION, cfg, sizeof(cfg));
+    uint8_t fresh = 0;
+    const esp_err_t fresh_ret = gt911_read_reg(GT911_REG_CONFIG_REFRESH, &fresh, 1);
+    ESP_LOGW(TAG,
+             "[diag] regs@0x%02X: id=\"%c%c%c\" (%s), status=0x%02X (%u pts%s), "
+             "cfg=%02X %02X %02X %02X %02X %02X %02X (%ux%u, INT mode %u, %s), fresh=0x%02X (%s)",
+             s_i2c_addr, id[0], id[1], id[2], esp_err_to_name(id_ret),
+             status_ret == ESP_OK ? status : 0xFF, status & GT911_STATUS_POINTS_MASK,
+             (status & GT911_STATUS_BUFFER_READY) ? ", ready" : "", cfg[0], cfg[1], cfg[2], cfg[3],
+             cfg[4], cfg[5], cfg[6], (unsigned)((cfg[2] << 8) | cfg[1]),
+             (unsigned)((cfg[4] << 8) | cfg[3]), cfg[6] & 0x03,
+             esp_err_to_name(cfg_ret), fresh_ret == ESP_OK ? fresh : 0xFF,
+             esp_err_to_name(fresh_ret));
+    espaperplay_diaglog_write("TOUCH",
+                              "diag/%s regs@0x%02X: id=\"%c%c%c\" (%s) status=0x%02X "
+                              "cfg=%02X %02X %02X %02X %02X %02X %02X fresh=0x%02X (%s)",
+                              reason, s_i2c_addr, id[0], id[1], id[2], esp_err_to_name(id_ret),
+                              status_ret == ESP_OK ? status : 0xFF, cfg[0], cfg[1], cfg[2], cfg[3],
+                              cfg[4], cfg[5], cfg[6], fresh_ret == ESP_OK ? fresh : 0xFF,
+                              esp_err_to_name(fresh_ret));
+
+    /* 4. 备用地址上若真有 GT911，读其产品 ID 坐实地址翻转。 */
+    if (probe_alt == ESP_OK && probe_expect != ESP_OK) {
+        const i2c_device_config_t alt_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = alt_addr,
+            .scl_speed_hz = ESPAPERPLAY_TOUCH_I2C_CLK_HZ,
+        };
+        i2c_master_dev_handle_t alt_dev = NULL;
+        if (i2c_master_bus_add_device(s_bus, &alt_cfg, &alt_dev) == ESP_OK) {
+            uint8_t alt_id[4] = {0};
+            const esp_err_t alt_ret =
+                gt911_read_reg_dev(alt_dev, GT911_REG_PRODUCT_ID, alt_id, sizeof(alt_id));
+            if (alt_ret == ESP_OK) {
+                ESP_LOGE(TAG, "[diag] alt addr 0x%02X product ID \"%c%c%c\"%s", alt_addr, alt_id[0],
+                         alt_id[1], alt_id[2],
+                         (memcmp(alt_id, "911", 3) == 0) ? " — address flip confirmed"
+                                                         : " (not a GT911?)");
+                espaperplay_diaglog_write("TOUCH",
+                                          "diag/%s alt addr 0x%02X product ID \"%c%c%c\"%s",
+                                          reason, alt_addr, alt_id[0], alt_id[1], alt_id[2],
+                                          (memcmp(alt_id, "911", 3) == 0)
+                                              ? " (address flip confirmed)"
+                                              : " (not a GT911?)");
+            } else {
+                ESP_LOGW(TAG, "[diag] alt addr 0x%02X ACKs but regs unreadable (%s)", alt_addr,
+                         esp_err_to_name(alt_ret));
+            }
+            i2c_master_bus_rm_device(alt_dev);
+        }
+    }
+
+    /* 5. 结论：缓冲卡帧 / 寄存器不可读 / 健康。 */
+    if (status_ret != ESP_OK) {
+        ESP_LOGE(TAG, "[diag] verdict: registers unreadable at expected address 0x%02X (%s) — "
+                      "chip state machine abnormal", s_i2c_addr, esp_err_to_name(status_ret));
+        espaperplay_diaglog_write("TOUCH",
+                                  "diag/%s VERDICT: regs unreadable at 0x%02X (%s) — chip "
+                                  "state machine abnormal",
+                                  reason, s_i2c_addr, esp_err_to_name(status_ret));
+    } else if (status & GT911_STATUS_BUFFER_READY) {
+        ESP_LOGE(TAG, "[diag] verdict: buffer stuck (0x814E=0x%02X) while INT=%d — frame "
+                      "pending but never consumed: host interrupt event lost", status,
+                 int_level);
+        espaperplay_diaglog_write("TOUCH",
+                                  "diag/%s VERDICT: buffer stuck 0x%02X while INT=%d — host "
+                                  "interrupt event lost",
+                                  reason, status, int_level);
+    } else if (id_ret == ESP_OK && memcmp(id, "911", 3) == 0) {
+        ESP_LOGI(TAG, "[diag] verdict: healthy at 0x%02X (id \"911\", buffer idle, INT=%d)",
+                 s_i2c_addr, int_level);
+        espaperplay_diaglog_write("TOUCH", "diag/%s VERDICT: healthy at 0x%02X (INT=%d)", reason,
+                                  s_i2c_addr, int_level);
+    }
+}
+
+/**
+ * @brief 自动诊断（限流）：最小间隔内的重复触发直接忽略，避免刷屏。
+ */
+static void gt911_diag_dump_auto(const char *reason) {
+    const int64_t now_us = esp_timer_get_time();
+    if (s_last_diag_us != INT64_MIN &&
+        now_us - s_last_diag_us < (int64_t)GT911_DIAG_AUTO_MIN_INTERVAL_MS * 1000LL) {
+        return;
+    }
+    s_last_diag_us = now_us;
+    gt911_diag_dump(reason);
+}
+
+static bool gt911_recover(void); /*!< 前置声明：健康巡检在检测到失效形态时调用 */
+
+/**
+ * @brief 中断模式下的周期健康巡检（读取任务在信号量上超时唤醒时调用）。
+ *
+ * 正常时静默，开销为每周期 2~3 次短 I2C 事务。巡检项：
+ *   1. 备用地址探测——GT911 因内部复位把地址重锁存到备用地址（触摸全死
+ *      的已知形态）时，直接落诊断现场；
+ *   2. 缓冲状态——有帧未消费而 INT 空闲 = 中断事件丢失：读走投递恢复
+ *      链路，并留下证据日志；
+ *   3. I2C 读错误连续计数——达到阈值落诊断现场（由调用方累计）。
+ */
+static void gt911_health_check(void) {
+    if (s_bus == NULL || s_dev == NULL) {
+        return;
+    }
+
+    /* 1) 备用地址探测：有应答即地址翻转（已确认的失效形态），落诊断
+     *    现场后立即自动恢复。 */
+    const uint8_t alt = (s_i2c_addr == GT911_I2C_ADDR_INT_LOW) ? GT911_I2C_ADDR_INT_HIGH
+                                                               : GT911_I2C_ADDR_INT_LOW;
+    if (i2c_master_probe(s_bus, alt, GT911_DIAG_PROBE_TIMEOUT_MS) == ESP_OK) {
+        ESP_LOGW(TAG, "[diag] health check: device ACKs at alternate address 0x%02X", alt);
+        espaperplay_diaglog_write("TOUCH", "health: device ACKs at alt addr 0x%02X", alt);
+        gt911_diag_dump_auto("alt-addr-ack");
+        (void)gt911_recover();
+        return;
+    }
+
+    /* 2) 缓冲状态巡检。 */
+    uint8_t status = 0;
+    const esp_err_t err = gt911_read_reg(GT911_REG_STATUS, &status, 1);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[diag] health check: status read failed (%s)", esp_err_to_name(err));
+        espaperplay_diaglog_write("TOUCH", "health: status read failed (%s)",
+                                  esp_err_to_name(err));
+        /* 连续失败：芯片可能整体挂死，尝试复位级恢复。 */
+        if (++s_hc_fail_streak >= GT911_HC_FAIL_RECOVER_LIMIT) {
+            s_hc_fail_streak = 0;
+            gt911_diag_dump_auto("hc-fail-streak");
+            (void)gt911_recover();
+        }
+        return;
+    }
+    s_hc_fail_streak = 0;
+    if ((status & GT911_STATUS_BUFFER_READY) == 0) {
+        /* 一切正常：无帧无错误。每小时向 SD 写一条心跳（自证存活 + 留
+         * 状态时间线），串口保持静默不刷屏。 */
+        static uint32_t s_checks_since_beat = 0;
+        if (++s_checks_since_beat >= GT911_HEALTH_CHECK_HEARTBEAT_CHECKS) {
+            s_checks_since_beat = 0;
+            ESP_LOGI(TAG, "[diag] health check alive (addr 0x%02X, status 0x%02X, INT=%d)",
+                     s_i2c_addr, status, gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+            espaperplay_diaglog_write("TOUCH", "health: alive (addr 0x%02X, status 0x%02X, "
+                                               "INT=%d)",
+                                      s_i2c_addr, status,
+                                      gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+        }
+        return;
+    }
+
+    /* 3) 有帧未消费而中断没来：读走投递并留下证据日志。 */
+    uint8_t num = 0;
+    espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
+    const esp_err_t frame_ret = gt911_read_frame(points, &num);
+    if (frame_ret != ESP_OK) {
+        ESP_LOGW(TAG, "[diag] health check: buffer ready (0x814E=0x%02X) but frame read "
+                      "failed (%s)", status, esp_err_to_name(frame_ret));
+        espaperplay_diaglog_write("TOUCH", "health: buffer ready 0x%02X but frame read "
+                                           "failed (%s)",
+                                  status, esp_err_to_name(frame_ret));
+        return;
+    }
+    ESP_LOGW(TAG, "[diag] health check: pending frame (%u pt) with INT idle (level=%d) — "
+                  "INT event lost; consumed and delivered", num,
+             gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+    espaperplay_diaglog_write("TOUCH",
+                              "health: pending frame (%u pt) with INT idle (level=%d) — INT "
+                              "event lost, consumed and delivered",
+                              num, gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT));
+    gt911_deliver_frame(points, num);
+}
+
+/**
+ * @brief 运行期自动恢复：重新执行「INT 电平锁存复位」时序，把 I2C 地址
+ *        重锁存回驱动使用的地址，并按需重写面板配置。
+ *
+ * 已由失效现场确认的形态：GT911 发生（内部）复位时 INT 采样为高，地址
+ * 被重锁存为 0x14，而驱动仍访问 0x5D，触摸全死直到重新复位。本函数把
+ * 芯片恢复到与开机初始化等价的状态。调用方须在读取任务上下文（独占
+ * I2C 总线）或确认无并发总线访问。
+ *
+ * @return 恢复成功（产品 ID 重新应答）返回 true。
+ */
+static bool gt911_recover(void) {
+    /* 限流 + 指数退避：正常恢复 5s 内即可重试；芯片持续无应答时逐次
+     * 翻倍至 60s 封顶，避免高频空转刷爆串口与 SD 日志。 */
+    const int64_t now_us = esp_timer_get_time();
+    if (s_last_recover_us != INT64_MIN && now_us - s_last_recover_us < s_recover_interval_us) {
+        return false;
+    }
+    s_last_recover_us = now_us;
+
+    const int latch_level = (s_i2c_addr == GT911_I2C_ADDR_INT_HIGH) ? 1 : 0;
+    ESP_LOGW(TAG, "[recover] re-running reset sequence (INT %s -> relatch 0x%02X)",
+             latch_level ? "HIGH" : "LOW", s_i2c_addr);
+    espaperplay_diaglog_write("TOUCH", "recover: re-reset with INT %s (relatch 0x%02X)",
+                              latch_level ? "HIGH" : "LOW", s_i2c_addr);
+
+    /* 先关 GPIO3 中断再动时序：复位期间 INT 被本驱动拉到锁存电平、芯片
+     * 端又处于阈值附近的半浮动态，低电平触发的中断会连续重触发（中断
+     * 风暴），叠加 esp_pm 的 ISR 钩子延时会撑爆中断看门狗（已实测崩溃）。
+     * 开机路径无此问题，因为 ISR 在复位时序之后才安装。 */
+    gpio_intr_disable(ESPAPERPLAY_PIN_TOUCH_INT);
+
+    gt911_hw_reset(latch_level);
+    const bool answered = gt911_probe_product_id();
+
+    if (answered) {
+        /* 硬复位后配置区可能被清空：回读无效则重写厂商面板配置。 */
+        uint8_t version = 0;
+        uint16_t x_max = 0;
+        uint16_t y_max = 0;
+        uint8_t touch_num = 0;
+        uint8_t int_mode = 1;
+        if (!gt911_read_config(&version, &x_max, &y_max, &touch_num, &int_mode)) {
+            ESP_LOGW(TAG, "[recover] config area empty after reset -> rewriting vendor config");
+            espaperplay_diaglog_write("TOUCH", "recover: config empty, rewriting vendor config");
+            (void)gt911_write_config();
+        }
+    }
+
+    /* 恢复运行期触发方式（hw_reset 会把 INT 中断配置清为 DISABLE），再
+     * 重新开中断，并清掉禁用期间积压的信号量。 */
+    gpio_set_intr_type(ESPAPERPLAY_PIN_TOUCH_INT, s_int_trig);
+    gpio_intr_enable(ESPAPERPLAY_PIN_TOUCH_INT);
+    while (xSemaphoreTake(s_int_sem, 0) == pdTRUE) {
+    }
+
+    if (!answered) {
+        s_recover_interval_us *= 2;
+        if (s_recover_interval_us > (int64_t)GT911_RECOVER_MAX_INTERVAL_MS * 1000LL) {
+            s_recover_interval_us = (int64_t)GT911_RECOVER_MAX_INTERVAL_MS * 1000LL;
+        }
+        ESP_LOGE(TAG, "[recover] GT911 still not answering after re-reset (next retry in "
+                      "%lld ms)",
+                 (long long)(s_recover_interval_us / 1000));
+        espaperplay_diaglog_write("TOUCH", "recover FAILED: no answer after re-reset (retry in "
+                                           "%lld ms)",
+                                  (long long)(s_recover_interval_us / 1000));
+        return false;
+    }
+
+    s_recover_interval_us = (int64_t)GT911_RECOVER_MIN_INTERVAL_MS * 1000LL;
+    ESP_LOGI(TAG, "[recover] GT911 re-latched at 0x%02X, touch restored", s_i2c_addr);
+    espaperplay_diaglog_write("TOUCH", "recover OK: GT911 re-latched 0x%02X", s_i2c_addr);
+    return true;
+}
+
 /**
  * @brief 触摸读取任务。
  *
- * 中断模式：空闲时纯阻塞在信号量上（零开销），被 INT 中断唤醒后消费
- * 触摸帧，缓存最新一帧并回调（若已注册）。中断沿可能被遗漏，因此消费
- * 循环用 INT 有效电平兜底——数据未消费时 INT 保持有效电平，连续读取
- * 直到缓冲无新数据为止。
+ * 中断模式：阻塞在信号量上等待 INT 中断，被唤醒后消费触摸帧，缓存最新
+ * 一帧并回调（若已注册）。中断沿可能被遗漏，因此消费循环用 INT 有效电平
+ * 兜底——数据未消费时 INT 保持有效电平，连续读取直到缓冲无新数据为止。
+ * 信号量上另有周期性超时唤醒：超时（即一段时间无任何中断）则执行健康
+ * 巡检 gt911_health_check()，覆盖「中断事件丢失 / 芯片地址翻转 / I2C
+ * 连续出错」三类失效形态的现场捕捉。
  *
  * 轮询模式（芯片配置 0x804D 低 2 位 == 3，INT 不产生事件）：按
  * GT911_POLL_MODE_PERIOD_MS 周期直接读状态寄存器，每次唤醒消费一帧。
@@ -507,8 +875,11 @@ static void gt911_task(void *arg) {
     ESP_LOGI(TAG, "touch reader task started (%s)", s_task_wait_ms == 0 ? "interrupt" : "poll");
 
     for (;;) {
+        /* 中断模式下不无限等待：周期超时唤醒做健康巡检（空闲时开销为
+         * 每周期 2~3 次短 I2C 事务）。 */
         const TickType_t wait_ticks =
-            (s_task_wait_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(s_task_wait_ms);
+            (s_task_wait_ms == 0) ? pdMS_TO_TICKS(GT911_HEALTH_CHECK_PERIOD_MS)
+                                  : pdMS_TO_TICKS(s_task_wait_ms);
         const bool wake_by_int = (xSemaphoreTake(s_int_sem, wait_ticks) == pdTRUE);
 
         /* 轮询模式（芯片 INT mode 3）：每个周期尝试读一帧，不依赖 INT 电平。 */
@@ -522,6 +893,7 @@ static void gt911_task(void *arg) {
         }
 
         if (!wake_by_int) {
+            gt911_health_check();
             continue;
         }
 
@@ -529,7 +901,8 @@ static void gt911_task(void *arg) {
         while (gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == (s_int_active_low ? 0 : 1)) {
             uint8_t num = 0;
             espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
-            if (gt911_read_frame(points, &num) != ESP_OK) {
+            const esp_err_t err = gt911_read_frame(points, &num);
+            if (err == ESP_ERR_NOT_FOUND) {
                 if (!s_spurious_wake_logged) {
                     ESP_LOGW(TAG,
                              "spurious INT wake: pin level %d but no data in buffer "
@@ -540,6 +913,22 @@ static void gt911_task(void *arg) {
                 }
                 break; /* 无新帧：缓冲已被消费，等待下一次中断 */
             }
+            if (err != ESP_OK) {
+                /* I2C 访问失败：累计连续错误，达到阈值落诊断现场并尝试
+                 * 复位级恢复（芯片挂死/地址翻转都会在此被纠正）。 */
+                s_i2c_fail_streak++;
+                ESP_LOGW(TAG, "touch frame read failed (%s), streak %u/%u",
+                         esp_err_to_name(err), (unsigned)s_i2c_fail_streak,
+                         (unsigned)GT911_DIAG_FAIL_STREAK_LIMIT);
+                if (s_i2c_fail_streak >= GT911_DIAG_FAIL_STREAK_LIMIT) {
+                    s_i2c_fail_streak = 0;
+                    s_hc_fail_streak = 0;
+                    gt911_diag_dump_auto("i2c-error-streak");
+                    (void)gt911_recover();
+                }
+                break;
+            }
+            s_i2c_fail_streak = 0;
             gt911_deliver_frame(points, num);
         }
     }
@@ -683,29 +1072,32 @@ esp_err_t espaperplay_touch_init(void) {
              s_i2c_addr, cfg_version, s_x_max, s_y_max, touch_num, int_mode,
              s_swap_xy ? ", swap XY" : "");
 
-    /* 5. INT 中断（触发沿随芯片配置）+ 内部读取任务。 */
-    gpio_int_type_t int_trig = GPIO_INTR_NEGEDGE;
+    /* 5. INT 中断（触发沿随芯片配置）+ 内部读取任务。
+     *    主机侧统一用低电平触发（面板配置为下降沿有效/数据未消费保持
+     *    低）：电平触发跨浅睡眠边界可靠（边沿中断在睡眠边界会丢失，
+     *    见 IDF #9932/#11686），且与电源服务的低电平唤醒同型——
+     *    gpio_wakeup_enable() 本就会把触发方式改写为电平，这里显式
+     *    声明以消除对初始化顺序的隐式依赖，并供运行期恢复后重放。 */
+    gpio_int_type_t int_trig = GPIO_INTR_LOW_LEVEL;
     switch (int_mode) {
     case 0: /* 上升沿触发 */
         int_trig = GPIO_INTR_POSEDGE;
         s_int_active_low = false;
         break;
     case 2: /* 低电平触发 */
+    case 1: /* 下降沿触发（默认）：主机侧按低电平消费，覆盖丢失的沿 */
+    default:
         int_trig = GPIO_INTR_LOW_LEVEL;
         s_int_active_low = true;
         break;
     case 3: /* 轮询模式：INT 无事件输出，任务按固定周期读状态寄存器 */
         ESP_LOGW(TAG, "GT911 INT polling mode: task polls every %u ms", GT911_POLL_MODE_PERIOD_MS);
-        int_trig = GPIO_INTR_NEGEDGE;
+        int_trig = GPIO_INTR_LOW_LEVEL;
         s_int_active_low = true;
         s_task_wait_ms = GT911_POLL_MODE_PERIOD_MS;
         break;
-    case 1: /* 下降沿触发（默认） */
-    default:
-        int_trig = GPIO_INTR_NEGEDGE;
-        s_int_active_low = true;
-        break;
     }
+    s_int_trig = int_trig;
 
     ESP_LOGI(TAG, "[init] step 5/5: INT mode %u -> GPIO trigger %d, active %s", int_mode,
              (int)int_trig, s_int_active_low ? "low" : "high");
@@ -729,7 +1121,7 @@ esp_err_t espaperplay_touch_init(void) {
                       "set INT GPIO%d trigger mode %d failed", ESPAPERPLAY_PIN_TOUCH_INT,
                       (int)int_trig);
 
-    if (xTaskCreate(gt911_task, "gt911_touch", 3072, NULL, 5, NULL) != pdPASS) {
+    if (xTaskCreate(gt911_task, "gt911_touch", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "create touch reader task failed");
         goto fail;
     }
@@ -808,20 +1200,10 @@ esp_err_t espaperplay_touch_diag(void) {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    const int int_level = gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT);
-
-    uint8_t status = 0xFF;
-    const esp_err_t status_ret = gt911_read_reg(GT911_REG_STATUS, &status, 1);
-
-    uint8_t fresh = 0xFF;
-    const esp_err_t fresh_ret = gt911_read_reg(GT911_REG_CONFIG_REFRESH, &fresh, 1);
-
-    ESP_LOGI(TAG, "[diag] INT=%d status=0x%02X (%u points%s) config_fresh=0x%02X%s%s", int_level,
-             status_ret == ESP_OK ? status : 0xFF, status & GT911_STATUS_POINTS_MASK,
-             (status & GT911_STATUS_BUFFER_READY) ? ", buffer ready" : "",
-             fresh_ret == ESP_OK ? fresh : 0xFF,
-             status_ret != ESP_OK ? " (status read failed)" : "",
-             fresh_ret != ESP_OK ? " (fresh read failed)" : "");
+    /* 完整诊断现场：GPIO 电平 / 0x5D、0x14 双地址探测 / 寄存器快照 / 结论，
+     * 全部落串口日志（行首 [diag/manual]）。触摸「无响应」失效时请在重启
+     * 前调用，现场数据是区分根因（地址翻转 / 芯片挂死 / 中断丢失）的唯一
+     * 依据。 */
+    gt911_diag_dump("manual");
     return ESP_OK;
 }
