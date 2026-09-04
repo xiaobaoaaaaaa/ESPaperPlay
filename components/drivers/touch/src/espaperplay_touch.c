@@ -826,6 +826,27 @@ static bool gt911_recover(void) {
             espaperplay_diaglog_write("TOUCH", "recover: config empty, rewriting vendor config");
             (void)gt911_write_config();
         }
+
+        /* 复位/重配置后芯片在一两个扫描周期内可能报出幻影帧（残留电极
+         * 状态）并拉低 INT：静置等待后读走并丢弃。若走正常投递路径，会
+         * 向 UI 注入幽灵触摸并刷新活动时间戳，阻碍设备重新进入睡眠
+         * （实测缺陷）。此窗口内 INT 中断仍处于关闭状态，无中断风暴。 */
+        vTaskDelay(pdMS_TO_TICKS(150));
+        for (int i = 0; i < 5; i++) {
+            uint8_t status = 0;
+            if (gt911_read_reg(GT911_REG_STATUS, &status, 1) != ESP_OK ||
+                (status & GT911_STATUS_BUFFER_READY) == 0) {
+                break;
+            }
+            uint8_t num = 0;
+            espaperplay_touch_point_t points[ESPAPERPLAY_TOUCH_MAX_POINTS];
+            if (gt911_read_frame(points, &num) == ESP_OK) {
+                ESP_LOGW(TAG, "[recover] discarded phantom frame after reset (%u pt)", num);
+                espaperplay_diaglog_write("TOUCH", "recover: discarded phantom frame (%u pt)",
+                                          num);
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
     }
 
     /* 恢复运行期触发方式（hw_reset 会把 INT 中断配置清为 DISABLE），再

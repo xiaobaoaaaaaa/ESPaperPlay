@@ -97,7 +97,9 @@ esp_err_t espaperplay_power_enter_sleep(void);
  *
  * @note 必须在任务上下文调用（不可在 ISR 中调用）。
  *
- * @return 成功返回 ESP_OK，否则返回错误码。
+ * @return 正常入睡并唤醒返回 ESP_OK；触摸 INT 仍处有效电平、本轮主动
+ *         放弃入睡（由调用方稍后重试）返回 ESP_ERR_INVALID_STATE；其余
+ *         错误返回对应错误码。
  */
 esp_err_t espaperplay_power_enter_light_sleep(void);
 

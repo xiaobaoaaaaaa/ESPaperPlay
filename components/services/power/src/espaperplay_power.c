@@ -222,6 +222,26 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
         }
     }
 
+    /* 睡眠前置守卫：触摸 INT 仍处于有效电平（低）时进入睡眠会被低电平
+     * 唤醒立即弹回（触摸任务可能正在恢复时序中驱动 INT，或芯片复位后
+     * 有待读帧），形成「进入即唤醒」空转。等待其释放（至多约 1s），仍
+     * 为低则本轮放弃睡眠（ESP_ERR_INVALID_STATE），管理任务下一轮重试。 */
+    if (gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == 0) {
+        for (int i = 0; i < 10 && gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == 0; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        if (gpio_get_level(ESPAPERPLAY_PIN_TOUCH_INT) == 0) {
+            static int64_t s_last_skip_log_ms = 0;
+            const int64_t now_ms = esp_timer_get_time() / 1000;
+            ESP_LOGW(TAG, "touch INT still active, skip this light sleep cycle");
+            if (now_ms - s_last_skip_log_ms >= 60000) { /* 持续阻塞时限流落盘 */
+                s_last_skip_log_ms = now_ms;
+                espaperplay_diaglog_write("PWR", "sleep skipped: touch INT still active");
+            }
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     /* 用 esp_timer 前后差值度量本次睡眠的 RC 测得时长（微秒），供时钟漂移
      * 模型仅对睡眠部分补偿（运行期由 XTAL 精确推进，不计入）。 */
     espaperplay_diaglog_write("PWR", "enter light sleep%s",
@@ -242,13 +262,18 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     }
 
     /* 唤醒：记录唤醒源，重连决策交由自动睡眠管理任务（需结合刷新窗口内
-     * 是否有用户操作综合判断）。此处仅标记定时器唤醒标志。 */
+     * 是否有用户操作综合判断）。GPIO（触摸/按键）唤醒优先于定时器判定：
+     * 两者同帧置位时必须按用户唤醒处理（清睡眠图标、重连网络），否则
+     * 图标滞留、设备状态错乱。 */
     const uint32_t causes = esp_sleep_get_wakeup_causes();
-    s_wake_was_timer = (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) != 0;
-    ESP_LOGI(TAG, "woke from light sleep (causes=0x%x%s, slept %lld us)", (unsigned)causes,
-             s_wake_was_timer ? ", timer" : "", (long long)sleep_us);
-    espaperplay_diaglog_write("PWR", "woke: causes=0x%x%s, slept %lld us", (unsigned)causes,
-                              s_wake_was_timer ? " (timer)" : "", (long long)sleep_us);
+    const bool woke_by_gpio = (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) != 0;
+    s_wake_was_timer = !woke_by_gpio && (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) != 0;
+    ESP_LOGI(TAG, "woke from light sleep (causes=0x%x%s%s, slept %lld us)", (unsigned)causes,
+             s_wake_was_timer ? ", timer" : "", woke_by_gpio ? ", gpio" : "",
+             (long long)sleep_us);
+    espaperplay_diaglog_write("PWR", "woke: causes=0x%x%s%s, slept %lld us", (unsigned)causes,
+                              s_wake_was_timer ? " (timer)" : "", woke_by_gpio ? " (gpio)" : "",
+                              (long long)sleep_us);
     return ESP_OK;
 }
 
@@ -332,7 +357,14 @@ static void power_auto_sleep_task(void *arg) {
              * 路径），随后才正式进入浅睡眠（睡眠期间屏幕冻结）。 */
             espaperplay_wifi_suspend_for_sleep();
             vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS));
-            espaperplay_power_enter_light_sleep();
+            const esp_err_t sleep_ret = espaperplay_power_enter_light_sleep();
+            if (sleep_ret == ESP_ERR_INVALID_STATE) {
+                /* 睡前守卫拦截（触摸 INT 未释放）：本次未真正入睡。必须
+                 * 原地重试而非落入下方唤醒分支——那里依据的是上一次唤醒
+                 * 的陈旧状态，定时器分支不清睡眠图标，会让图标永久滞留
+                 * 且设备看起来再也不睡眠（实测缺陷）。 */
+                continue;
+            }
 
             if (s_wake_was_timer) {
                 /* 定时器唤醒（周期刷新时钟）：默认不重连、保持断开，
@@ -379,11 +411,18 @@ static void power_auto_sleep_task(void *arg) {
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_REFRESH_GRACE_MS));
                 /* 刷新窗口内若有用户操作或 Web 心跳到达（借重连窗口），均升级
                  * 为保持唤醒：维持连接并重置活动计时，避免刚刷新完又睡。 */
-                if (espaperplay_input_get_last_activity_ms() > activity_at_wake ||
-                    power_ext_activity_fresh()) {
+                const bool user_active =
+                    espaperplay_input_get_last_activity_ms() > activity_at_wake;
+                if (user_active || power_ext_activity_fresh()) {
                     /* 升级为用户唤醒：保持连接。 */
                     if (!connected) {
                         espaperplay_wifi_resume_after_wake(true);
+                    }
+                    /* 真实用户操作意味着设备即将回到交互状态：睡眠图标必须
+                     * 同步清除，否则设备保持唤醒而图标滞留在屏上（实测缺陷；
+                     * 纯 Web 心跳升级保持图标，屏幕无需多一次刷新）。 */
+                    if (user_active) {
+                        espaperplay_input_set_sleep_indicator(false);
                     }
                     espaperplay_input_mark_activity();
                 } else {
