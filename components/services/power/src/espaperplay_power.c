@@ -18,6 +18,7 @@
 
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
+#include "espaperplay_diaglog.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
@@ -32,8 +33,10 @@ static const char *TAG = "ESPaperPlay_POWER";
  * 在判定时会取 max(本值, EPD 空闲超时 + 5s) 作为实际阈值。 */
 #define ESPAPERPLAY_POWER_AUTO_SLEEP_TIMEOUT_MS 30000
 
-/* 自动睡眠管理任务栈与优先级。 */
-#define ESPAPERPLAY_POWER_AUTO_SLEEP_TASK_STACK_SIZE 2048
+/* 自动睡眠管理任务栈与优先级。
+ * 栈深度：该任务调用链含 WiFi 挂起、EPD 睡眠等待与 diaglog 写文件
+ * （stdio/FATFS 链路耗栈），2048 已实测溢出，取 4096。 */
+#define ESPAPERPLAY_POWER_AUTO_SLEEP_TASK_STACK_SIZE 4096
 #define ESPAPERPLAY_POWER_AUTO_SLEEP_TASK_PRIORITY 3
 
 /* 唤醒后重置活动时间戳的宽限期（毫秒）：给用户事件处理留出窗口，
@@ -221,11 +224,16 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
 
     /* 用 esp_timer 前后差值度量本次睡眠的 RC 测得时长（微秒），供时钟漂移
      * 模型仅对睡眠部分补偿（运行期由 XTAL 精确推进，不计入）。 */
+    espaperplay_diaglog_write("PWR", "enter light sleep%s",
+                              (s_periodic_wakeup_ms > 0 || s_periodic_wakeup_minute_aligned)
+                                  ? " (timer armed)"
+                                  : "");
     int64_t sleep_start = esp_timer_get_time();
     esp_err_t err = esp_light_sleep_start();
     int64_t sleep_end = esp_timer_get_time();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "light sleep failed: %s", esp_err_to_name(err));
+        espaperplay_diaglog_write("PWR", "light sleep FAILED: %s", esp_err_to_name(err));
         return err;
     }
     int64_t sleep_us = sleep_end - sleep_start;
@@ -239,6 +247,8 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     s_wake_was_timer = (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) != 0;
     ESP_LOGI(TAG, "woke from light sleep (causes=0x%x%s, slept %lld us)", (unsigned)causes,
              s_wake_was_timer ? ", timer" : "", (long long)sleep_us);
+    espaperplay_diaglog_write("PWR", "woke: causes=0x%x%s, slept %lld us", (unsigned)causes,
+                              s_wake_was_timer ? " (timer)" : "", (long long)sleep_us);
     return ESP_OK;
 }
 

@@ -20,6 +20,7 @@
 #include "espaperplay_board.h"
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
+#include "espaperplay_diaglog.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
@@ -191,6 +192,14 @@ void app_main(void) {
     } else {
         BOOT_LOGF("SD 卡已挂载");
     }
+
+    /* 诊断日志：SD 可用时把触摸/电源关键事件落到
+     * /sdcard/system/diag.log，供长时间无人值守监测（失效后回看现场；
+     * Web 文件管理器可直接下载）。SD 不可用时静默停用，不影响其余功能。 */
+    (void)espaperplay_diaglog_init();
+    espaperplay_diaglog_write("BOOT", "firmware v%s started (reset_reason=%d, storage=%s)",
+                              ESPAPERPLAY_VERSION, (int)esp_reset_reason(),
+                              (storage_err == ESP_OK) ? "mounted" : "unavailable");
 
     BOOT_LOGF("触摸控制器初始化…");
     ESP_ERROR_CHECK(espaperplay_touch_init());
