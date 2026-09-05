@@ -67,7 +67,10 @@ CONFIG_LV_LOG_LEVEL_WARN=y
 # esp_mmap_assets 文件名缓冲长度（默认 16 会截断 NotoSansSC_Regular.ttf 这类
 # 长文件名，导致运行时 strcmp 匹配失败、字体打不开；32 为 Kconfig 上限）
 CONFIG_MMAP_FILE_NAME_LENGTH=32
-CONFIG_LV_USE_CLIB_MALLOC=y
+# LVGL 内存后端走项目实现（espaperplay_lv_mem_psram.c）：全部 lv_malloc
+# —— FreeType 字形缓存/库本体、widget/style 等 —— PSRAM 优先、内部 RAM 兜底
+# （此前 CLIB 直连系统 malloc，≤16KB 全落内部 RAM，字形缓存挤占内部堆）
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 
 # 网络时间（IP 定位 + NTP）：HTTPS 客户端使用 ESP-IDF 内置 CA 证书包校验
 # uapis.cn / NTP 域名证书（netip / geoip 服务依赖）
