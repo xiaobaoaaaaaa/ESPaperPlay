@@ -14,6 +14,7 @@
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
@@ -41,6 +42,13 @@ static char s_ip[16] = "0.0.0.0";                                 /*!< 当前 IP
 static uint8_t s_sta_retry_count = 0;                             /*!< 已执行的自动重连次数 */
 static bool s_boot_in_progress = false;       /*!< 是否处于系统启动阶段（允许回退 AP） */
 static TimerHandle_t s_fallback_timer = NULL; /*!< 回退到 AP 的延时定时器 */
+
+/* 扫描状态：结果缓存 + 互斥锁（LVGL 线程读 / worker·HTTP 任务写）。 */
+static SemaphoreHandle_t s_scan_mutex = NULL;                 /*!< 扫描缓存互斥锁 */
+static bool s_scan_in_progress = false;                       /*!< 是否正在扫描（抑制临时 STA 启动时的自动连接） */
+static espaperplay_wifi_scan_item_t
+    s_scan_cache[ESPAPERPLAY_WIFI_SCAN_MAX]; /*!< 最近一次扫描结果（RSSI 降序、去重） */
+static size_t s_scan_count = 0;                               /*!< 缓存中的结果条数 */
 
 /* ------------------------------------------------------------------ */
 /* WiFi 事件处理                                                        */
@@ -197,6 +205,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
     switch (event_id) {
     case WIFI_EVENT_STA_START:
+        /* 扫描期间临时切换 APSTA 会启动 STA 接口：此时不应按（可能过期的）
+         * STA 配置发起连接，否则会与扫描冲突。 */
+        if (s_scan_in_progress) {
+            ESP_LOGD(TAG, "STA started during scan, skip auto-connect");
+            break;
+        }
         ESP_LOGI(TAG, "STA started, connecting to \"%s\"...", s_ssid);
         s_sta_retry_count = 0;
         esp_wifi_connect();
@@ -365,6 +379,13 @@ esp_err_t espaperplay_wifi_init(void) {
         return ESP_FAIL;
     }
 
+    /* 创建扫描互斥锁（防止 UI 与 Web 并发扫描）。 */
+    s_scan_mutex = xSemaphoreCreateMutex();
+    if (s_scan_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create scan mutex");
+        return ESP_FAIL;
+    }
+
     s_initialized = true;
 
     /* 标记处于系统启动阶段：仅此阶段允许 STA 失败后回退到 AP。 */
@@ -504,3 +525,107 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi) {
 }
 
 bool espaperplay_wifi_is_connected(void) { return s_connected; }
+
+esp_err_t espaperplay_wifi_scan_start(void) {
+    if (s_scan_mutex == NULL || xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(8000)) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE; /* 已有扫描在进行或服务未初始化 */
+    }
+    if (!s_started) {
+        xSemaphoreGive(s_scan_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 纯 AP 模式不支持扫描：临时切到 APSTA（软 AP 保持运行，已连接站点
+     * 不掉线），扫描完成后恢复。STA 配置由 wifi_start() 每次重设，驱动内
+     * 的残留配置被临时清空是安全的。 */
+    wifi_mode_t cur_mode = WIFI_MODE_NULL;
+    bool switched = false;
+    esp_err_t err = esp_wifi_get_mode(&cur_mode);
+    if (err == ESP_OK && cur_mode == WIFI_MODE_AP) {
+        wifi_config_t empty_sta_cfg = {0};
+        err = esp_wifi_set_config(WIFI_IF_STA, &empty_sta_cfg);
+        if (err == ESP_OK) {
+            s_scan_in_progress = true;
+            err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+            if (err != ESP_OK) {
+                s_scan_in_progress = false;
+            } else {
+                switched = true;
+            }
+        }
+    }
+
+    if (err == ESP_OK) {
+        /* 阻塞扫描全信道（约 2~4s）；记录缓冲用堆分配（worker 栈小）。 */
+        uint16_t num = ESPAPERPLAY_WIFI_SCAN_MAX;
+        wifi_ap_record_t *records = malloc(sizeof(wifi_ap_record_t) * (size_t)num);
+        if (records == NULL) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            err = esp_wifi_scan_start(NULL, true);
+            if (err == ESP_OK) {
+                err = esp_wifi_scan_get_ap_records(&num, records);
+            } else {
+                /* 扫描失败时也须取一次记录释放驱动内存（忽略返回值）。 */
+                uint16_t drain = ESPAPERPLAY_WIFI_SCAN_MAX;
+                esp_wifi_scan_get_ap_records(&drain, records);
+            }
+
+            if (err == ESP_OK) {
+                /* 写缓存：跳过隐藏网络，按 SSID 去重（记录已按 RSSI 降序，
+                 * 保留首个即最强信号）。互斥锁持有至函数末尾统一释放。 */
+                size_t count = 0;
+                for (uint16_t i = 0; i < num && count < ESPAPERPLAY_WIFI_SCAN_MAX; i++) {
+                    const char *ssid = (const char *)records[i].ssid;
+                    if (ssid[0] == '\0') {
+                        continue;
+                    }
+                    bool dup = false;
+                    for (size_t j = 0; j < count; j++) {
+                        if (strcmp(s_scan_cache[j].ssid, ssid) == 0) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (dup) {
+                        continue;
+                    }
+                    strlcpy(s_scan_cache[count].ssid, ssid, sizeof(s_scan_cache[count].ssid));
+                    s_scan_cache[count].rssi = records[i].rssi;
+                    s_scan_cache[count].auth = (records[i].authmode != WIFI_AUTH_OPEN);
+                    s_scan_cache[count].channel = records[i].primary;
+                    count++;
+                }
+                s_scan_count = count;
+                ESP_LOGI(TAG, "WiFi scan done: %u APs, %u unique", (unsigned)num,
+                         (unsigned)count);
+            }
+            free(records);
+        }
+    }
+
+    /* 恢复纯 AP 模式（若期间用户已重新应用配置导致模式变化，则跳过恢复）。 */
+    if (switched && esp_wifi_get_mode(&cur_mode) == ESP_OK && cur_mode == WIFI_MODE_APSTA) {
+        esp_err_t restore_err = esp_wifi_set_mode(WIFI_MODE_AP);
+        if (restore_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to restore AP-only mode after scan: %s",
+                     esp_err_to_name(restore_err));
+        }
+    }
+    s_scan_in_progress = false;
+    xSemaphoreGive(s_scan_mutex);
+    return err;
+}
+
+size_t espaperplay_wifi_scan_get_results(espaperplay_wifi_scan_item_t *out, size_t max) {
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    if (s_scan_mutex == NULL || xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return 0;
+    }
+    const size_t n = (s_scan_count < max) ? s_scan_count : max;
+    memcpy(out, s_scan_cache, n * sizeof(*out));
+    xSemaphoreGive(s_scan_mutex);
+    return n;
+}

@@ -12,6 +12,7 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
@@ -456,6 +457,47 @@ esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req) {
     cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
     if (err != ESP_OK) {
         cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/** GET /api/wifi/scan —— 扫描附近 AP 并返回列表（阻塞约 2~4 秒）。 */
+esp_err_t webserver_handle_wifi_scan_get(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    /* 阻塞扫描在 HTTP 工作任务内执行（栈 10240，结果数组约 0.7KB 可承受）；
+     * 期间该服务器其他请求会排队，心跳最多延迟数秒，可接受。 */
+    esp_err_t err = espaperplay_wifi_scan_start();
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_WIFI_STATE) {
+            webserver_send_json_err(req, "WiFi 正忙（可能正在连接），请稍后重试");
+        } else {
+            webserver_send_json_err(req, esp_err_to_name(err));
+        }
+        return ESP_FAIL;
+    }
+
+    espaperplay_wifi_scan_item_t items[ESPAPERPLAY_WIFI_SCAN_MAX];
+    const size_t count = espaperplay_wifi_scan_get_results(items, ESPAPERPLAY_WIFI_SCAN_MAX);
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddNumberToObject(root, "count", (double)count);
+    cJSON *aps = cJSON_AddArrayToObject(root, "aps");
+    for (size_t i = 0; i < count && aps != NULL; i++) {
+        cJSON *ap = cJSON_CreateObject();
+        cJSON_AddStringToObject(ap, "ssid", items[i].ssid);
+        cJSON_AddNumberToObject(ap, "rssi", (double)items[i].rssi);
+        cJSON_AddBoolToObject(ap, "auth", items[i].auth);
+        cJSON_AddNumberToObject(ap, "channel", (double)items[i].channel);
+        cJSON_AddItemToArray(aps, ap);
     }
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);

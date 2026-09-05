@@ -260,6 +260,10 @@ extern const espaperplay_ui_page_t espaperplay_ui_page_files;
  * （联网配置二维码 / 本机输入 WiFi / 跳过），完成后标记 setup_done。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_setup;
 
+/** WiFi 列表页页面实例（screen_wifi_list.c）：扫描附近网络并列出，
+ * 点选后输入密码连接（开放网络免密直连），边缘滑动或单击返回。 */
+extern const espaperplay_ui_page_t espaperplay_ui_page_wifi_list;
+
 /**
  * @brief 显示开机日志屏（不经页面栈，直接绘制在活动屏幕上）。
  *

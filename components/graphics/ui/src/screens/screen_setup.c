@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui_lv.h"
@@ -23,6 +24,7 @@
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 #include "espaperplay_wifi.h"
+#include "icons_data.h"
 
 #include "lvgl.h"
 
@@ -39,8 +41,9 @@ static const char *TAG = "ESPaperPlay_UI";
  *   路径 A（推荐）联网配置：展示设备热点名与 WebUI 地址二维码，用户
  *     手机连接热点后扫码（或手动输入地址）打开 Web 管理页，在网页
  *     分步向导中完成全部配置；回到本页点「完成配置」即结束引导。
- *   路径 B 本机配置：在屏幕上用 LVGL 键盘分步输入家里 WiFi 的 SSID
- *     与密码，保存后设备切换 STA 模式连接，成功后结束引导。
+ *   路径 B 本机配置：自动扫描附近网络并列出（信号强度 / 是否加密），
+ *     点选后输入密码（开放网络免密直连）；扫描不到的网络（如隐藏 SSID）
+ *     可手动输入名称与密码，保存后设备切换 STA 模式连接，成功后结束引导。
  *
  * 也可随时「跳过引导」直接开始使用（稍后可在设置页重新运行引导，或经
  * Web 管理页配置）。完成 / 跳过都会把 setup_done 持久化到 NVS，下次
@@ -85,6 +88,7 @@ typedef enum {
     SETUP_OP_CONNECT = 0,   /*!< 保存 STA 凭据并切换连接 */
     SETUP_OP_RESTORE_AP,    /*!< 取消连接：恢复 AP 热点模式 */
     SETUP_OP_FINISH,        /*!< 标记引导完成（NVS 持久化） */
+    SETUP_OP_SCAN,          /*!< 阻塞扫描附近 AP（本机配置列表） */
 } setup_op_type_t;
 
 typedef struct {
@@ -103,7 +107,16 @@ static setup_step_t s_step = SETUP_STEP_WELCOME;  /*!< 当前步骤 */
 
 static char s_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN];      /*!< 本机配置：输入的 SSID */
 static char s_pass[ESPAPERPLAY_SYSTEM_PASS_MAX_LEN];      /*!< 本机配置：输入的密码 */
+static bool s_ssid_auth = false;      /*!< 选定网络是否加密（空密码校验用；手动输入按未加密处理） */
 static char s_fail_reason[96];                            /*!< 失败步骤的原因文案 */
+
+/* 本机配置扫描列表（LVGL 线程内重建时拷贝，行点击经下标取回）。 */
+static lv_obj_t *s_input_list = NULL;   /*!< 扫描结果列表容器 */
+static lv_obj_t *s_input_status = NULL; /*!< 扫描状态提示行 */
+static bool s_scan_busy = false;        /*!< 已投递扫描、尚未回 LVGL（防重复触发） */
+static espaperplay_wifi_scan_item_t
+    s_scan_items[ESPAPERPLAY_WIFI_SCAN_MAX]; /*!< 扫描结果快照 */
+static size_t s_scan_count = 0;              /*!< 快照条数 */
 
 static lv_obj_t *s_status_label = NULL;           /*!< 连接中步骤的状态行 */
 static lv_timer_t *s_poll_timer = NULL;           /*!< 连接状态轮询定时器 */
@@ -131,6 +144,11 @@ static void setup_btn_skip_cb(lv_event_t *e);
 static void setup_btn_retry_cb(lv_event_t *e);
 static void setup_btn_cancel_connect_cb(lv_event_t *e);
 static void setup_btn_done_cb(lv_event_t *e);
+static void setup_btn_manual_cb(lv_event_t *e);
+static void setup_btn_rescan_cb(lv_event_t *e);
+static void setup_scan_row_cb(lv_event_t *e);
+static void setup_scan_done_lv(void *arg);
+static void setup_input_rebuild(void);
 static void setup_finish_and_leave(void);
 static void setup_leave_page_only(void);
 
@@ -287,6 +305,14 @@ static void setup_worker_task(void *arg) {
                 espaperplay_wifi_start();
             }
             break;
+        case SETUP_OP_SCAN: {
+            esp_err_t err = espaperplay_wifi_scan_start();
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "setup: scan failed: %s", esp_err_to_name(err));
+            }
+            espaperplay_gui_lv_call(setup_scan_done_lv, (void *)(intptr_t)err, 2000);
+            break;
+        }
         case SETUP_OP_FINISH: {
             esp_err_t err = espaperplay_system_mark_setup_done();
             if (err != ESP_OK) {
@@ -435,16 +461,185 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
                  setup_btn_skip_cb);
 }
 
-/** 本机配置背景（键盘模态打开时的底层提示）。 */
+/** 扫描结果 RSSI 分档图标（与状态栏同款素材）。 */
+static const lv_image_dsc_t *setup_rssi_icon(int8_t rssi) {
+    if (rssi >= -60) {
+        return &icon_wifi4_16;
+    }
+    if (rssi >= -70) {
+        return &icon_wifi3_16;
+    }
+    if (rssi >= -80) {
+        return &icon_wifi2_16;
+    }
+    return &icon_wifi1_16;
+}
+
+/** 重建本机配置扫描列表（LVGL 线程内；从 wifi 服务缓存拷贝快照）。 */
+static void setup_input_rebuild(void) {
+    if (s_input_list == NULL) {
+        return;
+    }
+    lv_obj_clean(s_input_list);
+    s_scan_count = espaperplay_wifi_scan_get_results(s_scan_items, ESPAPERPLAY_WIFI_SCAN_MAX);
+
+    if (s_scan_count == 0) {
+        if (!s_scan_busy && s_input_status != NULL) {
+            lv_label_set_text(s_input_status, "未发现附近网络，可手动输入或重新扫描");
+        }
+        return;
+    }
+
+    const int32_t list_w = lv_obj_get_width(s_input_list);
+    const int row_h = setup_scaled(44) < 36 ? 36 : setup_scaled(44);
+
+    for (size_t i = 0; i < s_scan_count; i++) {
+        lv_obj_t *row = lv_obj_create(s_input_list);
+        lv_obj_set_size(row, list_w, row_h);
+        lv_obj_set_pos(row, 0, (int)(i * (row_h + 4)));
+        lv_obj_set_style_bg_color(row, lv_color_white(), 0);
+        lv_obj_set_style_border_color(row, lv_color_black(), 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_radius(row, 6, 0);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(row, setup_scan_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        /* SSID（左，超长省略） */
+        lv_obj_t *label = lv_label_create(row);
+        lv_label_set_text(label, s_scan_items[i].ssid);
+        lv_obj_set_style_text_color(label, lv_color_black(), 0);
+        lv_obj_set_style_text_font(label, setup_font(16), 0);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
+        lv_obj_set_width(label, list_w - 110);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+
+        /* 加密标记 + 信号强度图标（右） */
+        if (s_scan_items[i].auth) {
+            lv_obj_t *lock = lv_label_create(row);
+            lv_label_set_text(lock, "加密");
+            lv_obj_set_style_text_color(lock, lv_color_black(), 0);
+            lv_obj_set_style_text_font(lock, setup_font(16), 0);
+            lv_obj_align(lock, LV_ALIGN_RIGHT_MID, -30, 0);
+        }
+        lv_obj_t *icon = lv_image_create(row);
+        lv_image_set_src(icon, setup_rssi_icon(s_scan_items[i].rssi));
+        lv_obj_align(icon, LV_ALIGN_RIGHT_MID, -10, 0);
+    }
+
+    if (!s_scan_busy && s_input_status != NULL) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "已发现 %u 个网络，点选即可连接", (unsigned)s_scan_count);
+        lv_label_set_text(s_input_status, buf);
+    }
+    ESP_LOGI(TAG, "setup: %u networks listed", (unsigned)s_scan_count);
+}
+
+/** 扫描完成回调（LVGL 线程，arg 为 esp_err_t）：仍处于本机配置步骤才重建。 */
+static void setup_scan_done_lv(void *arg) {
+    const esp_err_t err = (esp_err_t)(intptr_t)arg;
+    s_scan_busy = false;
+    if (s_step != SETUP_STEP_INPUT) {
+        return; /* 已离开本机配置步骤：忽略迟到回调 */
+    }
+    if (err != ESP_OK && s_input_status != NULL) {
+        if (err == ESP_ERR_WIFI_STATE) {
+            lv_label_set_text(s_input_status, "WiFi 正忙，请稍后重新扫描");
+        } else {
+            char buf[96];
+            snprintf(buf, sizeof(buf), "扫描失败：%s", esp_err_to_name(err));
+            lv_label_set_text(s_input_status, buf);
+        }
+        return;
+    }
+    setup_input_rebuild();
+}
+
+/** 扫描行点击：加密网络 -> 密码键盘；开放网络 -> 免密直连。 */
+static void setup_scan_row_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    if (s_step != SETUP_STEP_INPUT || s_modal != NULL || s_scan_busy) {
+        return;
+    }
+    const intptr_t idx = (intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || (size_t)idx >= s_scan_count) {
+        return;
+    }
+    strlcpy(s_ssid, s_scan_items[idx].ssid, sizeof(s_ssid));
+    s_ssid_auth = s_scan_items[idx].auth;
+    if (s_ssid_auth) {
+        setup_open_keyboard(true);
+        return;
+    }
+    /* 开放网络：免密直接连接。 */
+    setup_show_step(SETUP_STEP_CONNECTING);
+    setup_op_t op = {.type = SETUP_OP_CONNECT};
+    strlcpy(op.ssid, s_ssid, sizeof(op.ssid));
+    op.pass[0] = '\0';
+    setup_op_post(&op);
+}
+
+/** 「手动输入」：弹出 SSID 键盘（隐藏网络等扫描不到的场景）。 */
+static void setup_btn_manual_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    if (s_step != SETUP_STEP_INPUT || s_modal != NULL) {
+        return;
+    }
+    s_ssid_auth = false; /* 手动输入的网络加密状态未知：允许空密码 */
+    setup_open_keyboard(false);
+}
+
+/** 「重新扫描」：重新投递扫描操作。 */
+static void setup_btn_rescan_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    if (s_step != SETUP_STEP_INPUT || s_scan_busy || s_modal != NULL) {
+        return;
+    }
+    s_scan_busy = true;
+    if (s_input_status != NULL) {
+        lv_label_set_text(s_input_status, "正在扫描附近网络…");
+    }
+    setup_op_t op = {.type = SETUP_OP_SCAN};
+    setup_op_post(&op);
+}
+
+/** 本机配置步骤：扫描列表 + 手动输入兜底（键盘模态打开时的底层）。 */
 static void setup_build_input(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
-    (void)scr_w;
-    lv_obj_t *title = setup_label_create(parent, "本机配置", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(56));
-    lv_obj_t *body = setup_label_create(
-        parent, "请在下方键盘输入家里 WiFi 的名称与密码。\n输入完成后设备将自动连接该网络。", 16,
-        LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(body, 0, setup_scaled(110));
     (void)scr_h;
+    lv_obj_t *title = setup_label_create(parent, "本机配置", 24, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, setup_scaled(20));
+
+    s_input_status = setup_label_create(
+        parent, s_scan_busy ? "正在扫描附近网络…" : "选择要连接的网络", 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(s_input_status, 0, setup_scaled(66));
+
+    const int btn_h = setup_btn_h();
+    const int btn_y = s_content_h - btn_h - setup_scaled(20);
+
+    /* 扫描结果列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
+    s_input_list = lv_obj_create(parent);
+    lv_obj_set_size(s_input_list, scr_w - 2 * SETUP_MARGIN, btn_y - setup_scaled(106));
+    lv_obj_set_pos(s_input_list, SETUP_MARGIN, setup_scaled(106));
+    lv_obj_set_style_bg_color(s_input_list, lv_color_white(), 0);
+    lv_obj_set_style_border_width(s_input_list, 0, 0);
+    lv_obj_set_style_radius(s_input_list, 0, 0);
+    lv_obj_set_style_pad_all(s_input_list, 0, 0);
+    lv_obj_set_scroll_dir(s_input_list, LV_DIR_VER);
+    lv_obj_add_flag(s_input_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(s_input_list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(s_input_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+
+    const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
+    setup_button(parent, "手动输入", SETUP_MARGIN, btn_y, btn_w, btn_h, false,
+                 setup_btn_manual_cb);
+    setup_button(parent, "重新扫描", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, btn_h, false,
+                 setup_btn_rescan_cb);
+
+    /* 扫描进行中保持空列表等回调；否则用缓存结果即时重建。 */
+    if (!s_scan_busy) {
+        setup_input_rebuild();
+    }
 }
 
 /** 连接中步骤：目标网络 + 动态状态行 + 取消。 */
@@ -521,6 +716,8 @@ static void setup_build_step_lv(void) {
     int32_t scr_h = 0;
     setup_screen_size(&scr_w, &scr_h);
     s_status_label = NULL;
+    s_input_list = NULL;
+    s_input_status = NULL;
 
     switch (s_step) {
     case SETUP_STEP_WELCOME:
@@ -637,11 +834,11 @@ static void setup_kb_toggle_cb(lv_event_t *e) {
     lv_label_set_text(lv_obj_get_child(lv_event_get_current_target(e), 0), hidden ? "隐藏" : "显示");
 }
 
-/** 键盘模态 取消 按钮：关闭并回到欢迎步骤。 */
+/** 键盘模态 取消 按钮：关闭并回到本机配置列表（不重新扫描）。 */
 static void setup_kb_cancel_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
     setup_modal_close();
-    setup_show_step(SETUP_STEP_WELCOME);
+    setup_show_step(SETUP_STEP_INPUT);
 }
 
 /** 键盘模态 确定 按钮：校验 -> 下一步（SSID -> 密码 -> 发起连接）。 */
@@ -673,6 +870,13 @@ static void setup_kb_ok_cb(lv_event_t *e) {
     }
 
     if (s_kb_for_pass) {
+        /* 扫描选定的加密网络必须输密码；手动输入（加密状态未知）允许留空按开放网络连接。 */
+        if (len == 0 && s_ssid_auth) {
+            if (s_kb_hint != NULL) {
+                lv_label_set_text(s_kb_hint, "请输入密码");
+            }
+            return;
+        }
         strlcpy(s_pass, text, sizeof(s_pass));
         setup_modal_close();
         /* 发起连接：切连接中步骤 + 投递 worker。 */
@@ -822,11 +1026,14 @@ static void setup_btn_web_cb(lv_event_t *e) {
     setup_show_step(SETUP_STEP_WEB);
 }
 
-/** 「在本机输入 WiFi」：进入本机配置并弹出 SSID 键盘。 */
+/** 「在本机输入 WiFi」：进入本机配置（自动扫描附近网络）。 */
 static void setup_btn_local_cb(lv_event_t *e) {
     (void)e;
+    /* 先置扫描中标志：步骤构建即显示扫描提示、保持空列表（不闪旧结果）。 */
+    s_scan_busy = true;
     setup_show_step(SETUP_STEP_INPUT);
-    setup_open_keyboard(false);
+    setup_op_t op = {.type = SETUP_OP_SCAN};
+    setup_op_post(&op);
 }
 
 /** 「返回」：回到欢迎步骤。 */
@@ -906,7 +1113,10 @@ static void setup_enter(void) {
 
     s_ssid[0] = '\0';
     s_pass[0] = '\0';
+    s_ssid_auth = false;
     s_fail_reason[0] = '\0';
+    s_scan_busy = false;
+    s_scan_count = 0;
     s_modal = NULL;
     s_kb_ta = NULL;
     s_kb_hint = NULL;
@@ -927,6 +1137,8 @@ static void setup_exit(void) {
     setup_modal_close();
     s_content = NULL; /* 页面对象随清屏删除 */
     s_status_label = NULL;
+    s_input_list = NULL;
+    s_input_status = NULL;
     /* 恢复睡眠超时（以当前系统配置为准；引导期间曾被禁用）。 */
     espaperplay_epd_set_idle_sleep_timeout_ms(
         espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
@@ -935,14 +1147,15 @@ static void setup_exit(void) {
     ESP_LOGI(TAG, "setup wizard exited");
 }
 
-/** 按键处理：模态打开时单击关闭模态（回到欢迎步骤），其余无操作。 */
+/** 按键处理：模态打开时单击关闭模态（键盘从本机配置打开则回到列表），
+ * 其余无操作。 */
 static void setup_on_key(const espaperplay_input_event_t *event) {
     if (event->key_action != ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK) {
         return;
     }
     if (s_modal != NULL) {
         setup_modal_close();
-        setup_show_step(SETUP_STEP_WELCOME);
+        setup_show_step(s_step == SETUP_STEP_INPUT ? SETUP_STEP_INPUT : SETUP_STEP_WELCOME);
     }
 }
 

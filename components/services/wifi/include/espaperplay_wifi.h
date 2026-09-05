@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -42,6 +43,8 @@ extern "C" {
 #define ESPAPERPLAY_WIFI_AP_MAX_CONNECTION 4
 /** AP 热点信道（0 表示自动选择）。 */
 #define ESPAPERPLAY_WIFI_AP_CHANNEL 0
+/** 扫描结果缓存上限（按 RSSI 降序、按 SSID 去重后保留前 N 个）。 */
+#define ESPAPERPLAY_WIFI_SCAN_MAX 20
 
 /**
  * @brief WiFi 运行状态快照。
@@ -53,6 +56,16 @@ typedef struct {
     char ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN]; /*!< 当前使用的 SSID */
     char ip[16]; /*!< 当前 IPv4 地址字符串（如 "192.168.4.1"），未分配为 "0.0.0.0" */
 } espaperplay_wifi_status_t;
+
+/**
+ * @brief 单条扫描结果。
+ */
+typedef struct {
+    char ssid[33];   /*!< 网络名称（隐藏网络 / 空 SSID 不返回） */
+    int8_t rssi;     /*!< 信号强度（dBm，负值，越大越强） */
+    bool auth;       /*!< 是否为加密网络（需要密码） */
+    uint8_t channel; /*!< 主信道 */
+} espaperplay_wifi_scan_item_t;
 
 /**
  * @brief 初始化 WiFi 网络服务。
@@ -107,6 +120,30 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi);
  * @return AP 模式且热点已开启、或 STA 模式且已获取 IP 时返回 true。
  */
 bool espaperplay_wifi_is_connected(void);
+
+/**
+ * @brief 扫描附近 AP（阻塞式，全程约 2~4 秒）。
+ *
+ * 结果按 RSSI 降序、按 SSID 去重（保留最强信号）写入内部缓存，经
+ * espaperplay_wifi_scan_get_results() 读取；本函数返回即扫描完成。
+ *
+ * 纯 AP 热点模式不支持扫描：会临时切换到 APSTA（软 AP 保持运行，已连接
+ * 的站点不掉线），扫描完成后恢复。STA 正在连接时驱动会拒绝扫描，返回
+ * ESP_ERR_WIFI_STATE。本函数会阻塞调用任务，禁止在 LVGL / 事件回调等
+ * 不能阻塞的上下文中调用（应在工作任务 / HTTP 任务中调用）。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_scan_start(void);
+
+/**
+ * @brief 读取最近一次扫描的结果快照。
+ *
+ * @param out 输出数组（非空）。
+ * @param max 输出数组容量。
+ * @return 实际拷贝的条目数（未扫描过或参数非法返回 0）。
+ */
+size_t espaperplay_wifi_scan_get_results(espaperplay_wifi_scan_item_t *out, size_t max);
 
 /**
  * @brief 进入浅睡眠前主动断开 STA 并抑制自动重连。

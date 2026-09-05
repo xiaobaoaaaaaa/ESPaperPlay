@@ -11,6 +11,7 @@ idf_component_register(
          "src/screens/screen_settings.c"
          "src/screens/screen_files.c"
          "src/screens/screen_setup.c"
+         "src/screens/screen_wifi_list.c"
          "src/screens/screen_test.c"
          "src/screens/screen_weather.c"
          "src/ui_stack.c"

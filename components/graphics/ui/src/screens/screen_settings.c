@@ -311,6 +311,11 @@ static void settings_open_setup(void) {
     espaperplay_ui_page_push_lv(&espaperplay_ui_page_setup);
 }
 
+static void settings_open_wifi_list(void) {
+    ESP_LOGI(TAG, "settings: open wifi list");
+    espaperplay_ui_page_push_lv(&espaperplay_ui_page_wifi_list);
+}
+
 /* ---- 服务组：天气 ---- */
 
 static void settings_fmt_weather_key(int32_t v, char *buf, size_t size) {
@@ -387,6 +392,7 @@ static settings_row_t s_rows[] = {
      .fmt_value = settings_fmt_wifi_mode,
      .options = s_wifi_mode_options,
      .option_count = (int)(sizeof(s_wifi_mode_options) / sizeof(s_wifi_mode_options[0]))},
+    {.name = "WiFi 网络", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_wifi_list},
     {.name = "WiFi 凭据", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_wifi_cred},
     {.name = "重新运行开机引导", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_setup},
     /* 系统：字体 / 版本 / 开发者 */
@@ -423,13 +429,13 @@ static const settings_subgroup_t s_dev_subgroups[] = {
 };
 
 static const settings_subgroup_t s_sys_subgroups[] = {
-    {"网络", 5, 3},
-    {"字体", 8, 1},
-    {"开发者", 9, 2},
+    {"网络", 5, 4},
+    {"字体", 9, 1},
+    {"开发者", 10, 2},
 };
 
 static const settings_subgroup_t s_svc_subgroups[] = {
-    {"天气", 11, 3},
+    {"天气", 12, 3},
 };
 
 /* 全部大类（顺序即显示顺序）。 */

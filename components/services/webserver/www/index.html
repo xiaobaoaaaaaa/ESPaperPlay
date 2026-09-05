@@ -387,6 +387,61 @@
             border-color: var(--err);
         }
 
+        /* WiFi 扫描结果列表（设置面板与开机向导共用） */
+        .scan-results {
+            margin-top: 8px;
+            max-height: 180px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .scan-results:empty {
+            display: none;
+        }
+
+        .scan-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+        }
+
+        .scan-row:last-child {
+            border-bottom: none;
+        }
+
+        .scan-row:hover {
+            filter: brightness(0.97);
+        }
+
+        .scan-row.sel {
+            background: #e0f2fe;
+            font-weight: 600;
+        }
+
+        .scan-ssid {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .scan-meta {
+            color: #64748b;
+            white-space: nowrap;
+            font-size: 12px;
+        }
+
+        .scan-hint {
+            padding: 8px 10px;
+            color: #64748b;
+            font-size: 13px;
+        }
+
         #toast {
             position: fixed;
             bottom: 24px;
@@ -614,6 +669,11 @@
                         <label>WiFi 工作模式</label>
                         <label class="radio"><input type="radio" name="wifi_mode" value="ap"> 热点 (AP)</label>
                         <label class="radio"><input type="radio" name="wifi_mode" value="sta"> 站点 (STA)</label>
+                    </div>
+                    <div class="field">
+                        <label>附近网络（点选自动填入 SSID）</label>
+                        <button type="button" id="wifiScan">扫描附近网络</button>
+                        <div id="wifiScanResults" class="scan-results"></div>
                     </div>
                     <div class="field">
                         <label>STA SSID（要连接的路由器）</label>
@@ -892,6 +952,11 @@
                     </div>
                     <form id="wzNetForm">
                         <div id="wzStaFields">
+                            <div class="field">
+                                <label>附近网络（点选自动填入 SSID）</label>
+                                <button type="button" id="wzWifiScan">扫描附近网络</button>
+                                <div id="wzWifiScanResults" class="scan-results"></div>
+                            </div>
                             <div class="field">
                                 <label>STA SSID（要连接的路由器）</label>
                                 <input type="text" name="sta_ssid" maxlength="31" placeholder="例如 MyHomeWiFi"
@@ -1672,6 +1737,62 @@
             }
         });
 
+        /* ===== WiFi 扫描（设置面板与开机向导共用） ===== */
+        function rssiLabel(rssi) {
+            const bar = rssi >= -60 ? '强' : (rssi >= -70 ? '中' : '弱');
+            return bar + ' · ' + rssi + ' dBm';
+        }
+
+        /* 触发一次扫描并渲染结果（阻塞接口，约 2~4 秒）；点选行回调 onPick(ap) 回填表单。 */
+        async function scanWifi(btn, listEl, onPick) {
+            if (btn.disabled) return;
+            btn.disabled = true;
+            const oldText = btn.textContent;
+            btn.textContent = '扫描中…';
+            listEl.innerHTML = '<div class="scan-hint">正在扫描附近网络，约 2~4 秒…</div>';
+            try {
+                const res = await apiFetch('/api/wifi/scan');
+                if (!res.ok) {
+                    let msg = '未知错误';
+                    try { msg = (await res.json()).error || msg; } catch (e) { /* 忽略解析失败 */ }
+                    listEl.innerHTML = '<div class="scan-hint">扫描失败：' + esc(msg) + '</div>';
+                    return;
+                }
+                const d = await res.json();
+                const aps = d.aps || [];
+                if (!aps.length) {
+                    listEl.innerHTML = '<div class="scan-hint">未发现附近网络</div>';
+                    return;
+                }
+                listEl.innerHTML = aps.map((ap, i) =>
+                    '<div class="scan-row" data-i="' + i + '">' +
+                    '<span class="scan-ssid">' + esc(ap.ssid) + '</span>' +
+                    '<span class="scan-meta">' + (ap.auth ? '加密' : '开放') + ' · ' + rssiLabel(ap.rssi) + '</span>' +
+                    '</div>').join('');
+                listEl.querySelectorAll('.scan-row').forEach(row => {
+                    row.addEventListener('click', () => {
+                        listEl.querySelectorAll('.scan-row').forEach(r => r.classList.remove('sel'));
+                        row.classList.add('sel');
+                        onPick(aps[+row.dataset.i]);
+                    });
+                });
+            } catch (err) {
+                listEl.innerHTML = '<div class="scan-hint">扫描失败：' + esc(String(err.message || err)) + '</div>';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = oldText;
+            }
+        }
+
+        /* 设置面板：点选结果填入 STA SSID 并切换到 STA 模式。 */
+        $('#wifiScan').addEventListener('click', () => {
+            scanWifi($('#wifiScan'), $('#wifiScanResults'), (ap) => {
+                $('input[name=sta_ssid]').value = ap.ssid;
+                $('input[name=wifi_mode][value=sta]').checked = true;
+                $('input[name=sta_password]').focus();
+            });
+        });
+
         $('#reset').addEventListener('click', async () => {
             if (!confirm('确定恢复出厂默认设置吗？\n设备将重启并重新进入首次开机引导，需重新连接热点完成配置。')) return;
             try {
@@ -2056,6 +2177,16 @@
             wzGoto(4);
         });
         $('#wzBack1').addEventListener('click', () => wzGoto(2));
+        /* 向导步骤 3：扫描附近网络（填入向导表单的 STA SSID，避免与面板同名输入框冲突）。 */
+        $('#wzWifiScan').addEventListener('click', () => {
+            scanWifi($('#wzWifiScan'), $('#wzWifiScanResults'), (ap) => {
+                document.querySelector('input[name=wz_wifi_mode][value=sta]').checked = true;
+                wzSyncNetFields();
+                const f = $('#wzNetForm');
+                f.querySelector('input[name=sta_ssid]').value = ap.ssid;
+                f.querySelector('input[name=sta_password]').focus();
+            });
+        });
 
         /* 步骤 4：天气（可选，仅收集不写入；API Key / API Host 必填） */
         $('#wzWxNext').addEventListener('click', () => {
