@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -66,8 +67,13 @@ static void system_task(void *arg) {
     ESP_LOGI(TAG, "System task started");
 
     while (1) {
-        ESP_LOGI(TAG, "uptime: %llu s, free heap: %" PRIu32 " bytes",
-                 esp_timer_get_time() / 1000000ULL, (uint32_t)esp_get_free_heap_size());
+        ESP_LOGI(TAG,
+                 "uptime: %llu s, free heap: %" PRIu32 " (int free: %" PRIu32
+                 ", int largest: %" PRIu32 ", dma free: %" PRIu32 ") bytes",
+                 esp_timer_get_time() / 1000000ULL, (uint32_t)esp_get_free_heap_size(),
+                 (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (uint32_t)heap_caps_get_free_size(MALLOC_CAP_DMA));
         vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_HEARTBEAT_PERIOD_MS));
     }
 }
