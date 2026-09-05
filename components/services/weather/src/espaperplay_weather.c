@@ -151,8 +151,10 @@ static volatile int64_t s_last_refresh_try_ms = 0;
 /*!< 刷新完成信号（每次刷新尝试结束置位，供外部等待完成）。 */
 static EventGroupHandle_t s_refresh_done = NULL;
 
-static espaperplay_weather_snapshot_t s_snapshot;   /*!< 数据快照 */
-static espaperplay_weather_status_t s_status;       /*!< 运行状态（含最近错误） */
+/*!< 数据快照（PSRAM 惰性分配，见 weather_caches_ensure；NULL=尚未就绪）。 */
+static espaperplay_weather_snapshot_t *s_snapshot;
+/*!< 运行状态（含最近错误；PSRAM 惰性分配）。 */
+static espaperplay_weather_status_t *s_status;
 
 /* 各 API 独立缓存（键 = 实际使用的 LocationID）。 */
 typedef struct {
@@ -215,15 +217,17 @@ typedef struct {
     espaperplay_weather_astronomy_t data;
 } weather_astronomy_cache_t;
 
-static weather_now_cache_t s_cache_now;
-static weather_daily_cache_t s_cache_daily_3d;
-static weather_daily_cache_t s_cache_daily_7d;
-static weather_hourly_cache_t s_cache_hourly;
-static weather_minutely_cache_t s_cache_minutely;
-static weather_warning_cache_t s_cache_warning;
-static weather_indices_cache_t s_cache_indices;
-static weather_air_cache_t s_cache_air;
-static weather_astronomy_cache_t s_cache_astronomy;
+/* 各接口缓存合计约 30KB、快照约 22KB：均为纯 CPU 访问、不参与 DMA，
+ * 全部放 PSRAM（指针惰性分配，见 weather_caches_ensure），为内部 RAM 让路。 */
+static weather_now_cache_t *s_cache_now;
+static weather_daily_cache_t *s_cache_daily_3d;
+static weather_daily_cache_t *s_cache_daily_7d;
+static weather_hourly_cache_t *s_cache_hourly;
+static weather_minutely_cache_t *s_cache_minutely;
+static weather_warning_cache_t *s_cache_warning;
+static weather_indices_cache_t *s_cache_indices;
+static weather_air_cache_t *s_cache_air;
+static weather_astronomy_cache_t *s_cache_astronomy;
 
 /* 城市查询缓存（按查询串区分）。 */
 typedef struct {
@@ -234,7 +238,7 @@ typedef struct {
     espaperplay_weather_location_t loc[WEATHER_LOOKUP_RESULT_MAX];
 } weather_lookup_cache_entry_t;
 
-static weather_lookup_cache_entry_t s_cache_lookup[ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES];
+static weather_lookup_cache_entry_t *s_cache_lookup; /*!< [ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES] */
 
 /* 自动定位结果缓存。 */
 typedef struct {
@@ -245,13 +249,65 @@ typedef struct {
     char name[128];
 } weather_auto_loc_cache_t;
 
-static weather_auto_loc_cache_t s_cache_auto_loc;
+static weather_auto_loc_cache_t *s_cache_auto_loc;
 
 /* ------------------------------------------------------------------ */
 /* 锁与时间辅助                                                         */
 /* ------------------------------------------------------------------ */
 
-/** 确保互斥锁已创建（惰性初始化，可重入）。 */
+/** 大块缓存并发分配保护（分配在临界区外做，临界区内只登记指针）。 */
+static portMUX_TYPE s_cache_alloc_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/**
+ * @brief 惰性分配一块缓存（PSRAM 优先，PSRAM 不足回落内部 RAM）。
+ *
+ * @param slot 指针槽（成功后写入缓存地址）。
+ * @param size 缓存字节数。
+ * @return 缓存指针；两类内存均不足时返回 NULL（调用方按缓存未命中降级）。
+ */
+static void *weather_block_ensure(void **slot, size_t size) {
+    if (*slot != NULL) {
+        return *slot;
+    }
+    void *p = heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == NULL) {
+        p = heap_caps_calloc(1, size, MALLOC_CAP_8BIT);
+    }
+    if (p == NULL) {
+        return NULL;
+    }
+    portENTER_CRITICAL(&s_cache_alloc_mux);
+    if (*slot == NULL) {
+        *slot = p;
+        p = NULL;
+    }
+    portEXIT_CRITICAL(&s_cache_alloc_mux);
+    if (p != NULL) {
+        /* 并发下另一任务已抢先登记：释放本份，复用已登记块。 */
+        free(p);
+    }
+    return *slot;
+}
+
+/** 确保全部大块缓存已分配（快照 / 状态 / 各接口缓存 / 城市查询缓存）。 */
+static void weather_caches_ensure(void) {
+    weather_block_ensure((void **)&s_snapshot, sizeof(*s_snapshot));
+    weather_block_ensure((void **)&s_status, sizeof(*s_status));
+    weather_block_ensure((void **)&s_cache_now, sizeof(*s_cache_now));
+    weather_block_ensure((void **)&s_cache_daily_3d, sizeof(*s_cache_daily_3d));
+    weather_block_ensure((void **)&s_cache_daily_7d, sizeof(*s_cache_daily_7d));
+    weather_block_ensure((void **)&s_cache_hourly, sizeof(*s_cache_hourly));
+    weather_block_ensure((void **)&s_cache_minutely, sizeof(*s_cache_minutely));
+    weather_block_ensure((void **)&s_cache_warning, sizeof(*s_cache_warning));
+    weather_block_ensure((void **)&s_cache_indices, sizeof(*s_cache_indices));
+    weather_block_ensure((void **)&s_cache_air, sizeof(*s_cache_air));
+    weather_block_ensure((void **)&s_cache_astronomy, sizeof(*s_cache_astronomy));
+    weather_block_ensure((void **)&s_cache_lookup,
+                         sizeof(*s_cache_lookup) * ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES);
+    weather_block_ensure((void **)&s_cache_auto_loc, sizeof(*s_cache_auto_loc));
+}
+
+/** 确保互斥锁与 PSRAM 大块缓存已就绪（惰性初始化，可重入）。 */
 static void weather_lock_ensure(void) {
     if (s_lock == NULL) {
         SemaphoreHandle_t m = xSemaphoreCreateMutex();
@@ -259,6 +315,7 @@ static void weather_lock_ensure(void) {
             s_lock = m;
         }
     }
+    weather_caches_ensure();
 }
 
 /** 当前时间（毫秒，esp_timer）。 */
@@ -529,8 +586,10 @@ static void weather_record_error(int api_code, const char *msg) {
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_status.last_api_code = api_code;
-    strlcpy(s_status.last_error, msg, sizeof(s_status.last_error));
+    if (s_status != NULL) {
+        s_status->last_api_code = api_code;
+        strlcpy(s_status->last_error, msg, sizeof(s_status->last_error));
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -538,7 +597,7 @@ static void weather_record_error(int api_code, const char *msg) {
 
 /** 记录一次 API 调用失败：组合「接口名 + 业务码 + 含义」。 */
 static void weather_record_api_error(const char *api_name, int code) {
-    char msg[sizeof(s_status.last_error)];
+    char msg[sizeof(s_status->last_error)];
     snprintf(msg, sizeof(msg), "%s: QWeather code %d（%s）", api_name, code,
              weather_code_meaning(code));
     ESP_LOGW(TAG, "%s", msg);
@@ -979,7 +1038,7 @@ static esp_err_t weather_request(const char *host, const char *path, const char 
     char *body = NULL;
     esp_err_t err = weather_http_get(url, cfg->weather_api_key, max_len, &body);
     if (err != ESP_OK) {
-        char msg[sizeof(s_status.last_error)];
+        char msg[sizeof(s_status->last_error)];
         snprintf(msg, sizeof(msg), "%s: %s", path, esp_err_to_name(err));
         weather_record_error(0, msg);
         return err;
@@ -1071,11 +1130,11 @@ static esp_err_t weather_resolve_location(char *loc_id, size_t id_size, char *lo
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = s_cache_auto_loc.valid &&
-               weather_now_ms() - s_cache_auto_loc.ts_ms < ESPAPERPLAY_WEATHER_AUTO_LOC_TTL_MS;
+    bool hit = s_cache_auto_loc != NULL && s_cache_auto_loc->valid &&
+               weather_now_ms() - s_cache_auto_loc->ts_ms < ESPAPERPLAY_WEATHER_AUTO_LOC_TTL_MS;
     if (hit) {
-        strlcpy(loc_id, s_cache_auto_loc.id, id_size);
-        strlcpy(loc_name, s_cache_auto_loc.name, name_size);
+        strlcpy(loc_id, s_cache_auto_loc->id, id_size);
+        strlcpy(loc_name, s_cache_auto_loc->name, name_size);
         *auto_location = true;
     }
     if (s_lock != NULL) {
@@ -1129,11 +1188,13 @@ static esp_err_t weather_resolve_location(char *loc_id, size_t id_size, char *lo
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_auto_loc.valid = true;
-    s_cache_auto_loc.ts_ms = weather_now_ms();
-    s_cache_auto_loc.auto_location = true;
-    strlcpy(s_cache_auto_loc.id, loc_id, sizeof(s_cache_auto_loc.id));
-    strlcpy(s_cache_auto_loc.name, loc_name, sizeof(s_cache_auto_loc.name));
+    if (s_cache_auto_loc != NULL) {
+        s_cache_auto_loc->valid = true;
+        s_cache_auto_loc->ts_ms = weather_now_ms();
+        s_cache_auto_loc->auto_location = true;
+        strlcpy(s_cache_auto_loc->id, loc_id, sizeof(s_cache_auto_loc->id));
+        strlcpy(s_cache_auto_loc->name, loc_name, sizeof(s_cache_auto_loc->name));
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1157,18 +1218,20 @@ esp_err_t espaperplay_weather_location_lookup(const char *query,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
-        const weather_lookup_cache_entry_t *e = &s_cache_lookup[i];
-        if (e->valid && strcmp(e->query, query) == 0 &&
-            weather_now_ms() - e->ts_ms < ESPAPERPLAY_WEATHER_LOOKUP_TTL_MS) {
-            *out_count = e->count;
-            for (int j = 0; j < e->count; j++) {
-                out[j] = e->loc[j];
+    if (s_cache_lookup != NULL) {
+        for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
+            const weather_lookup_cache_entry_t *e = &s_cache_lookup[i];
+            if (e->valid && strcmp(e->query, query) == 0 &&
+                weather_now_ms() - e->ts_ms < ESPAPERPLAY_WEATHER_LOOKUP_TTL_MS) {
+                *out_count = e->count;
+                for (int j = 0; j < e->count; j++) {
+                    out[j] = e->loc[j];
+                }
+                if (s_lock != NULL) {
+                    xSemaphoreGive(s_lock);
+                }
+                return ESP_OK;
             }
-            if (s_lock != NULL) {
-                xSemaphoreGive(s_lock);
-            }
-            return ESP_OK;
         }
     }
     if (s_lock != NULL) {
@@ -1199,30 +1262,32 @@ esp_err_t espaperplay_weather_location_lookup(const char *query,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    int slot = -1;
-    uint64_t oldest = UINT64_MAX;
-    for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
-        if (s_cache_lookup[i].valid && strcmp(s_cache_lookup[i].query, query) == 0) {
-            slot = i;
-            break;
+    if (s_cache_lookup != NULL) {
+        int slot = -1;
+        uint64_t oldest = UINT64_MAX;
+        for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
+            if (s_cache_lookup[i].valid && strcmp(s_cache_lookup[i].query, query) == 0) {
+                slot = i;
+                break;
+            }
+            if (!s_cache_lookup[i].valid) {
+                slot = i;
+                break;
+            }
+            if (s_cache_lookup[i].ts_ms < oldest) {
+                oldest = s_cache_lookup[i].ts_ms;
+                slot = i;
+            }
         }
-        if (!s_cache_lookup[i].valid) {
-            slot = i;
-            break;
-        }
-        if (s_cache_lookup[i].ts_ms < oldest) {
-            oldest = s_cache_lookup[i].ts_ms;
-            slot = i;
-        }
-    }
-    if (slot >= 0) {
-        weather_lookup_cache_entry_t *e = &s_cache_lookup[slot];
-        e->valid = true;
-        e->ts_ms = weather_now_ms();
-        strlcpy(e->query, query, sizeof(e->query));
-        e->count = count;
-        for (int j = 0; j < count; j++) {
-            e->loc[j] = tmp[j];
+        if (slot >= 0) {
+            weather_lookup_cache_entry_t *e = &s_cache_lookup[slot];
+            e->valid = true;
+            e->ts_ms = weather_now_ms();
+            strlcpy(e->query, query, sizeof(e->query));
+            e->count = count;
+            for (int j = 0; j < count; j++) {
+                e->loc[j] = tmp[j];
+            }
         }
     }
     if (s_lock != NULL) {
@@ -1298,10 +1363,11 @@ static esp_err_t weather_fetch_now(const char *location, espaperplay_weather_now
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_now.valid, s_cache_now.ts_ms, s_cache_now.loc, loc_id,
+    bool hit = s_cache_now != NULL &&
+               weather_cache_hit(s_cache_now->valid, s_cache_now->ts_ms, s_cache_now->loc, loc_id,
                                  ESPAPERPLAY_WEATHER_TTL_NOW_MS);
     if (hit) {
-        *out = s_cache_now.data;
+        *out = s_cache_now->data;
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -1328,8 +1394,10 @@ static esp_err_t weather_fetch_now(const char *location, espaperplay_weather_now
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_now.data = tmp;
-    weather_cache_store(&s_cache_now.valid, &s_cache_now.ts_ms, s_cache_now.loc, loc_id);
+    if (s_cache_now != NULL) {
+        s_cache_now->data = tmp;
+        weather_cache_store(&s_cache_now->valid, &s_cache_now->ts_ms, s_cache_now->loc, loc_id);
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1349,14 +1417,15 @@ static esp_err_t weather_fetch_daily(const char *location, int days,
         return err;
     }
 
-    weather_daily_cache_t *cache = (days == 3) ? &s_cache_daily_3d : &s_cache_daily_7d;
+    weather_daily_cache_t *cache = (days == 3) ? s_cache_daily_3d : s_cache_daily_7d;
     uint32_t ttl = ESPAPERPLAY_WEATHER_TTL_DAILY_MS;
 
     weather_lock_ensure();
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(cache->valid, cache->ts_ms, cache->loc, loc_id, ttl);
+    bool hit = cache != NULL &&
+               weather_cache_hit(cache->valid, cache->ts_ms, cache->loc, loc_id, ttl);
     if (hit) {
         *out_count = cache->count;
         for (int i = 0; i < cache->count; i++) {
@@ -1390,11 +1459,13 @@ static esp_err_t weather_fetch_daily(const char *location, int days,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    cache->count = count;
-    for (int i = 0; i < count; i++) {
-        cache->data[i] = out[i];
+    if (cache != NULL) {
+        cache->count = count;
+        for (int i = 0; i < count; i++) {
+            cache->data[i] = out[i];
+        }
+        weather_cache_store(&cache->valid, &cache->ts_ms, cache->loc, loc_id);
     }
-    weather_cache_store(&cache->valid, &cache->ts_ms, cache->loc, loc_id);
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1416,12 +1487,13 @@ static esp_err_t weather_fetch_hourly(const char *location, espaperplay_weather_
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_hourly.valid, s_cache_hourly.ts_ms, s_cache_hourly.loc,
+    bool hit = s_cache_hourly != NULL &&
+               weather_cache_hit(s_cache_hourly->valid, s_cache_hourly->ts_ms, s_cache_hourly->loc,
                                  loc_id, ESPAPERPLAY_WEATHER_TTL_HOURLY_MS);
     if (hit) {
-        *out_count = s_cache_hourly.count;
-        for (int i = 0; i < s_cache_hourly.count; i++) {
-            out[i] = s_cache_hourly.data[i];
+        *out_count = s_cache_hourly->count;
+        for (int i = 0; i < s_cache_hourly->count; i++) {
+            out[i] = s_cache_hourly->data[i];
         }
     }
     if (s_lock != NULL) {
@@ -1450,11 +1522,14 @@ static esp_err_t weather_fetch_hourly(const char *location, espaperplay_weather_
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_hourly.count = count;
-    for (int i = 0; i < count; i++) {
-        s_cache_hourly.data[i] = out[i];
+    if (s_cache_hourly != NULL) {
+        s_cache_hourly->count = count;
+        for (int i = 0; i < count; i++) {
+            s_cache_hourly->data[i] = out[i];
+        }
+        weather_cache_store(&s_cache_hourly->valid, &s_cache_hourly->ts_ms, s_cache_hourly->loc,
+                            loc_id);
     }
-    weather_cache_store(&s_cache_hourly.valid, &s_cache_hourly.ts_ms, s_cache_hourly.loc, loc_id);
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1475,11 +1550,12 @@ static esp_err_t weather_fetch_minutely(const char *location, espaperplay_weathe
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_minutely.valid, s_cache_minutely.ts_ms,
-                                 s_cache_minutely.loc, loc_id,
+    bool hit = s_cache_minutely != NULL &&
+               weather_cache_hit(s_cache_minutely->valid, s_cache_minutely->ts_ms,
+                                 s_cache_minutely->loc, loc_id,
                                  ESPAPERPLAY_WEATHER_TTL_MINUTELY_MS);
     if (hit) {
-        *out = s_cache_minutely.data;
+        *out = s_cache_minutely->data;
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -1522,9 +1598,11 @@ static esp_err_t weather_fetch_minutely(const char *location, espaperplay_weathe
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_minutely.data = *out;
-    weather_cache_store(&s_cache_minutely.valid, &s_cache_minutely.ts_ms, s_cache_minutely.loc,
-                        loc_id);
+    if (s_cache_minutely != NULL) {
+        s_cache_minutely->data = *out;
+        weather_cache_store(&s_cache_minutely->valid, &s_cache_minutely->ts_ms,
+                            s_cache_minutely->loc, loc_id);
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1544,12 +1622,14 @@ static esp_err_t weather_fetch_warning(const char *location, espaperplay_weather
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_warning.valid, s_cache_warning.ts_ms, s_cache_warning.loc,
-                                 loc_id, ESPAPERPLAY_WEATHER_TTL_WARNING_MS);
+    bool hit = s_cache_warning != NULL &&
+               weather_cache_hit(s_cache_warning->valid, s_cache_warning->ts_ms,
+                                 s_cache_warning->loc, loc_id,
+                                 ESPAPERPLAY_WEATHER_TTL_WARNING_MS);
     if (hit) {
-        *out_count = s_cache_warning.count;
-        for (int i = 0; i < s_cache_warning.count; i++) {
-            out[i] = s_cache_warning.data[i];
+        *out_count = s_cache_warning->count;
+        for (int i = 0; i < s_cache_warning->count; i++) {
+            out[i] = s_cache_warning->data[i];
         }
     }
     if (s_lock != NULL) {
@@ -1578,12 +1658,14 @@ static esp_err_t weather_fetch_warning(const char *location, espaperplay_weather
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_warning.count = count;
-    for (int i = 0; i < count; i++) {
-        s_cache_warning.data[i] = out[i];
+    if (s_cache_warning != NULL) {
+        s_cache_warning->count = count;
+        for (int i = 0; i < count; i++) {
+            s_cache_warning->data[i] = out[i];
+        }
+        weather_cache_store(&s_cache_warning->valid, &s_cache_warning->ts_ms,
+                            s_cache_warning->loc, loc_id);
     }
-    weather_cache_store(&s_cache_warning.valid, &s_cache_warning.ts_ms, s_cache_warning.loc,
-                        loc_id);
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1609,13 +1691,14 @@ static esp_err_t weather_fetch_indices(const char *location, const char *type,
         if (s_lock != NULL) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
         }
-        bool hit = weather_cache_hit(s_cache_indices.valid, s_cache_indices.ts_ms,
-                                     s_cache_indices.loc, loc_id,
+        bool hit = s_cache_indices != NULL &&
+                   weather_cache_hit(s_cache_indices->valid, s_cache_indices->ts_ms,
+                                     s_cache_indices->loc, loc_id,
                                      ESPAPERPLAY_WEATHER_TTL_INDICES_MS);
         if (hit) {
-            *out_count = s_cache_indices.count;
-            for (int i = 0; i < s_cache_indices.count; i++) {
-                out[i] = s_cache_indices.data[i];
+            *out_count = s_cache_indices->count;
+            for (int i = 0; i < s_cache_indices->count; i++) {
+                out[i] = s_cache_indices->data[i];
             }
         }
         if (s_lock != NULL) {
@@ -1652,12 +1735,14 @@ static esp_err_t weather_fetch_indices(const char *location, const char *type,
         if (s_lock != NULL) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
         }
-        s_cache_indices.count = count;
-        for (int i = 0; i < count; i++) {
-            s_cache_indices.data[i] = out[i];
+        if (s_cache_indices != NULL) {
+            s_cache_indices->count = count;
+            for (int i = 0; i < count; i++) {
+                s_cache_indices->data[i] = out[i];
+            }
+            weather_cache_store(&s_cache_indices->valid, &s_cache_indices->ts_ms,
+                                s_cache_indices->loc, loc_id);
         }
-        weather_cache_store(&s_cache_indices.valid, &s_cache_indices.ts_ms, s_cache_indices.loc,
-                            loc_id);
         if (s_lock != NULL) {
             xSemaphoreGive(s_lock);
         }
@@ -1679,10 +1764,11 @@ static esp_err_t weather_fetch_air(const char *location, espaperplay_weather_air
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_air.valid, s_cache_air.ts_ms, s_cache_air.loc, loc_id,
+    bool hit = s_cache_air != NULL &&
+               weather_cache_hit(s_cache_air->valid, s_cache_air->ts_ms, s_cache_air->loc, loc_id,
                                  ESPAPERPLAY_WEATHER_TTL_AIR_MS);
     if (hit) {
-        *out = s_cache_air.data;
+        *out = s_cache_air->data;
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -1709,8 +1795,10 @@ static esp_err_t weather_fetch_air(const char *location, espaperplay_weather_air
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_air.data = tmp;
-    weather_cache_store(&s_cache_air.valid, &s_cache_air.ts_ms, s_cache_air.loc, loc_id);
+    if (s_cache_air != NULL) {
+        s_cache_air->data = tmp;
+        weather_cache_store(&s_cache_air->valid, &s_cache_air->ts_ms, s_cache_air->loc, loc_id);
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1731,11 +1819,12 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = weather_cache_hit(s_cache_astronomy.valid, s_cache_astronomy.ts_ms,
-                                 s_cache_astronomy.loc, loc_id,
+    bool hit = s_cache_astronomy != NULL &&
+               weather_cache_hit(s_cache_astronomy->valid, s_cache_astronomy->ts_ms,
+                                 s_cache_astronomy->loc, loc_id,
                                  ESPAPERPLAY_WEATHER_TTL_ASTRONOMY_MS);
     if (hit) {
-        *out = s_cache_astronomy.data;
+        *out = s_cache_astronomy->data;
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -1783,9 +1872,11 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_astronomy.data = tmp;
-    weather_cache_store(&s_cache_astronomy.valid, &s_cache_astronomy.ts_ms,
-                        s_cache_astronomy.loc, loc_id);
+    if (s_cache_astronomy != NULL) {
+        s_cache_astronomy->data = tmp;
+        weather_cache_store(&s_cache_astronomy->valid, &s_cache_astronomy->ts_ms,
+                            s_cache_astronomy->loc, loc_id);
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -1991,40 +2082,55 @@ esp_err_t espaperplay_weather_refresh(void) {
     }
 
     weather_lock_ensure();
+    if (s_snapshot == NULL) {
+        /* 快照缓冲未就绪（内存不足）：数据已写入各接口缓存，仅快照聚合缺席。 */
+        ESP_LOGE(TAG, "snapshot buffer unavailable (out of memory)");
+        free(now);
+        free(daily);
+        free(hourly);
+        free(minutely);
+        free(warnings);
+        free(indices);
+        free(air);
+        free(astronomy);
+        return ESP_ERR_NO_MEM;
+    }
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_snapshot.valid = true;
-    s_snapshot.auto_location = auto_loc;
-    strlcpy(s_snapshot.location_id, loc_id, sizeof(s_snapshot.location_id));
-    strlcpy(s_snapshot.location_name, loc_name, sizeof(s_snapshot.location_name));
-    strlcpy(s_snapshot.update_time, update_time, sizeof(s_snapshot.update_time));
-    s_snapshot.now = *now;
-    s_snapshot.daily_count = daily_count;
+    s_snapshot->valid = true;
+    s_snapshot->auto_location = auto_loc;
+    strlcpy(s_snapshot->location_id, loc_id, sizeof(s_snapshot->location_id));
+    strlcpy(s_snapshot->location_name, loc_name, sizeof(s_snapshot->location_name));
+    strlcpy(s_snapshot->update_time, update_time, sizeof(s_snapshot->update_time));
+    s_snapshot->now = *now;
+    s_snapshot->daily_count = daily_count;
     for (int i = 0; i < daily_count; i++) {
-        s_snapshot.daily[i] = daily[i];
+        s_snapshot->daily[i] = daily[i];
     }
-    s_snapshot.hourly_count = hourly_count;
+    s_snapshot->hourly_count = hourly_count;
     for (int i = 0; i < hourly_count; i++) {
-        s_snapshot.hourly[i] = hourly[i];
+        s_snapshot->hourly[i] = hourly[i];
     }
-    s_snapshot.minutely = *minutely;
-    s_snapshot.warning_count = warning_count;
+    s_snapshot->minutely = *minutely;
+    s_snapshot->warning_count = warning_count;
     for (int i = 0; i < warning_count; i++) {
-        s_snapshot.warnings[i] = warnings[i];
+        s_snapshot->warnings[i] = warnings[i];
     }
-    s_snapshot.indices_count = indices_count;
+    s_snapshot->indices_count = indices_count;
     for (int i = 0; i < indices_count; i++) {
-        s_snapshot.indices[i] = indices[i];
+        s_snapshot->indices[i] = indices[i];
     }
-    s_snapshot.air = *air;
-    s_snapshot.astronomy = *astronomy;
-    s_status.configured = true;
-    s_status.valid = true;
-    s_status.auto_location = auto_loc;
-    strlcpy(s_status.location_id, loc_id, sizeof(s_status.location_id));
-    strlcpy(s_status.location_name, loc_name, sizeof(s_status.location_name));
-    strlcpy(s_status.update_time, update_time, sizeof(s_status.update_time));
+    s_snapshot->air = *air;
+    s_snapshot->astronomy = *astronomy;
+    if (s_status != NULL) {
+        s_status->configured = true;
+        s_status->valid = true;
+        s_status->auto_location = auto_loc;
+        strlcpy(s_status->location_id, loc_id, sizeof(s_status->location_id));
+        strlcpy(s_status->location_name, loc_name, sizeof(s_status->location_name));
+        strlcpy(s_status->update_time, update_time, sizeof(s_status->update_time));
+    }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -2048,10 +2154,13 @@ esp_err_t espaperplay_weather_get_snapshot(espaperplay_weather_snapshot_t *out) 
         return ESP_ERR_INVALID_ARG;
     }
     weather_lock_ensure();
+    if (s_snapshot == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    *out = s_snapshot;
+    *out = *s_snapshot;
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
     }
@@ -2066,7 +2175,11 @@ esp_err_t espaperplay_weather_get_status(espaperplay_weather_status_t *out) {
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    *out = s_status;
+    if (s_status != NULL) {
+        *out = *s_status;
+    } else {
+        memset(out, 0, sizeof(*out));
+    }
     out->task_running = (s_task != NULL);
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -2081,18 +2194,40 @@ void espaperplay_weather_cache_clear(void) {
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    s_cache_now.valid = false;
-    s_cache_daily_3d.valid = false;
-    s_cache_daily_7d.valid = false;
-    s_cache_hourly.valid = false;
-    s_cache_minutely.valid = false;
-    s_cache_warning.valid = false;
-    s_cache_indices.valid = false;
-    s_cache_air.valid = false;
-    s_cache_astronomy.valid = false;
-    s_cache_auto_loc.valid = false;
-    for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
-        s_cache_lookup[i].valid = false;
+    if (s_cache_now != NULL) {
+        s_cache_now->valid = false;
+    }
+    if (s_cache_daily_3d != NULL) {
+        s_cache_daily_3d->valid = false;
+    }
+    if (s_cache_daily_7d != NULL) {
+        s_cache_daily_7d->valid = false;
+    }
+    if (s_cache_hourly != NULL) {
+        s_cache_hourly->valid = false;
+    }
+    if (s_cache_minutely != NULL) {
+        s_cache_minutely->valid = false;
+    }
+    if (s_cache_warning != NULL) {
+        s_cache_warning->valid = false;
+    }
+    if (s_cache_indices != NULL) {
+        s_cache_indices->valid = false;
+    }
+    if (s_cache_air != NULL) {
+        s_cache_air->valid = false;
+    }
+    if (s_cache_astronomy != NULL) {
+        s_cache_astronomy->valid = false;
+    }
+    if (s_cache_auto_loc != NULL) {
+        s_cache_auto_loc->valid = false;
+    }
+    if (s_cache_lookup != NULL) {
+        for (int i = 0; i < ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES; i++) {
+            s_cache_lookup[i].valid = false;
+        }
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
