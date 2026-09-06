@@ -38,7 +38,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *                 曲线上方、最低温在下方，横向滚动）+ 每列日期代称/图标
  *                 + 次要信息卡片（湿度/风/降水/气压/能见度/体感，附图标）；
  *   子页 2「天文 + 指数」：日出日落/月出月落弧线（太阳/月亮图标按当前
- *                 时间定位）+ 天气指数列表（穿衣/洗车等）。
+ *                 时间定位，月亮按 API 返回的真实月相显示）+ 天气指数列表
+ *                 （穿衣/洗车等）。
  *
  * 交互：
  *   - 屏幕左/右边缘向内滑动返回主页（安卓边缘手势）；
@@ -134,6 +135,8 @@ static lv_obj_t *s_sun_arc = NULL;
 static lv_obj_t *s_moon_arc = NULL;
 static lv_obj_t *s_sun_icon = NULL;
 static lv_obj_t *s_moon_icon = NULL;
+/*!< 月亮图标当前代码（"150" 或月相 800-807；变化才 set_src，避免 EPD 无谓重绘） */
+static char s_moon_icon_code[4] = "150";
 static lv_obj_t *s_index_labels[8] = {NULL};
 /* 弧线几何（page2_create 填充）：x, w, sun_base, moon_base, radius */
 static int s_arc_geom[5];
@@ -744,6 +747,8 @@ static void weather_enter(void) {
     s_nudge_cnt = 0;
     s_touch_down = false;
     s_touch_zone = 3;
+    /* 页面重建后月亮图标回到创建时的占位图标，缓存码同步复位。 */
+    strlcpy(s_moon_icon_code, "150", sizeof(s_moon_icon_code));
 
     s_weather_timer = lv_timer_create(weather_timer_cb, WEATHER_UI_PERIOD_MS, NULL);
     if (s_weather_timer == NULL) {
@@ -1010,6 +1015,21 @@ static void weather_refresh(void) {
             lv_label_set_text(sun_r, b2);
             lv_label_set_text(moon_l, b3);
             lv_label_set_text(moon_r, b4);
+        }
+
+        /* 月亮图标显示真实月相（moonPhase.icon，800-807）；空/未知代码回退 150。
+         * 代码变化才 set_src（EPD 避免无谓重绘）。 */
+        {
+            const char *code = snap->astronomy.moon_phase_icon;
+            const lv_image_dsc_t *ic = qweather_icon_get_small(code);
+            if (ic == NULL) {
+                code = "150";
+                ic = qweather_icon_get_small(code);
+            }
+            if (ic != NULL && strcmp(code, s_moon_icon_code) != 0) {
+                strlcpy(s_moon_icon_code, code, sizeof(s_moon_icon_code));
+                lv_image_set_src(s_moon_icon, ic);
+            }
         }
 
         /* 当前时间定位太阳/月亮在弧上的位置：

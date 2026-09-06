@@ -11,6 +11,9 @@ Pipeline (per icon code):
   3. Rasterize to a 64x64 grayscale PNG with ImageMagick (`magick`/`convert`).
   4. Convert to an LVGL A8 (8-bit alpha) bitmap via Pillow:
      black glyph -> alpha 255, white background -> alpha 0, anti-aliased.
+     Moon phases (800-807) are re-lit so the lit face is ink (ink amount
+     equals illumination): lit = full-moon disc - original glyph, with
+     804's original ring outline stacked back on top.
   5. Emit components/graphics/ui/src/qweather_icons.c + include/qweather_icons.h
      with a lookup: const lv_image_dsc_t *qweather_icon_get(const char *code)
      (returns NULL for unknown codes / weather not available).
@@ -48,6 +51,8 @@ SMALL_ICON_SIZE = 32
 # 300-399: 雨 (incl. night 350/351)
 # 400-499: 雪 (incl. night 450/451)
 # 500-515: 雾/霾/沙尘
+# 800-807: 月相 (v7/astronomy/moon moonPhase.icon: 新月..残月)，反色重制
+#          （原稿暗面为墨：新月=实心黑圆、满月=细环，EPD 上难读）
 # 900/901/999: 热/冷/未知
 ICON_CODES = [
     "100", "101", "102", "103", "104",
@@ -59,8 +64,15 @@ ICON_CODES = [
     "410", "450", "451", "499",
     "500", "501", "502", "503", "504", "507", "508", "509", "510", "511",
     "512", "513", "514", "515",
+    "800", "801", "802", "803", "804", "805", "806", "807",
     "900", "901", "999",
 ]
+
+# 月相系列（800-807）反色重制。原稿以墨表示暗面，白底 EPD 上观感差
+# （新月实心黑圆、满月几乎不可见的细环，墨量与照明度相反）。
+# 注意不能像素级取反：原稿里"亮面"与"纸面"同为白色，取反会把整张
+# 位图变成墨块。正确做法是几何合成，见 relight_moon_phases()。
+MOON_PHASE_CODES = {"800", "801", "802", "803", "804", "805", "806", "807"}
 
 
 def ensure_icon_dir() -> Path:
@@ -250,6 +262,31 @@ def emit(alpha_map: dict, small_map: dict, used_fill: dict) -> None:
         print(f"WARN: 未收录（包内无 SVG）: {missing}")
 
 
+def relight_moon_phases(alpha_map: dict, small_map: dict) -> None:
+    """月相系列（800-807）反色重制为"亮面为墨"（墨量 = 照明度）。
+
+    原稿墨迹 = 暗面 + 圆环轮廓，亮面与纸面同为白色无法像素级区分。
+    几何合成：亮面 = 满月圆盘(r7.5) − 原稿墨迹，再叠回 804 原稿的圆环
+    轮廓保持描边风格。对新月（原稿实心圆）自动只剩轮廓；对满月（原稿
+    细环）自动为实心圆；中间相位的亮区形状沿用原稿几何。"""
+    if not all(c in alpha_map for c in MOON_PHASE_CODES):
+        return
+    disc_svg = WORK_DIR / "qw_moon_disc.svg"
+    disc_svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+        '<circle cx="8" cy="8" r="7.5" fill="black"/></svg>'
+    )
+    disc_png = WORK_DIR / "qw_moon_disc.png"
+    rasterize(disc_svg, disc_png)
+    for m, size in ((alpha_map, ICON_SIZE), (small_map, SMALL_ICON_SIZE)):
+        disc = make_alpha_array(disc_png, size)
+        contour = make_alpha_array(WORK_DIR / "qw_804.png", size)
+        for code in MOON_PHASE_CODES:
+            glyph = m[code]
+            m[code] = [max(cn, max(0, dd - gg))
+                       for cn, dd, gg in zip(contour, disc, glyph)]
+
+
 def main() -> int:
     icon_dir = ensure_icon_dir()
     WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,6 +302,7 @@ def main() -> int:
         alpha_map[code] = make_alpha_array(png, ICON_SIZE)
         small_map[code] = make_alpha_array(png, SMALL_ICON_SIZE)
         used_fill[code] = "-fill" in svg.name
+    relight_moon_phases(alpha_map, small_map)
     print(f"generated {len(alpha_map)} icons x2 sizes (fill variants: {sum(used_fill.values())})")
     emit(alpha_map, small_map, used_fill)
     return 0
