@@ -257,7 +257,8 @@ static int weather_time_to_min(const char *ts) {
     return h * 60 + m;
 }
 
-/** 从完整时间戳截取 "HH:MM"（如 "2026-08-16T05:12+08:00"）；短格式原样返回。 */
+/** 从完整时间戳截取 "HH:MM"（如 "2026-08-16T05:12+08:00"）；短格式原样返回。
+ * 空值（当天无月出/月落现象，和风返回空串）显示 "--" 占位。 */
 static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
     if (ts != NULL && ts[0] != '\0') {
         const char *t = strchr(ts, 'T');
@@ -265,8 +266,9 @@ static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
             snprintf(buf, buf_size, "%.5s", t + 1);
             return buf;
         }
+        return ts;
     }
-    return ts != NULL ? ts : "--";
+    return "--";
 }
 
 /** 解析快照 update_time（"YYYY-MM-DD HH:MM" 或 ISO "YYYY-MM-DDTHH:MM…"），

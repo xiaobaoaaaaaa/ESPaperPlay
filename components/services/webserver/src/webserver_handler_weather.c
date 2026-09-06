@@ -16,7 +16,8 @@
 /* JSON 构造辅助（把快照数据转为 JSON）                                 */
 /* ------------------------------------------------------------------ */
 
-/** 从完整时间戳截取 "HH:MM"（天文接口返回 "2026-08-16T05:12+08:00"）。 */
+/** 从完整时间戳截取 "HH:MM"（天文接口返回 "2026-08-16T05:12+08:00"）；
+ * 空值（当天无月出/月落现象）返回 "--" 占位。 */
 static const char *weather_ts_hm(const char *ts, char *buf, size_t buf_size) {
     if (ts != NULL && ts[0] != '\0') {
         const char *t = strchr(ts, 'T');
@@ -24,8 +25,9 @@ static const char *weather_ts_hm(const char *ts, char *buf, size_t buf_size) {
             snprintf(buf, buf_size, "%.5s", t + 1);
             return buf;
         }
+        return ts;
     }
-    return ts != NULL ? ts : "";
+    return "--";
 }
 
 /** 追加实时天气对象。 */
