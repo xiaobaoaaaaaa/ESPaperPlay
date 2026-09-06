@@ -90,7 +90,7 @@ static const char *TAG = "ESPaperPlay_EPD";
  *  PWR：VGH/VGL=20V，VDH/VDL=0x3F；TRES：800x480。 */
 static const uint8_t UC8179_PWR_GRAY4[4] = {0x07, 0x07, 0x3F, 0x3F};
 /** 面板分辨率（TRES 命令参数，灰阶/快刷初始化使用；epd_init 时按运行时分辨率填充）。 */
-static uint8_t UC8179_TRES_VALUE[4];
+static uint8_t UC8179_TRES_VALUE[4] __attribute__((aligned(16)));
 
 /** DSLP 校验码：命令仅在数据 == 0xA5 时执行。 */
 #define UC8179_DSLP_CHECK 0xA5
@@ -188,6 +188,13 @@ static esp_err_t epd_write_cmd(uint8_t cmd) {
  *
  * @note CS 在每个事务间自动拉高再拉低，符合规格书"每 8 位拉高 CSB 防误码"
  *       的建议；DC 在整组数据期间保持高电平。
+ *
+ * @note 帧快照在 PSRAM：SPI master 默认对 PSRAM 缓冲逐事务现场分配内部
+ *       DMA bounce（每块 4KB），开机内部 RAM 紧张时分配失败丢帧。置
+ *       SPI_TRANS_DMA_USE_PSRAM 令 GDMA 直读 PSRAM（对齐时零拷贝；未对
+ *       齐回落 PSRAM 内对齐拷贝），内部堆退出刷屏关键路径。内部源
+ *       （s_fill/s_tmp/s_plane/TRES，均 aligned(16)）不受该标志影响，
+ *       对齐且 DMA-capable 时同样直接传输。
  */
 static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     esp_err_t ret;
@@ -196,6 +203,7 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
         size_t chunk =
             len > ESPAPERPLAY_EPD_SPI_MAX_TRANSFER ? ESPAPERPLAY_EPD_SPI_MAX_TRANSFER : len;
         spi_transaction_t t = {
+            .flags = SPI_TRANS_DMA_USE_PSRAM,
             .tx_buffer = data,
             .length = (uint32_t)chunk * 8,
         };
@@ -215,7 +223,8 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
  * @brief 写 len 个相同字节（用于清屏/平面填充，避免分配大缓冲）。
  */
 static esp_err_t epd_write_fill(uint8_t value, size_t len) {
-    static uint8_t s_fill[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
+    /* aligned(16)：内部 RAM 源满足 GDMA 对齐，SPI 传输不做现场 bounce。 */
+    static uint8_t s_fill[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER] __attribute__((aligned(16)));
     esp_err_t ret;
 
     memset(s_fill, value, sizeof(s_fill));
@@ -236,7 +245,7 @@ static esp_err_t epd_write_fill(uint8_t value, size_t len) {
  * 复用填充暂存做分块取反，避免分配大缓冲；DC 由 epd_write_data 置位。
  */
 static esp_err_t epd_write_inverted(const uint8_t *data, size_t len) {
-    static uint8_t s_tmp[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
+    static uint8_t s_tmp[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER] __attribute__((aligned(16)));
     esp_err_t ret;
 
     while (len > 0) {
@@ -728,7 +737,8 @@ static esp_err_t epd_refresh_fast(const void *image_buf) {
  * 处理旧平面。
  */
 static esp_err_t epd_refresh_gray4(const void *image_buf) {
-    static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2]; /* 位平面暂存 */
+    static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2] __attribute__((
+        aligned(16))); /* 位平面暂存；aligned(16) 同 s_fill，免 SPI 现场 bounce */
     const size_t chunk_bytes = sizeof(s_plane) * 2;               /* 每块输入帧字节数 */
     esp_err_t ret;
 
