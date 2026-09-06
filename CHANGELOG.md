@@ -8,6 +8,18 @@
 
 ## [未发布]
 
+### 新增
+
+- **书架封面网格墙**：阅读器主页从文字行列表改为封面网格（约 8×2，随屏幕
+  自适应），EPUB 显示封面缩略图、TXT 与无封面书显示占位框，历史块保留阅读
+  进度小字；横滑翻页 / 边缘返回 / 长按删除历史等手势不变。新增封面轻量探测
+  `espaperplay_reader_epub_probe_cover`（自持 zip 上下文，定位优先级：EPUB3
+  `properties~="cover-image"` → EPUB2 `<meta name="cover">` → 基名
+  `cover.*` → spine 首文档首图）与封面缩略图服务（内部 RAM 栈后台 worker +
+  `/sdcard/system/cache/reader/covers/` SD 缓存，负结果也缓存；翻页 / 退出
+  作废在途请求）。JPEG/PNG 解码函数输出参数化（原写入图片单槽缓存），阅读
+  视图行为不变。
+
 ### 修复
 
 - 修复唤醒重连后偶发 `spinlock_acquire (lock->count == 0)` 断言崩溃：power

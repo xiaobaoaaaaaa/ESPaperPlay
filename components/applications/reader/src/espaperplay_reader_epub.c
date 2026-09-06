@@ -1933,8 +1933,15 @@ static bool png_handle_row(uint8_t *cur, const uint8_t *prev, uint32_t w, uint8_
     return true;
 }
 
+/** 图片解码输出（RGB565，缓冲 PSRAM 堆分配，调用方释放）。 */
+typedef struct {
+    uint8_t *buf;
+    int w, h;
+} epub_img_out_t;
+
 /** PNG：zlib 流式逐行解码 + unfilter + 行内最近邻抽样（峰值内存 ≈ 2 行扫描线）。 */
-static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, int max_h) {
+static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, int max_h,
+                                 epub_img_out_t *out) {
     /* 文件签名 + IHDR */
     if (src_len < 33 || src[0] != 0x89 || src[1] != 'P' || src[2] != 'N' || src[3] != 'G' ||
         memcmp(&src[12], "IHDR", 4) != 0) {
@@ -2067,9 +2074,9 @@ static esp_err_t epub_decode_png(const uint8_t *src, size_t src_len, int max_w, 
         heap_caps_free(dst);
         return ESP_FAIL;
     }
-    s_epub.img_buf = (uint8_t *)dst;
-    s_epub.img_dsc.header.w = dw;
-    s_epub.img_dsc.header.h = dh;
+    out->buf = (uint8_t *)dst;
+    out->w = dw;
+    out->h = dh;
     return ESP_OK;
 }
 
@@ -2125,7 +2132,8 @@ static int jpg_out_func(JDEC *jd, void *bitmap, JRECT *rect) {
 }
 
 /** JPEG：TJpgD 逐 MCU 解码 + 解码回调内最近邻抽样（峰值内存 = 目标缓冲）。 */
-static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w, int max_h) {
+static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w, int max_h,
+                                  epub_img_out_t *out) {
     uint8_t *work = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (work == NULL) {
         return ESP_ERR_NO_MEM;
@@ -2174,10 +2182,29 @@ static esp_err_t epub_decode_jpeg(const uint8_t *src, size_t src_len, int max_w,
         ESP_LOGW(TAG, "epub: jd_decomp failed (%d)", r);
         return ESP_FAIL;
     }
-    s_epub.img_buf = (uint8_t *)ctx.dst;
-    s_epub.img_dsc.header.w = dw;
-    s_epub.img_dsc.header.h = dh;
+    out->buf = (uint8_t *)ctx.dst;
+    out->w = dw;
+    out->h = dh;
     return ESP_OK;
+}
+
+/** 按扩展名 / 魔数分派 JPEG / PNG 解码（封面探测与章节图片共用）。 */
+static esp_err_t epub_decode_image(const char *name, const uint8_t *data, size_t len, int max_w,
+                                   int max_h, epub_img_out_t *out) {
+    const char *dot = strrchr(name, '.');
+    if (dot != NULL && (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0)) {
+        return epub_decode_jpeg(data, len, max_w, max_h, out);
+    }
+    if (dot != NULL && strcasecmp(dot, ".png") == 0) {
+        return epub_decode_png(data, len, max_w, max_h, out);
+    }
+    if (len > 3 && (uint8_t)data[0] == 0xFF && (uint8_t)data[1] == 0xD8) {
+        return epub_decode_jpeg(data, len, max_w, max_h, out);
+    }
+    if (len > 8 && (uint8_t)data[1] == 'P' && (uint8_t)data[2] == 'N' && (uint8_t)data[3] == 'G') {
+        return epub_decode_png(data, len, max_w, max_h, out);
+    }
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif /* ESPAPERPLAY_READER_EPUB_HOST */
@@ -2903,13 +2930,17 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
     if (epub_zip_extract(&s_epub.zip, zi, &data, &data_len) != ESP_OK) {
         return ESP_FAIL;
     }
-    memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
-    s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-    const esp_err_t err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
+    epub_img_out_t out = {0};
+    const esp_err_t err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h, &out);
     heap_caps_free(data);
     if (err != ESP_OK) {
         return err;
     }
+    memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
+    s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    s_epub.img_buf = out.buf;
+    s_epub.img_dsc.header.w = out.w;
+    s_epub.img_dsc.header.h = out.h;
     s_epub.img_dsc.header.stride = s_epub.img_dsc.header.w * 2;
     s_epub.img_dsc.data_size = (uint32_t)(s_epub.img_dsc.header.w * s_epub.img_dsc.header.h * 2);
     s_epub.img_dsc.data = s_epub.img_buf;
@@ -2944,25 +2975,17 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
         return err;
     }
 
+    epub_img_out_t out = {0};
     memset(&s_epub.img_dsc, 0, sizeof(s_epub.img_dsc));
     s_epub.img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-    const char *dot = strrchr(name, '.');
-    if (dot != NULL && (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0)) {
-        err = epub_decode_jpeg((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (dot != NULL && strcasecmp(dot, ".png") == 0) {
-        err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (data_len > 3 && (uint8_t)data[0] == 0xFF && (uint8_t)data[1] == 0xD8) {
-        err = epub_decode_jpeg((const uint8_t *)data, data_len, max_w, max_h);
-    } else if (data_len > 8 && (uint8_t)data[1] == 'P' && (uint8_t)data[2] == 'N' &&
-               (uint8_t)data[3] == 'G') {
-        err = epub_decode_png((const uint8_t *)data, data_len, max_w, max_h);
-    } else {
-        err = ESP_ERR_NOT_SUPPORTED;
-    }
+    err = epub_decode_image(name, (const uint8_t *)data, data_len, max_w, max_h, &out);
     heap_caps_free(data);
     if (err != ESP_OK) {
         return err;
     }
+    s_epub.img_buf = out.buf;
+    s_epub.img_dsc.header.w = out.w;
+    s_epub.img_dsc.header.h = out.h;
     s_epub.img_dsc.header.stride = s_epub.img_dsc.header.w * 2;
     s_epub.img_dsc.data_size = (uint32_t)(s_epub.img_dsc.header.w * s_epub.img_dsc.header.h * 2);
     s_epub.img_dsc.data = s_epub.img_buf;
@@ -2973,3 +2996,393 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
     return ESP_OK;
 }
 #endif
+
+/* ====================================================================
+ * 封面探测（独立轻量流程：自持 zip 上下文，不触碰开书全局状态）
+ * ==================================================================== */
+#ifndef ESPAPERPLAY_READER_EPUB_HOST
+
+/** 检查空格分隔的属性列表是否含指定 token（EPUB3 manifest properties）。 */
+static bool epub_props_has(const char *props, const char *token) {
+    const size_t tl = strlen(token);
+    const char *p = props;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        const char *e = p;
+        while (*e != '\0' && *e != ' ' && *e != '\t') {
+            e++;
+        }
+        if ((size_t)(e - p) == tl && strncasecmp(p, token, tl) == 0) {
+            return true;
+        }
+        p = e;
+    }
+    return false;
+}
+
+/** 解析一个 <item> 标签的 href 并解析为 zip 条目序号（-1=不可用）。 */
+static int epub_opf_item_zip_idx(const epub_zip_t *z, const char *opf_dir, const char *tag_s,
+                                 const char *tag_e) {
+    char href[600];
+    if (!xml_attr(tag_s, tag_e, "href", href, sizeof(href))) {
+        return -1;
+    }
+    url_decode(href);
+    char zp[600];
+    if (!path_resolve(opf_dir, href, zp, sizeof(zp))) {
+        return -1;
+    }
+    return epub_zip_find(z, zp);
+}
+
+/**
+ * 在 OPF 文本中定位封面图片的 zip 条目。
+ * 优先级：EPUB3 properties~="cover-image" → EPUB2 <meta name="cover"> 指向的
+ * manifest id（个别工具指向封面 xhtml，非图片条目不采纳）→ 基名
+ * cover.jpg/jpeg/png 兜底。
+ */
+static int epub_opf_cover_entry(const epub_zip_t *z, const char *opf_dir, const char *opf) {
+    const char *p = opf;
+    while ((p = strcasestr(p, "<item")) != NULL) { /* 1) EPUB3 */
+        const char *te = strchr(p, '>');
+        if (te == NULL) {
+            break;
+        }
+        const char *xe = (te[-1] == '/' || te[-1] == '?') ? te - 1 : te;
+        char props[128];
+        if (xml_attr(p, xe, "properties", props, sizeof(props)) &&
+            epub_props_has(props, "cover-image")) {
+            const int zi = epub_opf_item_zip_idx(z, opf_dir, p, xe);
+            if (zi >= 0) {
+                return zi;
+            }
+        }
+        p = te + 1;
+    }
+
+    char cover_id[128] = "";
+    p = opf;
+    while ((p = strcasestr(p, "<meta")) != NULL) { /* 2) EPUB2 meta name=cover */
+        const char *te = strchr(p, '>');
+        if (te == NULL) {
+            break;
+        }
+        const char *xe = (te[-1] == '/' || te[-1] == '?') ? te - 1 : te;
+        char nm[64];
+        char ct[128];
+        if (xml_attr(p, xe, "name", nm, sizeof(nm)) && strcasecmp(nm, "cover") == 0 &&
+            xml_attr(p, xe, "content", ct, sizeof(ct))) {
+            strlcpy(cover_id, ct, sizeof(cover_id));
+            break;
+        }
+        p = te + 1;
+    }
+    if (cover_id[0] != '\0') {
+        p = opf;
+        while ((p = strcasestr(p, "<item")) != NULL) {
+            const char *te = strchr(p, '>');
+            if (te == NULL) {
+                break;
+            }
+            const char *xe = (te[-1] == '/' || te[-1] == '?') ? te - 1 : te;
+            char id[128];
+            if (xml_attr(p, xe, "id", id, sizeof(id)) && strcmp(id, cover_id) == 0) {
+                char mime[64];
+                char href[600];
+                if (xml_attr(p, xe, "media-type", mime, sizeof(mime)) &&
+                    xml_attr(p, xe, "href", href, sizeof(href)) &&
+                    epub_media_kind(mime, href) == 2) {
+                    const int zi = epub_opf_item_zip_idx(z, opf_dir, p, xe);
+                    if (zi >= 0) {
+                        return zi;
+                    }
+                }
+                break; /* id 命中但非图片：转兜底策略 */
+            }
+            p = te + 1;
+        }
+    }
+
+    static const char *const kCoverNames[] = {"cover.jpg", "cover.jpeg", "cover.png"};
+    p = opf;
+    while ((p = strcasestr(p, "<item")) != NULL) { /* 3) 文件名兜底 */
+        const char *te = strchr(p, '>');
+        if (te == NULL) {
+            break;
+        }
+        const char *xe = (te[-1] == '/' || te[-1] == '?') ? te - 1 : te;
+        char href[600];
+        if (xml_attr(p, xe, "href", href, sizeof(href))) {
+            const char *base = strrchr(href, '/');
+            base = (base != NULL) ? base + 1 : href;
+            for (size_t i = 0; i < sizeof(kCoverNames) / sizeof(kCoverNames[0]); i++) {
+                if (strcasecmp(base, kCoverNames[i]) == 0) {
+                    const int zi = epub_opf_item_zip_idx(z, opf_dir, p, xe);
+                    if (zi >= 0) {
+                        return zi;
+                    }
+                }
+            }
+        }
+        p = te + 1;
+    }
+    return -1;
+}
+
+/** spine 首文档内首个 <img>/<image> 的 zip 条目（封面页内联写法的最后兜底）。 */
+static int epub_spine_first_image_entry(epub_zip_t *z, const char *opf_dir, const char *opf) {
+    const char *mstart = strcasestr(opf, "<spine");
+    if (mstart == NULL) {
+        return -1;
+    }
+    /* 首个 <itemref> 的 idref */
+    char idref[128] = "";
+    const char *p = mstart;
+    while ((p = strcasestr(p, "<itemref")) != NULL) {
+        const char *te = strchr(p, '>');
+        if (te == NULL) {
+            return -1;
+        }
+        const char *xe = te[-1] == '/' ? te - 1 : te;
+        if (xml_attr(p, xe, "idref", idref, sizeof(idref))) {
+            break;
+        }
+        p = te + 1;
+    }
+    if (idref[0] == '\0') {
+        return -1;
+    }
+    /* idref → xhtml 文档条目 */
+    char doc_zp[600] = "";
+    p = opf;
+    while ((p = strcasestr(p, "<item")) != NULL) {
+        const char *te = strchr(p, '>');
+        if (te == NULL) {
+            break;
+        }
+        const char *xe = (te[-1] == '/' || te[-1] == '?') ? te - 1 : te;
+        char id[128];
+        char mime[64];
+        if (xml_attr(p, xe, "id", id, sizeof(id)) && strcmp(id, idref) == 0 &&
+            xml_attr(p, xe, "media-type", mime, sizeof(mime)) && epub_media_kind(mime, id) == 1) {
+            char href[600];
+            if (xml_attr(p, xe, "href", href, sizeof(href))) {
+                url_decode(href);
+                if (!path_resolve(opf_dir, href, doc_zp, sizeof(doc_zp))) {
+                    return -1;
+                }
+            }
+            break;
+        }
+        p = te + 1;
+    }
+    if (doc_zp[0] == '\0') {
+        return -1;
+    }
+    const int zi = epub_zip_find(z, doc_zp);
+    if (zi < 0) {
+        return -1;
+    }
+    char *html = NULL;
+    if (epub_zip_extract(z, zi, &html, NULL) != ESP_OK) {
+        return -1;
+    }
+    int found = -1;
+    char doc_dir[300];
+    path_dir(doc_zp, doc_dir, sizeof(doc_dir));
+    const char *q = html; /* "<img" 前缀同时覆盖 <image>，两者属性名一致 */
+    while ((q = strcasestr(q, "<img")) != NULL) {
+        const char *qe = strchr(q, '>');
+        if (qe == NULL) {
+            break;
+        }
+        char src[600];
+        if (xml_attr(q, qe, "src", src, sizeof(src)) ||
+            xml_attr(q, qe, "xlink:href", src, sizeof(src))) {
+            url_decode(src);
+            char zp[600];
+            if (path_resolve(doc_dir, src, zp, sizeof(zp))) {
+                found = epub_zip_find(z, zp);
+                if (found >= 0) {
+                    break;
+                }
+            }
+        }
+        q = qe + 1;
+    }
+    heap_caps_free(html);
+    return found;
+}
+
+/** 解码结果等比降采样到 ≤max_w×max_h（TJpgD 1/8 抽样仍超预算时的兜底），原地覆盖。 */
+static void epub_img_out_fit(epub_img_out_t *out, int max_w, int max_h) {
+    if (out->buf == NULL || (out->w <= max_w && out->h <= max_h)) {
+        return;
+    }
+    int dw = out->w;
+    int dh = out->h;
+    if (dw > max_w) {
+        dh = (int)((int64_t)dh * max_w / dw);
+        dw = max_w;
+    }
+    if (dh > max_h) {
+        dw = (int)((int64_t)dw * max_h / dh);
+        dh = max_h;
+    }
+    if (dw < 1) {
+        dw = 1;
+    }
+    if (dh < 1) {
+        dh = 1;
+    }
+    uint16_t *dst = heap_caps_malloc((size_t)dw * dh * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (dst == NULL) {
+        return; /* 分配失败：保留原尺寸，由调用方酌情处理 */
+    }
+    const uint16_t *src = (const uint16_t *)out->buf;
+    for (int y = 0; y < dh; y++) { /* 区域平均（盒式滤波），降低 1bpp 阈值噪点 */
+        const int sy0 = (int)((int64_t)y * out->h / dh);
+        const int sy1 = (int)((int64_t)(y + 1) * out->h / dh);
+        uint16_t *drow = &dst[(size_t)y * dw];
+        if (sy1 <= sy0) {
+            memcpy(drow, &src[(size_t)sy0 * out->w], (size_t)dw * 2);
+            continue;
+        }
+        for (int x = 0; x < dw; x++) {
+            const int sx0 = (int)((int64_t)x * out->w / dw);
+            const int sx1 = (int)((int64_t)(x + 1) * out->w / dw);
+            if (sx1 <= sx0) {
+                drow[x] = src[(size_t)sy0 * out->w + sx0];
+                continue;
+            }
+            uint32_t r = 0, g = 0, b = 0, n = 0;
+            for (int sy = sy0; sy < sy1; sy++) {
+                const uint16_t *srow = &src[(size_t)sy * out->w];
+                for (int sx = sx0; sx < sx1; sx++) {
+                    const uint16_t c = srow[sx];
+                    r += (c >> 11) & 0x1Fu;
+                    g += (c >> 5) & 0x3Fu;
+                    b += c & 0x1Fu;
+                    n++;
+                }
+            }
+            drow[x] = (uint16_t)(((r / n) << 11) | ((g / n) << 5) | (b / n));
+        }
+    }
+    heap_caps_free(out->buf);
+    out->buf = (uint8_t *)dst;
+    out->w = dw;
+    out->h = dh;
+}
+
+esp_err_t espaperplay_reader_epub_probe_cover(const char *abs_path, int max_w, int max_h,
+                                              lv_image_dsc_t *out_dsc, uint8_t **out_buf) {
+    if (abs_path == NULL || out_dsc == NULL || out_buf == NULL || max_w <= 0 || max_h <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    epub_zip_t z;
+    memset(&z, 0, sizeof(z));
+    z.fp = fopen(abs_path, "rb");
+    if (z.fp == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t err = epub_zip_parse(&z);
+    if (err != ESP_OK) {
+        epub_zip_close(&z);
+        return err;
+    }
+
+    /* container.xml → OPF 路径（与 open 同路） */
+    int zi = epub_zip_find(&z, "META-INF/container.xml");
+    if (zi < 0) {
+        epub_zip_close(&z);
+        ESP_LOGD(TAG, "cover: container.xml missing");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    char *container = NULL;
+    err = epub_zip_extract(&z, zi, &container, NULL);
+    if (err != ESP_OK) {
+        epub_zip_close(&z);
+        return err;
+    }
+    char opf_path[600];
+    const char *fp_attr = strcasestr(container, "full-path");
+    bool ok = false;
+    if (fp_attr != NULL) {
+        const char *qe = strchr(fp_attr, '>');
+        ok = qe != NULL && xml_attr(fp_attr, qe, "full-path", opf_path, sizeof(opf_path));
+    }
+    heap_caps_free(container);
+    if (!ok) {
+        epub_zip_close(&z);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    zi = epub_zip_find(&z, opf_path);
+    if (zi < 0) {
+        epub_zip_close(&z);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    char opf_dir[300];
+    path_dir(opf_path, opf_dir, sizeof(opf_dir));
+    char *opf = NULL;
+    err = epub_zip_extract(&z, zi, &opf, NULL);
+    if (err != ESP_OK) {
+        epub_zip_close(&z);
+        return err;
+    }
+
+    int czi = epub_opf_cover_entry(&z, opf_dir, opf);
+    if (czi < 0) {
+        czi = epub_spine_first_image_entry(&z, opf_dir, opf);
+    }
+    heap_caps_free(opf);
+    if (czi < 0) {
+        epub_zip_close(&z);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    char name[600];
+    if (!epub_zip_ent_name(&z, czi, name, sizeof(name))) {
+        epub_zip_close(&z);
+        return ESP_ERR_NOT_FOUND;
+    }
+    char *data = NULL;
+    size_t data_len = 0;
+    err = epub_zip_extract(&z, czi, &data, &data_len);
+    epub_zip_close(&z);
+    if (err != ESP_OK) {
+        return err;
+    }
+    epub_img_out_t out = {0};
+    err = epub_decode_image(name, (const uint8_t *)data, data_len, max_w, max_h, &out);
+    heap_caps_free(data);
+    if (err != ESP_OK) {
+        return err;
+    }
+    epub_img_out_fit(&out, max_w, max_h);
+    memset(out_dsc, 0, sizeof(*out_dsc));
+    out_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
+    out_dsc->header.w = out.w;
+    out_dsc->header.h = out.h;
+    out_dsc->header.stride = out.w * 2;
+    out_dsc->data_size = (uint32_t)((size_t)out.w * out.h * 2);
+    out_dsc->data = out.buf;
+    *out_buf = out.buf;
+    return ESP_OK;
+}
+
+#else /* ESPAPERPLAY_READER_EPUB_HOST：主机测试无 SD/worker，封面探测不可用 */
+
+esp_err_t espaperplay_reader_epub_probe_cover(const char *abs_path, int max_w, int max_h,
+                                              lv_image_dsc_t *out_dsc, uint8_t **out_buf) {
+    (void)abs_path;
+    (void)max_w;
+    (void)max_h;
+    (void)out_dsc;
+    (void)out_buf;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+#endif /* ESPAPERPLAY_READER_EPUB_HOST */

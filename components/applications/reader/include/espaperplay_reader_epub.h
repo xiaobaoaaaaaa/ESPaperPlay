@@ -133,6 +133,25 @@ const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *out_cnt);
 esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
                                         const lv_image_dsc_t **out_dsc);
 
+/**
+ * @brief 轻量探测一份 EPUB 文件的封面（书架缩略图等场景）。
+ *
+ * 独立轻量流程：自持 zip 上下文解析中央目录 + container.xml + OPF，定位封面
+ * 条目后解压解码，全程不触碰已打开书籍的全局状态（不建预取 worker / 目录表，
+ * 不占图片单槽缓存），可与正常阅读并发。封面定位优先级：EPUB3 manifest
+ * properties~="cover-image" → EPUB2 &lt;meta name="cover"&gt; 指向的 manifest id →
+ * 基名 cover.jpg/jpeg/png → spine 首文档内首个图片。
+ *
+ * @param abs_path EPUB 绝对路径。
+ * @param max_w 解码预算框宽（像素；解码后等比降采样保证不超出）。
+ * @param max_h 解码预算框高（像素）。
+ * @param[out] out_dsc 解码结果（RGB565）。
+ * @param[out] out_buf 像素缓冲（PSRAM 堆分配，所有权归调用方，用完 heap_caps_free）。
+ * @return ESP_OK；ESP_ERR_NOT_FOUND 无封面 / 文件不存在；其他错误码见日志。
+ */
+esp_err_t espaperplay_reader_epub_probe_cover(const char *abs_path, int max_w, int max_h,
+                                              lv_image_dsc_t *out_dsc, uint8_t **out_buf);
+
 #ifdef __cplusplus
 }
 #endif

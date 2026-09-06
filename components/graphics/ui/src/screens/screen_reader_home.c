@@ -19,6 +19,8 @@
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_reader.h"
+#include "espaperplay_reader_cover.h"
+#include "espaperplay_reader_epub.h"
 #include "espaperplay_reader_history.h"
 #include "espaperplay_storage.h"
 #include "espaperplay_system.h"
@@ -34,14 +36,16 @@ static const char *TAG = "ESPaperPlay_UI";
  * ====================================================================
  *
  * 布局：统一状态栏（"阅读器"）+ 两个选项卡（最近阅读 / SD 卡图书）+
- * 分页列表卡片 + 页面指示点。
+ * 封面网格卡片 + 页面指示点。条目以网格块呈现：EPUB 显示封面缩略图
+ * （后台探测/解码 + SD 缓存，见 reader 组件 cover 服务），TXT 与无封面
+ * 书显示占位框；块下方为文件名（历史块另加阅读进度）。
  *   - 历史：SD 卡持久化的阅读记录（最多 ESPAPERPLAY_READER_HISTORY_MAX 条，
  *     最近优先），点击恢复进度，长按删除单条记录；
  *   - 图书：首次进入「SD 卡图书」选项卡时，在 LVGL 线程同步递归扫描
  *     ESPAPERPLAY_READER_SD_DIR（默认 /sdcard/books）下的 TXT / EPUB 文件（深度与
  *     条数有上限），点击打开阅读。readdir 为只读 SD 访问（不触发 flash 缓存
  *     禁用），与文件页同款做法，无需后台任务，避免任务生命周期竞态。
- * 手势：边缘向内滑动返回；点击行打开；长按历史行删除记录；单键返回。
+ * 手势：边缘向内滑动返回；点击块打开；长按历史块删除记录；单键返回。
  */
 
 #define RDH_EDGE_PX 24
@@ -52,8 +56,6 @@ static const char *TAG = "ESPaperPlay_UI";
 #define RDH_MARGIN 16
 #define RDH_BAR_H 30
 #define RDH_TAB_H 40
-#define RDH_ROW_H 52
-#define RDH_MIN_ROW_H 40
 #define RDH_LONG_PRESS_MS 600
 #define RDH_MODAL_GUARD_MS 300
 #define RDH_MODAL_RELEASE_GRACE_MS 150
@@ -61,8 +63,12 @@ static const char *TAG = "ESPaperPlay_UI";
 #define RDH_BOOKS_MAX 200 /* 递归扫描条目上限 */
 #define RDH_DEPTH_MAX 6   /* 递归深度上限 */
 #define RDH_PAGE_MAX 32   /* 分页上限（防御） */
-#define RDH_ROWS_MAX 14   /* 单页行数上限 */
-#define RDH_PATH_MAX 256  /* 路径缓冲 */
+#define RDH_TILES_MAX 16  /* 单页网格块上限 */
+#define RDH_TILE_W 104    /* 块尺寸目标（随屏高缩放，含下限） */
+#define RDH_TILE_H 158
+#define RDH_TILE_MIN_W 82
+#define RDH_TILE_MIN_H 118
+#define RDH_PATH_MAX 256 /* 路径缓冲 */
 
 #define RDH_FONT_NAME (espaperplay_system_get_config()->selected_font)
 
@@ -71,15 +77,28 @@ typedef struct {
     char path[RDH_PATH_MAX];
 } rdh_book_t;
 
+/** 网格块（封面框 + 文件名 [+ 进度]）。 */
+typedef struct {
+    lv_obj_t *tile;     /*!< 块容器 */
+    lv_obj_t *frame;    /*!< 封面框（未就绪时即占位边框；TXT 占位宿主） */
+    lv_obj_t *img;      /*!< 封面图片（EPUB 专有） */
+    lv_obj_t *name;     /*!< 文件名 */
+    lv_obj_t *sub;      /*!< 进度（历史块） */
+    char path[RDH_PATH_MAX]; /*!< 该块书籍路径（匹配后台结果） */
+    int idx;            /*!< 全局条目序号（-1=空槽） */
+    uint8_t *cover_buf; /*!< 已载入封面像素（PSRAM，随块销毁释放） */
+    lv_image_dsc_t dsc; /*!< 封面描述符（数据指向 cover_buf） */
+} rdh_tile_t;
+
 /* ---- 页面状态 ---- */
 static espaperplay_ui_status_bar_t *s_bar = NULL;
 static lv_obj_t *s_btn_hist = NULL;
 static lv_obj_t *s_btn_books = NULL;
 static lv_obj_t *s_hint_label = NULL;
 static lv_obj_t *s_card = NULL;
-static lv_obj_t *s_rows[RDH_ROWS_MAX];
-static int s_row_idx[RDH_ROWS_MAX];
-static int s_row_cnt = 0;
+static rdh_tile_t s_tiles[RDH_TILES_MAX];
+static int s_tile_cnt = 0;
+static lv_timer_t *s_cover_timer = NULL; /*!< 封面结果轮询（LVGL 线程） */
 static lv_obj_t *s_dots[RDH_PAGE_MAX];
 
 static int s_tab = 0; /* 0=历史 1=图书 */
@@ -91,7 +110,12 @@ static int s_card_w = 0;
 static int s_card_x = 0;
 static int s_card_y = 0;
 static int s_card_h = 0;
-static int s_row_h = RDH_ROW_H;
+/* 网格几何（rdh_grid_calc 产出） */
+static int s_cols = 1;
+static int s_tile_w = RDH_TILE_W;
+static int s_tile_h = RDH_TILE_H;
+static int s_cover_w = 64; /*!< 封面框宽（封面按 3:4 适配框内） */
+static int s_cover_h = 85; /*!< 封面框高 */
 
 static espaperplay_reader_history_entry_t s_hist[ESPAPERPLAY_READER_HISTORY_MAX];
 static int s_hist_cnt = 0;
@@ -264,16 +288,20 @@ static void rdh_scan_sync(void) {
 /** 当前选项卡条目数。 */
 static int rdh_list_count(void) { return s_tab == 0 ? s_hist_cnt : s_book_cnt; }
 
-/** 销毁列表行与指示点。 */
+/** 销毁网格块与指示点（含封面缓冲释放与在途封面请求作废）。 */
 static void rdh_list_destroy(void) {
-    for (int i = 0; i < RDH_ROWS_MAX; i++) {
-        if (s_rows[i] != NULL) {
-            lv_obj_del(s_rows[i]);
-            s_rows[i] = NULL;
+    espaperplay_reader_cover_cancel();
+    for (int i = 0; i < RDH_TILES_MAX; i++) {
+        if (s_tiles[i].tile != NULL) {
+            lv_obj_del(s_tiles[i].tile);
         }
-        s_row_idx[i] = -1;
+        if (s_tiles[i].cover_buf != NULL) {
+            heap_caps_free(s_tiles[i].cover_buf);
+        }
+        memset(&s_tiles[i], 0, sizeof(rdh_tile_t));
+        s_tiles[i].idx = -1;
     }
-    s_row_cnt = 0;
+    s_tile_cnt = 0;
     for (int i = 0; i < RDH_PAGE_MAX; i++) {
         if (s_dots[i] != NULL) {
             lv_obj_del(s_dots[i]);
@@ -282,8 +310,55 @@ static void rdh_list_destroy(void) {
     }
 }
 
-/** 构建当前页的行（含历史/图书内容）。 */
-static void rdh_build_rows(void) {
+/** 计算网格几何（列数 / 块尺寸 / 封面框）。 */
+static void rdh_grid_calc(void) {
+    const int pad = rdh_scaled(10);
+    const int gap = rdh_scaled(8);
+    int tw = rdh_scaled(RDH_TILE_W);
+    if (tw < RDH_TILE_MIN_W) {
+        tw = RDH_TILE_MIN_W;
+    }
+    int th = rdh_scaled(RDH_TILE_H);
+    if (th < RDH_TILE_MIN_H) {
+        th = RDH_TILE_MIN_H;
+    }
+    s_cols = (s_card_w - 2 * pad + gap) / (tw + gap);
+    if (s_cols < 1) {
+        s_cols = 1;
+    }
+    if (s_cols > RDH_TILES_MAX) {
+        s_cols = RDH_TILES_MAX;
+    }
+    s_tile_w = (s_card_w - 2 * pad - (s_cols - 1) * gap) / s_cols;
+    int rows = (s_card_h - 2 * pad + gap) / (th + gap);
+    if (rows < 1) {
+        rows = 1;
+    }
+    if (rows > RDH_TILES_MAX / s_cols) {
+        rows = RDH_TILES_MAX / s_cols;
+    }
+    s_tile_h = th;
+    s_per_page = s_cols * rows;
+
+    /* 封面框：3:4 适配块内容区（去除文件名 / 进度行） */
+    const int name_h = rdh_scaled(22);
+    const int sub_h = rdh_scaled(16);
+    int cw = s_tile_w - 2 * rdh_scaled(6);
+    int ch = s_tile_h - name_h - sub_h - rdh_scaled(10);
+    if (ch < 40) {
+        ch = 40;
+    }
+    if (cw > ch * 3 / 4) {
+        cw = ch * 3 / 4;
+    } else {
+        ch = cw * 4 / 3;
+    }
+    s_cover_w = cw > 24 ? cw : 24;
+    s_cover_h = ch > 32 ? ch : 32;
+}
+
+/** 构建当前页网格（含历史/图书内容 + 封面请求）。 */
+static void rdh_build_grid(void) {
     rdh_list_destroy();
     const int total = rdh_list_count();
     const int start = s_page * s_per_page;
@@ -291,24 +366,52 @@ static void rdh_build_rows(void) {
     if (n > s_per_page) {
         n = s_per_page;
     }
-    const int pad = 10;
+    if (n > RDH_TILES_MAX) {
+        n = RDH_TILES_MAX;
+    }
+    const int pad = rdh_scaled(10);
+    const int gap = rdh_scaled(8);
 
     for (int i = 0; i < n; i++) {
         const int idx = start + i;
-        lv_obj_t *row = lv_obj_create(s_card);
-        lv_obj_set_size(row, s_card_w - 2 * pad, s_row_h - 4);
-        lv_obj_set_pos(row, pad, pad + i * s_row_h);
-        lv_obj_set_style_bg_color(row, lv_color_white(), 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_radius(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+        rdh_tile_t *t = &s_tiles[i];
+        memset(t, 0, sizeof(*t));
+        t->idx = idx;
+        t->path[0] = '\0';
+        const char *path = (s_tab == 0) ? s_hist[idx].path : s_books[idx].path;
+        strlcpy(t->path, path, sizeof(t->path));
 
+        /* 块容器 */
+        const int col = i % s_cols;
+        const int row = i / s_cols;
+        lv_obj_t *tile = lv_obj_create(s_card);
+        t->tile = tile;
+        lv_obj_set_size(tile, s_tile_w, s_tile_h);
+        lv_obj_set_pos(tile, pad + col * (s_tile_w + gap), pad + row * (s_tile_h + gap));
+        lv_obj_set_style_bg_color(tile, lv_color_white(), 0);
+        lv_obj_set_style_border_width(tile, 0, 0);
+        lv_obj_set_style_radius(tile, 0, 0);
+        lv_obj_set_style_pad_all(tile, 0, 0);
+        lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+
+        /* 封面框（未就绪时即占位边框） */
+        lv_obj_t *frame = lv_obj_create(tile);
+        t->frame = frame;
+        lv_obj_set_size(frame, s_cover_w, s_cover_h);
+        lv_obj_align(frame, LV_ALIGN_TOP_MID, 0, 0);
+        lv_obj_set_style_bg_color(frame, lv_color_white(), 0);
+        lv_obj_set_style_border_color(frame, lv_color_black(), 0);
+        lv_obj_set_style_border_width(frame, 1, 0);
+        lv_obj_set_style_radius(frame, 0, 0);
+        lv_obj_set_style_pad_all(frame, 0, 0);
+        lv_obj_remove_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
+
+        /* 文件名 + 进度 */
         char title[RDH_PATH_MAX];
         char sub[64];
         if (s_tab == 0) {
             /* 历史：书名 + 进度（page 为打包位置：章 << 20 | 章内页） */
-            rdh_disp(rdh_basename(s_hist[idx].path), title, sizeof(title));
+            rdh_disp(rdh_basename(t->path), title, sizeof(title));
             const unsigned hch = (unsigned)(s_hist[idx].page >> 20);
             const unsigned hlp = (unsigned)(s_hist[idx].page & 0xFFFFF);
             /* 新格式（EPUB）：total = bit31 | 章内总页数 → 「第 N 章 x/y 页」
@@ -327,35 +430,34 @@ static void rdh_build_rows(void) {
             }
         } else {
             /* 图书：相对路径 */
-            rdh_disp(rdh_rel(s_books[idx].path), title, sizeof(title));
+            rdh_disp(rdh_rel(t->path), title, sizeof(title));
             sub[0] = '\0';
         }
 
-        lv_obj_t *tl = rdh_label_create(row, title, 16, LV_TEXT_ALIGN_LEFT);
-        lv_obj_set_width(tl, s_card_w - 2 * pad - 20);
-        lv_label_set_long_mode(tl, LV_LABEL_LONG_DOT);
-        lv_obj_align(tl, LV_ALIGN_LEFT_MID, 4, 0);
+        lv_obj_t *nl = rdh_label_create(tile, title, 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_width(nl, s_tile_w);
+        lv_label_set_long_mode(nl, LV_LABEL_LONG_DOT);
+        lv_obj_align_to(nl, frame, LV_ALIGN_OUT_BOTTOM_MID, 0, rdh_scaled(2));
+        t->name = nl;
         if (sub[0] != '\0') {
-            lv_obj_t *sl = rdh_label_create(row, sub, 16, LV_TEXT_ALIGN_RIGHT);
-            lv_obj_set_width(sl, 120);
+            lv_obj_t *sl = rdh_label_create(tile, sub, 14, LV_TEXT_ALIGN_CENTER);
+            lv_obj_set_width(sl, s_tile_w);
             lv_label_set_long_mode(sl, LV_LABEL_LONG_DOT);
-            lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -6, 0);
+            lv_obj_align_to(sl, nl, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
+            t->sub = sl;
         }
 
-        if (i < n - 1) {
-            lv_obj_t *sep = lv_obj_create(s_card);
-            lv_obj_set_size(sep, s_card_w - 2 * pad, 1);
-            lv_obj_set_pos(sep, pad, pad + (i + 1) * s_row_h - 3);
-            lv_obj_set_style_bg_color(sep, lv_color_black(), 0);
-            lv_obj_set_style_border_width(sep, 0, 0);
-            lv_obj_set_style_radius(sep, 0, 0);
-            lv_obj_remove_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
+        /* 封面请求 / TXT 占位 */
+        if (espaperplay_reader_is_epub(t->path)) {
+            t->img = lv_image_create(frame);
+            lv_obj_center(t->img); /* 解码尺寸已适配封面框，居中即可 */
+            (void)espaperplay_reader_cover_request(t->path, s_cover_w, s_cover_h);
+        } else {
+            lv_obj_t *tx = rdh_label_create(frame, "TXT", 16, LV_TEXT_ALIGN_CENTER);
+            lv_obj_center(tx);
         }
-
-        s_rows[i] = row;
-        s_row_idx[i] = idx;
     }
-    s_row_cnt = n;
+    s_tile_cnt = n;
 }
 
 /** 切换分页。 */
@@ -364,7 +466,7 @@ static void rdh_show_page(int idx) {
         return;
     }
     s_page = idx;
-    rdh_build_rows();
+    rdh_build_grid();
     for (int i = 0; i < s_page_count; i++) {
         lv_obj_set_style_bg_color(s_dots[i], i == s_page ? lv_color_black() : lv_color_white(), 0);
     }
@@ -397,13 +499,7 @@ static void rdh_rebuild(void) {
     }
     lv_obj_move_foreground(s_hint_label);
 
-    s_per_page = (s_card_h - 20) / s_row_h;
-    if (s_per_page < 1) {
-        s_per_page = 1;
-    }
-    if (s_per_page > RDH_ROWS_MAX) {
-        s_per_page = RDH_ROWS_MAX;
-    }
+    rdh_grid_calc();
     s_page_count = (total + s_per_page - 1) / s_per_page;
     if (s_page_count < 1) {
         s_page_count = 1;
@@ -428,9 +524,10 @@ static void rdh_rebuild(void) {
         lv_obj_set_style_bg_color(s_dots[i], i == s_page ? lv_color_black() : lv_color_white(), 0);
     }
 
-    rdh_build_rows();
+    rdh_build_grid();
     espaperplay_ui_status_bar_refresh(s_bar);
-    ESP_LOGI(TAG, "rdh: rebuild tab %d -> %d entries, %d page(s)", s_tab, total, s_page_count);
+    ESP_LOGI(TAG, "rdh: rebuild tab %d -> %d entries, %d page(s), grid %dx%d (cover %dx%d)",
+             s_tab, total, s_page_count, s_cols, s_per_page / s_cols, s_cover_w, s_cover_h);
 }
 
 /** 切换选项卡。 */
@@ -618,8 +715,8 @@ static void rdh_confirm_open(const char *title, const char *msg, bool alert_only
 /* 命中检测                                                             */
 /* ------------------------------------------------------------------ */
 
-/** 行屏幕坐标（累加父偏移）。 */
-static int rdh_row_screen_x(const lv_obj_t *obj) {
+/** 块屏幕坐标（累加父偏移）。 */
+static int rdh_tile_screen_x(const lv_obj_t *obj) {
     int x = 0;
     const lv_obj_t *p = obj;
     while (p != NULL && lv_obj_get_parent(p) != NULL) {
@@ -629,7 +726,7 @@ static int rdh_row_screen_x(const lv_obj_t *obj) {
     return x;
 }
 
-static int rdh_row_screen_y(const lv_obj_t *obj) {
+static int rdh_tile_screen_y(const lv_obj_t *obj) {
     int y = 0;
     const lv_obj_t *p = obj;
     while (p != NULL && lv_obj_get_parent(p) != NULL) {
@@ -639,17 +736,17 @@ static int rdh_row_screen_y(const lv_obj_t *obj) {
     return y;
 }
 
-static int rdh_hit_row(const lv_point_t *p) {
-    for (int i = 0; i < s_row_cnt; i++) {
-        const lv_obj_t *row = s_rows[i];
-        if (row == NULL) {
+static int rdh_hit_tile(const lv_point_t *p) {
+    for (int i = 0; i < s_tile_cnt; i++) {
+        const lv_obj_t *tile = s_tiles[i].tile;
+        if (tile == NULL) {
             continue;
         }
-        const int x = rdh_row_screen_x(row);
-        const int y = rdh_row_screen_y(row);
-        if (p->x >= x && p->x < x + lv_obj_get_width(row) && p->y >= y &&
-            p->y < y + lv_obj_get_height(row)) {
-            return s_row_idx[i];
+        const int x = rdh_tile_screen_x(tile);
+        const int y = rdh_tile_screen_y(tile);
+        if (p->x >= x && p->x < x + lv_obj_get_width(tile) && p->y >= y &&
+            p->y < y + lv_obj_get_height(tile)) {
+            return s_tiles[i].idx;
         }
     }
     return -1;
@@ -679,6 +776,48 @@ static void rdh_delete_history(int idx) {
 static void rdh_tab_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
     rdh_set_tab((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+/** 封面结果轮询（LVGL 线程）：就绪缩略图 → 匹配的可见块；失配（已翻页）丢弃。 */
+static void rdh_cover_timer_cb(lv_timer_t *t) {
+    (void)t;
+    if (!s_active) {
+        return;
+    }
+    for (int k = 0; k < 4; k++) { /* 单轮上限，避免长时间占用 LVGL */
+        espaperplay_reader_cover_result_t res;
+        if (!espaperplay_reader_cover_poll(&res)) {
+            break;
+        }
+        rdh_tile_t *tile = NULL;
+        for (int i = 0; i < s_tile_cnt; i++) {
+            if (strcmp(s_tiles[i].path, res.path) == 0) {
+                tile = &s_tiles[i];
+                break;
+            }
+        }
+        if (tile == NULL) { /* 翻页 / 切 tab 后的迟到结果 */
+            if (res.buf != NULL) {
+                heap_caps_free(res.buf);
+            }
+            continue;
+        }
+        if (res.buf == NULL || tile->img == NULL) {
+            continue; /* 无封面：占位框保留原样 */
+        }
+        if (tile->cover_buf != NULL) {
+            heap_caps_free(tile->cover_buf);
+        }
+        tile->cover_buf = res.buf;
+        memset(&tile->dsc, 0, sizeof(tile->dsc));
+        tile->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+        tile->dsc.header.w = res.w;
+        tile->dsc.header.h = res.h;
+        tile->dsc.header.stride = res.w * 2;
+        tile->dsc.data_size = (uint32_t)res.w * res.h * 2;
+        tile->dsc.data = res.buf;
+        lv_image_set_src(tile->img, &tile->dsc);
+    }
 }
 
 /** 阅读器主页构建（页面 enter）。 */
@@ -735,7 +874,6 @@ static void rdh_enter(void) {
     if (s_card_h < 100) {
         s_card_h = 100;
     }
-    s_row_h = rdh_scaled(RDH_ROW_H) < RDH_MIN_ROW_H ? RDH_MIN_ROW_H : rdh_scaled(RDH_ROW_H);
 
     s_card = lv_obj_create(scr);
     lv_obj_set_size(s_card, s_card_w, s_card_h);
@@ -746,7 +884,6 @@ static void rdh_enter(void) {
     lv_obj_set_style_radius(s_card, 12, 0);
     lv_obj_set_style_pad_all(s_card, 0, 0);
     lv_obj_remove_flag(s_card, LV_OBJ_FLAG_SCROLLABLE);
-
     /* 提示 */
     s_hint_label = rdh_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_hint_label, s_card_w);
@@ -760,6 +897,11 @@ static void rdh_enter(void) {
     }
     if (s_books == NULL) {
         ESP_LOGE(TAG, "rdh: books alloc failed");
+    }
+
+    /* 封面结果轮询定时器（LVGL 线程，退出时删除） */
+    if (s_cover_timer == NULL) {
+        s_cover_timer = lv_timer_create(rdh_cover_timer_cb, 250, NULL);
     }
 
     /* 状态复位 */
@@ -787,6 +929,10 @@ static void rdh_enter(void) {
 /** 阅读器主页退出。 */
 static void rdh_exit(void) {
     s_active = false;
+    if (s_cover_timer != NULL) {
+        lv_timer_del(s_cover_timer);
+        s_cover_timer = NULL;
+    }
     rdh_modal_close();
     rdh_list_destroy();
     if (s_books != NULL) {
@@ -822,7 +968,7 @@ static void rdh_on_key(const espaperplay_input_event_t *event) {
     }
 }
 
-/** 触摸：长按历史行删除；点击行打开；边缘滑动返回。 */
+/** 触摸：长按历史块删除；点击块打开；边缘滑动返回。 */
 static void rdh_on_touch(const espaperplay_input_event_t *event) {
     lv_point_t p;
     espaperplay_ui_touch_map_to_lv(event->point.x, event->point.y, &p);
@@ -851,11 +997,11 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
             s_touch_down = true;
             s_touch_start = p;
             s_touch_down_tick = lv_tick_get();
-            s_touch_hit = rdh_hit_row(&p);
+            s_touch_hit = rdh_hit_tile(&p);
         }
         s_touch_last = p;
 
-        /* 长按判定（仅历史行）：按住达阈值且位移极小，弹删除确认 */
+        /* 长按判定（仅历史块）：按住达阈值且位移极小，弹删除确认 */
         if (s_touch_hit >= 0 && s_tab == 0 &&
             lv_tick_elaps(s_touch_down_tick) >= RDH_LONG_PRESS_MS &&
             abs(p.x - s_touch_start.x) <= RDH_CLICK_MAX_PX &&
@@ -902,7 +1048,7 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
         return;
     }
 
-    /* 小位移点击：行 -> 打开；选项卡按钮由 LVGL 控件处理 */
+    /* 小位移点击：块 -> 打开；选项卡按钮由 LVGL 控件处理 */
     if (adx <= RDH_CLICK_MAX_PX && ady <= RDH_CLICK_MAX_PX) {
         if (hit >= 0) {
             if (s_tab == 0) {

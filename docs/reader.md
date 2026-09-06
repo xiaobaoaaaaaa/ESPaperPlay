@@ -41,8 +41,19 @@ The reader application (`components/applications/reader` + `screen_reader` /
   refresh; full-screen TOC panel (paged, auto-located to the current chapter);
   tap zones + edge swipes + BOOT key for paging; progress is stored as
   chapter + page-in-chapter so resume never re-counts prefix chapters.
-  The reader home (`screen_reader_home`) lists reading history and the SD book
-  shelf.
+  The reader home (`screen_reader_home`) shows reading history and the SD book
+  shelf as a **cover grid**.
+- **Cover grid** — the reader home renders books as a grid of cover thumbnails
+  (file name below; history entries also show reading progress; TXT and
+  coverless books get a placeholder frame). Covers are located by priority:
+  EPUB3 manifest `properties~="cover-image"` → EPUB2 `<meta name="cover">` →
+  `cover.jpg/jpeg/png` in the manifest → first image in the first spine
+  document. Thumbnails are decoded in a background worker (low priority,
+  internal-RAM stack: SD writes must never run on a PSRAM stack), downsampled
+  into the tile budget, and cached to SD
+  (`/sdcard/system/cache/reader/covers/`, keyed by path hash ^ mtime ^ size;
+  "no cover" results are cached too, so coverless books never re-probe).
+  Flipping pages / leaving the screen cancels in-flight work.
 - **Images** — image blocks occupy their own page: JPEG decodes streamingly
   via a vendored TJpgDec (MCU-by-MCU), PNG decodes row-by-row via zlib
   (all color types / bit depths 1-16, palette + tRNS; peak memory ≈ target
@@ -79,7 +90,15 @@ The reader application (`components/applications/reader` + `screen_reader` /
 - **阅读界面**——底边栏：目录 / 页码跳转 / 字号 / 灰度刷新；全屏目录面板
  （分页显示，自动定位当前章）；点按区 + 边缘滑动 + BOOT 键翻页；进度按
   「章 + 章内页」存储，续读无需重数前缀章节。阅读器主页
- （`screen_reader_home`）列出阅读历史与 SD 卡书架。
+ （`screen_reader_home`）以**封面网格**呈现阅读历史与 SD 卡书架。
+- **封面网格**——主页条目按网格块展示封面缩略图（块下为文件名；历史块另
+  带阅读进度；TXT 与无封面书显示占位框）。封面定位优先级：EPUB3 manifest
+  `properties~="cover-image"` → EPUB2 `<meta name="cover">` → manifest 中
+  `cover.jpg/jpeg/png` → spine 首文档内首个图片。缩略图由后台 worker 解码
+  （低优先级、内部 RAM 栈：SD 写期间栈不能放 PSRAM），按网格预算降采样后
+  缓存到 SD（`/sdcard/system/cache/reader/covers/`，键 = 路径哈希 ^ mtime ^
+  size；「无封面」负结果同样缓存，无封面书不会反复空探）。翻页 / 离开页面
+  即作废在途请求。
 - **图片**——图片块独占一页：JPEG 经自持 TJpgDec 逐 MCU 流式解码，PNG 经
   zlib 逐行流式解码（全颜色类型 / 1-16 位深、调色板 + tRNS；峰值内存 ≈
   目标 RGB565 缓冲 + 2 行扫描线）。图片等比缩放内接内容区，插图页渲染完
