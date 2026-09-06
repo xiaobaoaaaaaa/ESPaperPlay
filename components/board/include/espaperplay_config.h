@@ -30,7 +30,7 @@ extern "C" {
  * 根目录 CMakeLists.txt 也会解析这三个宏作为 ESP-IDF 应用版本
  * （esp_app_desc），改版本只需动这里。 */
 #define ESPAPERPLAY_VERSION_MAJOR 0
-#define ESPAPERPLAY_VERSION_MINOR 1
+#define ESPAPERPLAY_VERSION_MINOR 2
 #define ESPAPERPLAY_VERSION_PATCH 0
 
 /* 由 MAJOR/MINOR/PATCH 拼接人类可读版本字符串（勿手改字符串）。 */
