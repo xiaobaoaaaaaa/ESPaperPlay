@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_power.h"
@@ -157,52 +158,23 @@ static void setup_leave_page_only(void);
 /* ------------------------------------------------------------------ */
 
 /** FreeType 字体按需加载（16/20/24/32 固定档位）。 */
-static lv_font_t *setup_font(int size_px) {
-    return espaperplay_fonts_load(espaperplay_system_get_config()->selected_font,
-                                  (uint32_t)size_px, ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
 /** 通用标签：白底黑字 + FreeType 字体 + 禁用滚动。 */
-static lv_obj_t *setup_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                    lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = setup_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
-    return label;
-}
-
 /** 逻辑分辨率（旋转后）。 */
-static void setup_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
-static float s_scale = 1.0f; /*!< 屏高缩放因子（enter 时计算） */
 
 /** 内容区尺寸（s_content 容器尺寸，已扣除标题栏；垂直定位以此为基准）。 */
 static int32_t s_content_w = 0;
 static int32_t s_content_h = 0;
 
 /** 基准值按屏高缩放（取整）。 */
-static int setup_scaled(int v) { return (int)(v * s_scale); }
-
 /** 标题栏高度（缩放 + 下限）。 */
 static int setup_bar_h(void) {
-    const int h = setup_scaled(SETUP_BAR_H);
+    const int h = espaperplay_ui_scaled(SETUP_BAR_H);
     return h < SETUP_MIN_H ? SETUP_MIN_H : h;
 }
 
 /** 按钮高度（缩放 + 下限，保证可点按面积）。 */
 static int setup_btn_h(void) {
-    const int h = setup_scaled(SETUP_BTN_H);
+    const int h = espaperplay_ui_scaled(SETUP_BTN_H);
     return h < 40 ? 40 : h;
 }
 
@@ -224,7 +196,7 @@ static lv_obj_t *setup_button(lv_obj_t *parent, const char *text, int x, int y, 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, setup_font(20), 0);
+    lv_obj_set_style_text_font(label, espaperplay_ui_font(20), 0);
     lv_obj_center(label);
     if (cb != NULL) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
@@ -357,7 +329,7 @@ static void setup_op_post(const setup_op_t *op) {
 /* ------------------------------------------------------------------ */
 
 /** 底部主行动按钮 y 坐标（各步骤统一：贴底留边，基于内容区高度）。 */
-static int setup_bottom_btn_y(void) { return s_content_h - setup_btn_h() - setup_scaled(20); }
+static int setup_bottom_btn_y(void) { return s_content_h - setup_btn_h() - espaperplay_ui_scaled(20); }
 
 /** 欢迎步骤：标题 + 说明 + 两个路径按钮 + 跳过入口。 */
 static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
@@ -365,17 +337,17 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
     const int btn_w = scr_w - 2 * SETUP_MARGIN;
 
     lv_obj_t *title =
-        setup_label_create(parent, "欢迎使用 ESPaperPlay", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(56));
+        espaperplay_ui_label_create(parent, "欢迎使用 ESPaperPlay", 24, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(56));
 
-    lv_obj_t *body = setup_label_create(
+    lv_obj_t *body = espaperplay_ui_label_create(
         parent, "首次使用需要先完成基本配置。\n设备已开启热点，请选择一种配置方式：", 16,
         LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(body, 0, setup_scaled(110));
+    lv_obj_set_pos(body, 0, espaperplay_ui_scaled(110));
 
     /* 两个路径按钮靠下排布（跳过入口贴底，基于内容区高度）。 */
-    const int skip_y = s_content_h - setup_scaled(52);
-    const int btn2_y = skip_y - setup_scaled(60);
+    const int skip_y = s_content_h - espaperplay_ui_scaled(52);
+    const int btn2_y = skip_y - espaperplay_ui_scaled(60);
     const int btn1_y = btn2_y - setup_btn_h() - SETUP_BTN_GAP;
 
     setup_button(parent, "联网配置（推荐）", SETUP_MARGIN, btn1_y, btn_w, setup_btn_h(), true,
@@ -385,7 +357,7 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
 
     /* 跳过：无边框文字按钮。 */
     lv_obj_t *skip = lv_button_create(parent);
-    lv_obj_set_size(skip, btn_w, setup_scaled(36));
+    lv_obj_set_size(skip, btn_w, espaperplay_ui_scaled(36));
     lv_obj_set_pos(skip, SETUP_MARGIN, skip_y);
     lv_obj_set_style_bg_color(skip, lv_color_white(), 0);
     lv_obj_set_style_border_width(skip, 0, 0);
@@ -393,7 +365,7 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
     lv_obj_t *skip_label = lv_label_create(skip);
     lv_label_set_text(skip_label, "跳过引导，直接开始");
     lv_obj_set_style_text_color(skip_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(skip_label, setup_font(16), 0);
+    lv_obj_set_style_text_font(skip_label, espaperplay_ui_font(16), 0);
     lv_obj_center(skip_label);
     lv_obj_add_event_cb(skip, setup_btn_skip_cb, LV_EVENT_CLICKED, NULL);
 }
@@ -412,20 +384,20 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
 
     /* 自上而下顺序布局；空间不足时收缩二维码。 */
-    int y = setup_scaled(10);
-    lv_obj_t *title = setup_label_create(parent, "联网配置", 20, LV_TEXT_ALIGN_CENTER);
+    int y = espaperplay_ui_scaled(10);
+    lv_obj_t *title = espaperplay_ui_label_create(parent, "联网配置", 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(title, 0, y);
-    y += setup_scaled(36);
+    y += espaperplay_ui_scaled(36);
 
-    int qr_size = setup_scaled(190);
+    int qr_size = espaperplay_ui_scaled(190);
     if (qr_size < 140) {
         qr_size = 140;
     }
     /* 二维码 + 说明 + 按钮总高超出可用区时压缩二维码（横屏小屏兜底）。 */
-    const int needed = qr_size + setup_scaled(150) + setup_btn_h() + setup_scaled(50);
+    const int needed = qr_size + espaperplay_ui_scaled(150) + setup_btn_h() + espaperplay_ui_scaled(50);
     const int avail = btn_y - y - 4;
-    if (needed > avail && avail > setup_scaled(260)) {
-        qr_size = avail - setup_scaled(150) - setup_btn_h() - setup_scaled(50);
+    if (needed > avail && avail > espaperplay_ui_scaled(260)) {
+        qr_size = avail - espaperplay_ui_scaled(150) - setup_btn_h() - espaperplay_ui_scaled(50);
         if (qr_size < 120) {
             qr_size = 120;
         }
@@ -441,17 +413,17 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
 #else
     (void)qr_size;
 #endif
-    y += qr_size + setup_scaled(12);
+    y += qr_size + espaperplay_ui_scaled(12);
 
-    lv_obj_t *url_label = setup_label_create(parent, url, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *url_label = espaperplay_ui_label_create(parent, url, 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(url_label, 0, y);
-    y += setup_scaled(34);
+    y += espaperplay_ui_scaled(34);
 
     char steps[256];
     snprintf(steps, sizeof(steps),
              "%s\n2. 扫描二维码，或浏览器打开上方地址\n3. 在网页向导中完成配置后，回到这里点「完成配置」",
              ap_line);
-    lv_obj_t *steps_label = setup_label_create(parent, steps, 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *steps_label = espaperplay_ui_label_create(parent, steps, 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_style_pad_left(steps_label, SETUP_MARGIN, 0);
     lv_obj_set_pos(steps_label, 0, y);
 
@@ -491,7 +463,7 @@ static void setup_input_rebuild(void) {
     }
 
     const int32_t list_w = lv_obj_get_width(s_input_list);
-    const int row_h = setup_scaled(44) < 36 ? 36 : setup_scaled(44);
+    const int row_h = espaperplay_ui_scaled(44) < 36 ? 36 : espaperplay_ui_scaled(44);
 
     for (size_t i = 0; i < s_scan_count; i++) {
         lv_obj_t *row = lv_obj_create(s_input_list);
@@ -510,7 +482,7 @@ static void setup_input_rebuild(void) {
         lv_obj_t *label = lv_label_create(row);
         lv_label_set_text(label, s_scan_items[i].ssid);
         lv_obj_set_style_text_color(label, lv_color_black(), 0);
-        lv_obj_set_style_text_font(label, setup_font(16), 0);
+        lv_obj_set_style_text_font(label, espaperplay_ui_font(16), 0);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
         lv_obj_set_width(label, list_w - 110);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
@@ -520,7 +492,7 @@ static void setup_input_rebuild(void) {
             lv_obj_t *lock = lv_label_create(row);
             lv_label_set_text(lock, "加密");
             lv_obj_set_style_text_color(lock, lv_color_black(), 0);
-            lv_obj_set_style_text_font(lock, setup_font(16), 0);
+            lv_obj_set_style_text_font(lock, espaperplay_ui_font(16), 0);
             lv_obj_align(lock, LV_ALIGN_RIGHT_MID, -30, 0);
         }
         lv_obj_t *icon = lv_image_create(row);
@@ -607,20 +579,20 @@ static void setup_btn_rescan_cb(lv_event_t *e) {
 /** 本机配置步骤：扫描列表 + 手动输入兜底（键盘模态打开时的底层）。 */
 static void setup_build_input(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     (void)scr_h;
-    lv_obj_t *title = setup_label_create(parent, "本机配置", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(20));
+    lv_obj_t *title = espaperplay_ui_label_create(parent, "本机配置", 24, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(20));
 
-    s_input_status = setup_label_create(
+    s_input_status = espaperplay_ui_label_create(
         parent, s_scan_busy ? "正在扫描附近网络…" : "选择要连接的网络", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_input_status, 0, setup_scaled(66));
+    lv_obj_set_pos(s_input_status, 0, espaperplay_ui_scaled(66));
 
     const int btn_h = setup_btn_h();
-    const int btn_y = s_content_h - btn_h - setup_scaled(20);
+    const int btn_y = s_content_h - btn_h - espaperplay_ui_scaled(20);
 
     /* 扫描结果列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
     s_input_list = lv_obj_create(parent);
-    lv_obj_set_size(s_input_list, scr_w - 2 * SETUP_MARGIN, btn_y - setup_scaled(106));
-    lv_obj_set_pos(s_input_list, SETUP_MARGIN, setup_scaled(106));
+    lv_obj_set_size(s_input_list, scr_w - 2 * SETUP_MARGIN, btn_y - espaperplay_ui_scaled(106));
+    lv_obj_set_pos(s_input_list, SETUP_MARGIN, espaperplay_ui_scaled(106));
     lv_obj_set_style_bg_color(s_input_list, lv_color_white(), 0);
     lv_obj_set_style_border_width(s_input_list, 0, 0);
     lv_obj_set_style_radius(s_input_list, 0, 0);
@@ -646,16 +618,16 @@ static void setup_build_input(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
 static void setup_build_connecting(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     (void)scr_w;
     (void)scr_h;
-    lv_obj_t *title = setup_label_create(parent, "正在连接网络", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(70));
+    lv_obj_t *title = espaperplay_ui_label_create(parent, "正在连接网络", 24, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(70));
 
     char ssid_line[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 16];
     snprintf(ssid_line, sizeof(ssid_line), "「%s」", s_ssid);
-    lv_obj_t *ssid_label = setup_label_create(parent, ssid_line, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(ssid_label, 0, setup_scaled(130));
+    lv_obj_t *ssid_label = espaperplay_ui_label_create(parent, ssid_line, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(ssid_label, 0, espaperplay_ui_scaled(130));
 
-    s_status_label = setup_label_create(parent, "正在应用网络配置…", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_status_label, 0, setup_scaled(170));
+    s_status_label = espaperplay_ui_label_create(parent, "正在应用网络配置…", 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(s_status_label, 0, espaperplay_ui_scaled(170));
 
     const int btn_w = scr_w - 2 * SETUP_MARGIN;
     setup_button(parent, "取消并返回", SETUP_MARGIN, setup_bottom_btn_y(), btn_w,
@@ -666,8 +638,8 @@ static void setup_build_connecting(lv_obj_t *parent, int32_t scr_w, int32_t scr_
 static void setup_build_done(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     (void)scr_w;
     (void)scr_h;
-    lv_obj_t *title = setup_label_create(parent, "配置完成！", 32, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(80));
+    lv_obj_t *title = espaperplay_ui_label_create(parent, "配置完成！", 32, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(80));
 
     char line[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 48];
     espaperplay_wifi_status_t st;
@@ -676,8 +648,8 @@ static void setup_build_done(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     } else {
         snprintf(line, sizeof(line), "设备已连接到「%s」", s_ssid);
     }
-    lv_obj_t *body = setup_label_create(parent, line, 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(body, 0, setup_scaled(150));
+    lv_obj_t *body = espaperplay_ui_label_create(parent, line, 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(body, 0, espaperplay_ui_scaled(150));
 
     const int btn_w = scr_w - 2 * SETUP_MARGIN;
     setup_button(parent, "开始使用", SETUP_MARGIN, setup_bottom_btn_y(), btn_w, setup_btn_h(),
@@ -687,18 +659,18 @@ static void setup_build_done(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
 /** 失败步骤：原因 + 重试 / 改联网配置 / 跳过。 */
 static void setup_build_fail(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     (void)scr_h;
-    lv_obj_t *title = setup_label_create(parent, "连接失败", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, setup_scaled(56));
+    lv_obj_t *title = espaperplay_ui_label_create(parent, "连接失败", 24, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(56));
 
     char line[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 32];
     snprintf(line, sizeof(line), "无法连接到「%s」", s_ssid);
-    lv_obj_t *ssid_label = setup_label_create(parent, line, 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(ssid_label, 0, setup_scaled(104));
+    lv_obj_t *ssid_label = espaperplay_ui_label_create(parent, line, 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_pos(ssid_label, 0, espaperplay_ui_scaled(104));
 
-    lv_obj_t *reason = setup_label_create(
+    lv_obj_t *reason = espaperplay_ui_label_create(
         parent, s_fail_reason[0] ? s_fail_reason : "请检查密码是否正确、信号是否可用。", 16,
         LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(reason, 0, setup_scaled(136));
+    lv_obj_set_pos(reason, 0, espaperplay_ui_scaled(136));
 
     const int btn_y = setup_bottom_btn_y();
     const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
@@ -707,14 +679,14 @@ static void setup_build_fail(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     setup_button(parent, "改用联网配置", SETUP_MARGIN + btn_w + 12, btn_y - setup_btn_h() - SETUP_BTN_GAP,
                  btn_w, setup_btn_h(), false, setup_btn_web_cb);
     setup_button(parent, "跳过引导", SETUP_MARGIN, btn_y, scr_w - 2 * SETUP_MARGIN,
-                 setup_scaled(40), false, setup_btn_skip_cb);
+                 espaperplay_ui_scaled(40), false, setup_btn_skip_cb);
 }
 
 /** 构建当前步骤内容（s_content 已重建）。 */
 static void setup_build_step_lv(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    setup_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     s_status_label = NULL;
     s_input_list = NULL;
     s_input_status = NULL;
@@ -902,7 +874,7 @@ static void setup_open_keyboard(bool for_pass) {
 
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    setup_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -919,10 +891,10 @@ static void setup_open_keyboard(bool for_pass) {
     const int panel_w = scr_w - 2 * SETUP_MARGIN;
     const int pad = 10;
     const int title_h = 30;
-    const int ta_h = setup_scaled(52) < 40 ? 40 : setup_scaled(52);
+    const int ta_h = espaperplay_ui_scaled(52) < 40 ? 40 : espaperplay_ui_scaled(52);
     const int hint_h = 22;
     const int bh = setup_btn_h() < 38 ? 38 : setup_btn_h();
-    const int kb_h = setup_scaled(240) < 170 ? 170 : setup_scaled(240);
+    const int kb_h = espaperplay_ui_scaled(240) < 170 ? 170 : espaperplay_ui_scaled(240);
     /* 面板仅含标题/输入框/提示/按钮（不含键盘，键盘单独挂全屏 modal 贴底，避免被面板裁剪）。 */
     const int panel_h = pad + title_h + 6 + ta_h + 4 + hint_h + 6 + bh + pad;
     const int kb_y = scr_h - kb_h - 6;       /* 键盘贴底 */
@@ -939,7 +911,7 @@ static void setup_open_keyboard(bool for_pass) {
     lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题。 */
-    lv_obj_t *title = setup_label_create(panel, for_pass ? "输入 WiFi 密码" : "输入 WiFi 名称",
+    lv_obj_t *title = espaperplay_ui_label_create(panel, for_pass ? "输入 WiFi 密码" : "输入 WiFi 名称",
                                          20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title, panel_w - 140);
     lv_obj_set_pos(title, 0, pad);
@@ -956,7 +928,7 @@ static void setup_open_keyboard(bool for_pass) {
     lv_textarea_set_password_mode(ta, for_pass);
     lv_textarea_set_text(ta, "");
     lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_text_font(ta, setup_font(20), 0);
+    lv_obj_set_style_text_font(ta, espaperplay_ui_font(20), 0);
     lv_obj_set_style_border_color(ta, lv_color_black(), 0);
     lv_obj_set_style_border_width(ta, 2, 0);
     lv_obj_set_style_radius(ta, 6, 0);
@@ -967,7 +939,7 @@ static void setup_open_keyboard(bool for_pass) {
     lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
 
     /* 校验提示（默认空）。 */
-    lv_obj_t *hint = setup_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *hint = espaperplay_ui_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
     s_kb_hint = hint;
     lv_obj_set_width(hint, LV_PCT(100));
     lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
@@ -991,7 +963,7 @@ static void setup_open_keyboard(bool for_pass) {
         lv_obj_t *tl = lv_label_create(toggle);
         lv_label_set_text(tl, "显示");
         lv_obj_set_style_text_color(tl, lv_color_black(), 0);
-        lv_obj_set_style_text_font(tl, setup_font(16), 0);
+        lv_obj_set_style_text_font(tl, espaperplay_ui_font(16), 0);
         lv_obj_center(tl);
         lv_obj_add_event_cb(toggle, setup_kb_toggle_cb, LV_EVENT_CLICKED, NULL);
     }
@@ -1103,8 +1075,7 @@ static void setup_enter(void) {
     /* 防止整个屏幕被 LVGL 滚动（步骤切换由按钮驱动）。 */
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_scale = (float)lv_display_get_vertical_resolution(lv_display_get_default()) /
-              (float)SETUP_REF_H;
+    espaperplay_ui_scale_init(SETUP_REF_H);
     s_bar = espaperplay_ui_status_bar_create(scr, setup_bar_h(), "开机引导", false);
 
     /* 引导期间禁止设备睡眠：用户可能在手机上经 WebUI 完成配置，睡眠会导致设备不可达。 */

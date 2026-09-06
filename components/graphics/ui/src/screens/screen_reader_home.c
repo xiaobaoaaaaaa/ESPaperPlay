@@ -16,6 +16,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_reader.h"
@@ -106,7 +107,6 @@ static int s_tab = 0; /* 0=历史 1=图书 */
 static int s_page = 0;
 static int s_page_count = 1;
 static int s_per_page = 8;
-static float s_scale = 1.0f;
 static int s_card_w = 0;
 static int s_card_x = 0;
 static int s_card_y = 0;
@@ -148,79 +148,18 @@ static void rdh_modal_close(void);
 /* 工具                                                                 */
 /* ------------------------------------------------------------------ */
 
-static lv_font_t *rdh_font(int size_px) {
-    const char *name = RDH_FONT_NAME[0] ? RDH_FONT_NAME : ESPAPERPLAY_FONTS_DEFAULT_NAME;
-    return espaperplay_fonts_load(name, (uint32_t)size_px, ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
-static lv_obj_t *rdh_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                  lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = rdh_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
-    return label;
-}
-
-static void rdh_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
-static int rdh_scaled(int v) { return (int)(v * s_scale); }
-
 /** 路径拼接并检测截断。 */
-static bool rdh_join(char *dst, size_t n, const char *a, const char *b) {
-    const size_t need = strlen(a) + 1 + strlen(b) + 1;
-    if (need > n) {
-        return false;
-    }
-    strlcpy(dst, a, n);
-    strlcat(dst, "/", n);
-    strlcat(dst, b, n);
-    return true;
-}
-
 /** 取路径最后一段（文件名）。 */
-static const char *rdh_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return (slash != NULL && slash[1] != '\0') ? slash + 1 : path;
-}
-
 /** 取相对默认图书目录的路径（用于显示；目录缺失时返回 basename）。 */
 static const char *rdh_rel(const char *full) {
     const size_t base_len = strlen(ESPAPERPLAY_READER_SD_DIR);
     if (strncmp(full, ESPAPERPLAY_READER_SD_DIR, base_len) == 0 && full[base_len] == '/') {
         return full + base_len + 1;
     }
-    return rdh_basename(full);
+    return espaperplay_ui_path_basename(full);
 }
 
 /** 书名显示截断（UTF-8 边界 + 省略号）。 */
-static void rdh_disp(const char *src, char *dst, size_t n) {
-    size_t len = strlen(src);
-    bool truncated = false;
-    if (len > n - 4) {
-        len = n - 4;
-        while (len > 0 && (((unsigned char)src[len] & 0xC0) == 0x80)) {
-            len--;
-        }
-        truncated = true;
-    }
-    memcpy(dst, src, len);
-    dst[len] = '\0';
-    if (truncated) {
-        strlcat(dst, "…", n);
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /* 递归扫描（worker，内部 RAM 栈）                                       */
 /* ------------------------------------------------------------------ */
@@ -245,7 +184,7 @@ static void rdh_scan_dir(const char *dir, int depth, int *cnt) {
             continue;
         }
         char child[RDH_PATH_MAX];
-        if (!rdh_join(child, sizeof(child), dir, e->d_name)) {
+        if (!espaperplay_ui_path_join(child, sizeof(child), dir, e->d_name)) {
             continue;
         }
         if (e->d_type == DT_DIR) {
@@ -314,13 +253,13 @@ static void rdh_list_destroy(void) {
 
 /** 计算网格几何（列数 / 块尺寸 / 封面框）。 */
 static void rdh_grid_calc(void) {
-    const int pad = rdh_scaled(10);
-    const int gap = rdh_scaled(8);
-    int tw = rdh_scaled(RDH_TILE_W);
+    const int pad = espaperplay_ui_scaled(10);
+    const int gap = espaperplay_ui_scaled(8);
+    int tw = espaperplay_ui_scaled(RDH_TILE_W);
     if (tw < RDH_TILE_MIN_W) {
         tw = RDH_TILE_MIN_W;
     }
-    int th = rdh_scaled(RDH_TILE_H);
+    int th = espaperplay_ui_scaled(RDH_TILE_H);
     if (th < RDH_TILE_MIN_H) {
         th = RDH_TILE_MIN_H;
     }
@@ -343,10 +282,10 @@ static void rdh_grid_calc(void) {
     s_per_page = s_cols * rows;
 
     /* 封面框：3:4 适配块内容区（去除文件名 / 进度行） */
-    const int name_h = rdh_scaled(22);
-    const int sub_h = rdh_scaled(16);
-    int cw = s_tile_w - 2 * rdh_scaled(6);
-    int ch = s_tile_h - name_h - sub_h - rdh_scaled(10);
+    const int name_h = espaperplay_ui_scaled(22);
+    const int sub_h = espaperplay_ui_scaled(16);
+    int cw = s_tile_w - 2 * espaperplay_ui_scaled(6);
+    int ch = s_tile_h - name_h - sub_h - espaperplay_ui_scaled(10);
     if (ch < 40) {
         ch = 40;
     }
@@ -371,8 +310,8 @@ static void rdh_build_grid(void) {
     if (n > RDH_TILES_MAX) {
         n = RDH_TILES_MAX;
     }
-    const int pad = rdh_scaled(10);
-    const int gap = rdh_scaled(8);
+    const int pad = espaperplay_ui_scaled(10);
+    const int gap = espaperplay_ui_scaled(8);
 
     for (int i = 0; i < n; i++) {
         const int idx = start + i;
@@ -413,7 +352,7 @@ static void rdh_build_grid(void) {
         char sub[64];
         if (s_tab == 0) {
             /* 历史：书名 + 进度（page 为打包位置：章 << 20 | 章内页） */
-            rdh_disp(rdh_basename(t->path), title, sizeof(title));
+            espaperplay_ui_utf8_truncate(espaperplay_ui_path_basename(t->path), title, sizeof(title));
             const unsigned hch = (unsigned)(s_hist[idx].page >> 20);
             const unsigned hlp = (unsigned)(s_hist[idx].page & 0xFFFFF);
             /* 新格式（EPUB）：total = bit31 | 章内总页数 → 「第 N 章 x/y 页」
@@ -432,17 +371,17 @@ static void rdh_build_grid(void) {
             }
         } else {
             /* 图书：相对路径 */
-            rdh_disp(rdh_rel(t->path), title, sizeof(title));
+            espaperplay_ui_utf8_truncate(rdh_rel(t->path), title, sizeof(title));
             sub[0] = '\0';
         }
 
-        lv_obj_t *nl = rdh_label_create(tile, title, 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *nl = espaperplay_ui_label_create(tile, title, 16, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(nl, s_tile_w);
         lv_label_set_long_mode(nl, LV_LABEL_LONG_DOT);
-        lv_obj_align_to(nl, frame, LV_ALIGN_OUT_BOTTOM_MID, 0, rdh_scaled(2));
+        lv_obj_align_to(nl, frame, LV_ALIGN_OUT_BOTTOM_MID, 0, espaperplay_ui_scaled(2));
         t->name = nl;
         if (sub[0] != '\0') {
-            lv_obj_t *sl = rdh_label_create(tile, sub, 14, LV_TEXT_ALIGN_CENTER);
+            lv_obj_t *sl = espaperplay_ui_label_create(tile, sub, 14, LV_TEXT_ALIGN_CENTER);
             lv_obj_set_width(sl, s_tile_w);
             lv_label_set_long_mode(sl, LV_LABEL_LONG_DOT);
             lv_obj_align_to(sl, nl, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
@@ -455,7 +394,7 @@ static void rdh_build_grid(void) {
             lv_obj_center(t->img); /* 解码尺寸已适配封面框，居中即可 */
             (void)espaperplay_reader_cover_request(t->path, s_cover_w, s_cover_h);
         } else {
-            lv_obj_t *tx = rdh_label_create(frame, "TXT", 16, LV_TEXT_ALIGN_CENTER);
+            lv_obj_t *tx = espaperplay_ui_label_create(frame, "TXT", 16, LV_TEXT_ALIGN_CENTER);
             lv_obj_center(tx);
         }
     }
@@ -513,7 +452,7 @@ static void rdh_rebuild(void) {
     /* 指示点（底部选项卡栏上方，与文件页底部操作栏同款几何） */
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    rdh_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const int dots_y = s_bottom_y - 18;
     for (int i = 0; i < s_page_count && i < RDH_PAGE_MAX; i++) {
         s_dots[i] = lv_obj_create(lv_screen_active());
@@ -620,7 +559,7 @@ static void rdh_del_cancel_cb(lv_event_t *e) {
 static void rdh_confirm_open(const char *title, const char *msg, bool alert_only) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    rdh_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层：背景透明，避免 BW 模式下浅灰渲染成纯白盖掉列表。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -637,7 +576,7 @@ static void rdh_confirm_open(const char *title, const char *msg, bool alert_only
     s_modal_track_release = false;
 
     const int card_w = scr_w - 2 * RDH_MARGIN;
-    const int card_h = rdh_scaled(250) < 210 ? 210 : rdh_scaled(250);
+    const int card_h = espaperplay_ui_scaled(250) < 210 ? 210 : espaperplay_ui_scaled(250);
     lv_obj_t *card = lv_obj_create(s_modal);
     lv_obj_set_size(card, card_w, card_h);
     lv_obj_center(card);
@@ -648,41 +587,41 @@ static void rdh_confirm_open(const char *title, const char *msg, bool alert_only
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *tl = rdh_label_create(card, title, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *tl = espaperplay_ui_label_create(card, title, 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(tl, LV_PCT(100));
     lv_label_set_long_mode(tl, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(tl, 0, rdh_scaled(14));
+    lv_obj_set_pos(tl, 0, espaperplay_ui_scaled(14));
 
     if (msg != NULL) {
-        lv_obj_t *ml = rdh_label_create(card, msg, 16, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_width(ml, card_w - rdh_scaled(40));
-        lv_obj_set_pos(ml, rdh_scaled(20), rdh_scaled(52));
+        lv_obj_t *ml = espaperplay_ui_label_create(card, msg, 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_width(ml, card_w - espaperplay_ui_scaled(40));
+        lv_obj_set_pos(ml, espaperplay_ui_scaled(20), espaperplay_ui_scaled(52));
         lv_label_set_long_mode(ml, LV_LABEL_LONG_WRAP);
     }
 
-    const int bh = rdh_scaled(44) < 38 ? 38 : rdh_scaled(44);
-    const int by = card_h - bh - rdh_scaled(14);
+    const int bh = espaperplay_ui_scaled(44) < 38 ? 38 : espaperplay_ui_scaled(44);
+    const int by = card_h - bh - espaperplay_ui_scaled(14);
     lv_obj_t *btn;
     if (alert_only) {
         btn = lv_button_create(card);
-        lv_obj_set_size(btn, card_w - rdh_scaled(48), bh);
-        lv_obj_set_pos(btn, rdh_scaled(24), by);
+        lv_obj_set_size(btn, card_w - espaperplay_ui_scaled(48), bh);
+        lv_obj_set_pos(btn, espaperplay_ui_scaled(24), by);
         lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_radius(btn, 8, 0);
         lv_obj_t *bl = lv_label_create(btn);
         lv_label_set_text(bl, "确定");
         lv_obj_set_style_text_color(bl, lv_color_white(), 0);
-        if (rdh_font(20) != NULL) {
-            lv_obj_set_style_text_font(bl, rdh_font(20), 0);
+        if (espaperplay_ui_font(20) != NULL) {
+            lv_obj_set_style_text_font(bl, espaperplay_ui_font(20), 0);
         }
         lv_obj_center(bl);
         lv_obj_add_event_cb(btn, rdh_del_cancel_cb, LV_EVENT_CLICKED, NULL);
     } else {
-        const int bw = (card_w - rdh_scaled(60)) / 2;
+        const int bw = (card_w - espaperplay_ui_scaled(60)) / 2;
         btn = lv_button_create(card);
         lv_obj_set_size(btn, bw, bh);
-        lv_obj_set_pos(btn, rdh_scaled(24), by);
+        lv_obj_set_pos(btn, espaperplay_ui_scaled(24), by);
         lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
         lv_obj_set_style_border_color(btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(btn, 2, 0);
@@ -690,23 +629,23 @@ static void rdh_confirm_open(const char *title, const char *msg, bool alert_only
         lv_obj_t *bl = lv_label_create(btn);
         lv_label_set_text(bl, "取消");
         lv_obj_set_style_text_color(bl, lv_color_black(), 0);
-        if (rdh_font(20) != NULL) {
-            lv_obj_set_style_text_font(bl, rdh_font(20), 0);
+        if (espaperplay_ui_font(20) != NULL) {
+            lv_obj_set_style_text_font(bl, espaperplay_ui_font(20), 0);
         }
         lv_obj_center(bl);
         lv_obj_add_event_cb(btn, rdh_del_cancel_cb, LV_EVENT_CLICKED, NULL);
 
         btn = lv_button_create(card);
         lv_obj_set_size(btn, bw, bh);
-        lv_obj_set_pos(btn, rdh_scaled(36) + bw, by);
+        lv_obj_set_pos(btn, espaperplay_ui_scaled(36) + bw, by);
         lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_radius(btn, 8, 0);
         bl = lv_label_create(btn);
         lv_label_set_text(bl, "确定");
         lv_obj_set_style_text_color(bl, lv_color_white(), 0);
-        if (rdh_font(20) != NULL) {
-            lv_obj_set_style_text_font(bl, rdh_font(20), 0);
+        if (espaperplay_ui_font(20) != NULL) {
+            lv_obj_set_style_text_font(bl, espaperplay_ui_font(20), 0);
         }
         lv_obj_center(bl);
         lv_obj_add_event_cb(btn, rdh_del_ok_cb, LV_EVENT_CLICKED, NULL);
@@ -760,7 +699,7 @@ static void rdh_delete_history(int idx) {
         return;
     }
     char disp[64];
-    rdh_disp(rdh_basename(s_hist[idx].path), disp, sizeof(disp));
+    espaperplay_ui_utf8_truncate(espaperplay_ui_path_basename(s_hist[idx].path), disp, sizeof(disp));
     char msg[128];
     snprintf(msg, sizeof(msg), "将删除「%s」的阅读记录。", disp);
     s_pending_hist_idx = idx;
@@ -830,9 +769,9 @@ static void rdh_enter(void) {
 
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    rdh_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    s_scale = (float)scr_h / 800.0f;
+    espaperplay_ui_scale_init(800); /* 基准逻辑高度（与其他页面 REF_H 一致） */
     s_bar = espaperplay_ui_status_bar_create(scr, RDH_BAR_H, "阅读器", false);
     espaperplay_ui_status_bar_refresh(s_bar);
 
@@ -871,8 +810,8 @@ static void rdh_enter(void) {
     lv_obj_t *hl = lv_label_create(s_btn_hist);
     lv_label_set_text(hl, "最近阅读");
     lv_obj_set_style_text_color(hl, lv_color_white(), 0);
-    if (rdh_font(20) != NULL) {
-        lv_obj_set_style_text_font(hl, rdh_font(20), 0);
+    if (espaperplay_ui_font(20) != NULL) {
+        lv_obj_set_style_text_font(hl, espaperplay_ui_font(20), 0);
     }
     lv_obj_center(hl);
     lv_obj_add_event_cb(s_btn_hist, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
@@ -887,13 +826,13 @@ static void rdh_enter(void) {
     lv_obj_t *bl = lv_label_create(s_btn_books);
     lv_label_set_text(bl, "SD 卡图书");
     lv_obj_set_style_text_color(bl, lv_color_black(), 0);
-    if (rdh_font(20) != NULL) {
-        lv_obj_set_style_text_font(bl, rdh_font(20), 0);
+    if (espaperplay_ui_font(20) != NULL) {
+        lv_obj_set_style_text_font(bl, espaperplay_ui_font(20), 0);
     }
     lv_obj_center(bl);
     lv_obj_add_event_cb(s_btn_books, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
     /* 提示 */
-    s_hint_label = rdh_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
+    s_hint_label = espaperplay_ui_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_hint_label, s_card_w);
     lv_obj_set_pos(s_hint_label, s_card_x, s_card_y + s_card_h / 2 - 20);
     lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
@@ -1039,7 +978,7 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
     if (adx > RDH_EDGE_SWIPE_PX && adx > ady * RDH_SWIPE_MIN_RATIO) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
-        rdh_screen_size(&scr_w, &scr_h);
+        espaperplay_ui_screen_size(&scr_w, &scr_h);
         if ((s_touch_start.x < RDH_EDGE_PX && dx > 0) ||
             (s_touch_start.x > scr_w - RDH_EDGE_PX && dx < 0)) {
             if (espaperplay_ui_page_depth() > 1) {

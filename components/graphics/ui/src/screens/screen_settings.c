@@ -18,6 +18,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
@@ -99,44 +100,41 @@ static const char *TAG = "ESPaperPlay_UI";
 #define SETTINGS_MIN_H 24            /* 提示区最小高度（16px 字行高约 19px） */
 #define SETTINGS_MIN_ROW_H 40        /* 行最小高度 */
 
-static float s_scale = 1.0f; /*!< 屏高缩放因子（settings_enter 时按 scr_h 计算） */
 
 /** 基准值按屏高缩放（取整）。 */
-static int settings_scaled(int v) { return (int)(v * s_scale); }
-
 /** 标题栏高度（缩放 + 下限）。 */
 static int settings_bar_h(void) {
-    int h = settings_scaled(SETTINGS_BAR_H);
+    int h = espaperplay_ui_scaled(SETTINGS_BAR_H);
     return h < SETTINGS_MIN_H ? SETTINGS_MIN_H : h;
 }
 
 /** 大类标题头高度（缩放 + 下限；粗体 20px 字行高约 26px）。 */
 static int settings_section_title_h(void) {
-    int h = settings_scaled(SETTINGS_SECTION_TITLE_H);
+    int h = espaperplay_ui_scaled(SETTINGS_SECTION_TITLE_H);
     return h < 30 ? 30 : h;
 }
 
 /** 子类标题区高度（缩放 + 下限；粗体 16px 字行高约 21px）。 */
 static int settings_subgroup_title_h(void) {
-    int h = settings_scaled(SETTINGS_SUBGROUP_TITLE_H);
+    int h = espaperplay_ui_scaled(SETTINGS_SUBGROUP_TITLE_H);
     return h < 26 ? 26 : h;
 }
 
 /** 卡片内边距（缩放 + 下限；上下方向各用其半）。 */
 static int settings_card_pad(void) {
-    int p = settings_scaled(SETTINGS_CARD_PAD);
+    int p = espaperplay_ui_scaled(SETTINGS_CARD_PAD);
     return p < 12 ? 12 : p;
 }
 
 /** 页底提示区高度（缩放 + 下限）。 */
 static int settings_hint_h(void) {
-    int h = settings_scaled(SETTINGS_HINT_H);
+    int h = espaperplay_ui_scaled(SETTINGS_HINT_H);
     return h < SETTINGS_MIN_H ? SETTINGS_MIN_H : h;
 }
 
 /** 设置行高度（缩放 + 下限）。 */
 static int settings_row_h(void) {
-    int h = settings_scaled(SETTINGS_ROW_H);
+    int h = espaperplay_ui_scaled(SETTINGS_ROW_H);
     return h < SETTINGS_MIN_ROW_H ? SETTINGS_MIN_ROW_H : h;
 }
 
@@ -516,11 +514,6 @@ static void settings_row_trigger(settings_row_t *row);
 /* ------------------------------------------------------------------ */
 
 /** FreeType 字体按需加载（与主界面共用缓存字号档）。 */
-static lv_font_t *settings_font(int size_px) {
-    return espaperplay_fonts_load(SETTINGS_FONT_NAME, (uint32_t)size_px,
-                                  ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
 /** FreeType 粗体（大类/子类标题层级用；缓存按 (名,号,式) 取项，不挤常规档）。 */
 static lv_font_t *settings_font_bold(int size_px) {
     return espaperplay_fonts_load(SETTINGS_FONT_NAME, (uint32_t)size_px,
@@ -528,54 +521,9 @@ static lv_font_t *settings_font_bold(int size_px) {
 }
 
 /** 通用标签：白底黑字 + FreeType 字体 + 禁用 LVGL 滚动（防误滑页面）。 */
-static lv_obj_t *settings_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                       lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = settings_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
-    return label;
-}
-
 /** 逻辑分辨率（旋转后）。 */
-static void settings_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
 /** 点在矩形内（逻辑坐标）。 */
-static bool settings_point_in(const lv_point_t *p, int x, int y, int w, int h) {
-    return p->x >= x && p->x < x + w && p->y >= y && p->y < y + h;
-}
-
 /** 对象相对屏幕的坐标（累加父级偏移；LVGL 的 get_x/y 只返回相对父）。 */
-static int settings_obj_screen_x(const lv_obj_t *obj) {
-    int x = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        x += lv_obj_get_x(p);
-        p = lv_obj_get_parent(p);
-    }
-    return x;
-}
-
-static int settings_obj_screen_y(const lv_obj_t *obj) {
-    int y = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        y += lv_obj_get_y(p);
-        p = lv_obj_get_parent(p);
-    }
-    return y;
-}
-
 /** 刷新单行值标签（仅文本变化时更新，EPD 上避免无谓刷新）。 */
 static void settings_row_refresh(settings_row_t *row) {
     if (row->value_label == NULL || row->fmt_value == NULL) {
@@ -583,9 +531,7 @@ static void settings_row_refresh(settings_row_t *row) {
     }
     char buf[64];
     row->fmt_value(row->get_value ? row->get_value() : 0, buf, sizeof(buf));
-    if (strcmp(lv_label_get_text(row->value_label), buf) != 0) {
-        lv_label_set_text(row->value_label, buf);
-    }
+    espaperplay_ui_label_set_text_dedup(row->value_label, buf);
 }
 
 /** 刷新全部行（进入页面 / 周期刷新 / 修改后调用）。 */
@@ -737,12 +683,12 @@ static void settings_row_create(lv_obj_t *parent, settings_row_t *row, int x, in
 
     /* 名称（左，垂直居中与右侧值对齐）；值标签宽度随屏宽缩放防窄屏溢出 */
     const int value_w = w < 300 ? w / 3 : (w < 400 ? 140 : 160);
-    lv_obj_t *name = settings_label_create(row_obj, row->name, 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *name = espaperplay_ui_label_create(row_obj, row->name, 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(name, w - value_w - 8 - arrow_w);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 4, 0);
 
     /* 值（右，垂直居中，超长省略号截断；可点行左移为箭头让位） */
-    lv_obj_t *value = settings_label_create(row_obj, "", 16, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_t *value = espaperplay_ui_label_create(row_obj, "", 16, LV_TEXT_ALIGN_RIGHT);
     lv_obj_set_width(value, value_w);
     lv_obj_align(value, LV_ALIGN_RIGHT_MID, -4 - arrow_w, 0);
     lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
@@ -752,7 +698,7 @@ static void settings_row_create(lv_obj_t *parent, settings_row_t *row, int x, in
         lv_obj_t *arrow = lv_label_create(row_obj);
         lv_label_set_text(arrow, ">");
         lv_obj_set_style_text_color(arrow, lv_color_black(), 0);
-        lv_font_t *font = settings_font(16);
+        lv_font_t *font = espaperplay_ui_font(16);
         if (font != NULL) {
             lv_obj_set_style_text_font(arrow, font, 0);
         }
@@ -771,7 +717,7 @@ static void settings_section_title_create(lv_obj_t *parent, const char *text, in
     lv_obj_set_style_pad_all(head, 0, 0);
     lv_obj_remove_flag(head, LV_OBJ_FLAG_SCROLLABLE);
 
-    const int bar_h = settings_scaled(22) < 16 ? 16 : settings_scaled(22);
+    const int bar_h = espaperplay_ui_scaled(22) < 16 ? 16 : espaperplay_ui_scaled(22);
     lv_obj_t *bar = lv_obj_create(head);
     lv_obj_set_size(bar, 4, bar_h);
     lv_obj_align(bar, LV_ALIGN_LEFT_MID, 4, 0);
@@ -903,7 +849,7 @@ static void settings_page_create(lv_obj_t *parent, const settings_frag_t *frags,
         }
         /* 页底提示（Web 配置项提示，跟随大类末个子类所在片段） */
         if (f->hint) {
-            lv_obj_t *hint = settings_label_create(card, f->sec->hint, 16, LV_TEXT_ALIGN_CENTER);
+            lv_obj_t *hint = espaperplay_ui_label_create(card, f->sec->hint, 16, LV_TEXT_ALIGN_CENTER);
             lv_obj_set_width(hint, inner_w);
             lv_obj_set_pos(hint, pad, ry + 4);
         }
@@ -1063,7 +1009,7 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     s_confirm_value = new_value;
 
     int32_t scr_w, scr_h;
-    settings_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -1079,7 +1025,7 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
 
     /* 卡片（尺寸按屏高缩放） */
     lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, settings_scaled(340), settings_scaled(250));
+    lv_obj_set_size(card, espaperplay_ui_scaled(340), espaperplay_ui_scaled(250));
     lv_obj_center(card);
     lv_obj_set_style_bg_color(card, lv_color_white(), 0);
     lv_obj_set_style_border_color(card, lv_color_black(), 0);
@@ -1089,20 +1035,20 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题 */
-    lv_obj_t *title = settings_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *title = espaperplay_ui_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, settings_scaled(14));
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(14));
 
     /* 消息（可换行居中） */
-    lv_obj_t *msg = settings_label_create(card, message, 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(msg, settings_scaled(300));
-    lv_obj_set_pos(msg, settings_scaled(20), settings_scaled(60));
+    lv_obj_t *msg = espaperplay_ui_label_create(card, message, 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_width(msg, espaperplay_ui_scaled(300));
+    lv_obj_set_pos(msg, espaperplay_ui_scaled(20), espaperplay_ui_scaled(60));
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
 
     /* 取消（白底黑边） */
     lv_obj_t *cancel = lv_button_create(card);
-    lv_obj_set_size(cancel, settings_scaled(120), settings_scaled(44));
-    lv_obj_set_pos(cancel, settings_scaled(30), settings_scaled(180));
+    lv_obj_set_size(cancel, espaperplay_ui_scaled(120), espaperplay_ui_scaled(44));
+    lv_obj_set_pos(cancel, espaperplay_ui_scaled(30), espaperplay_ui_scaled(180));
     lv_obj_set_style_bg_color(cancel, lv_color_white(), 0);
     lv_obj_set_style_border_color(cancel, lv_color_black(), 0);
     lv_obj_set_style_border_width(cancel, 2, 0);
@@ -1110,21 +1056,21 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     lv_obj_t *cancel_label = lv_label_create(cancel);
     lv_label_set_text(cancel_label, "取消");
     lv_obj_set_style_text_color(cancel_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(cancel_label, settings_font(20), 0);
+    lv_obj_set_style_text_font(cancel_label, espaperplay_ui_font(20), 0);
     lv_obj_center(cancel_label);
     lv_obj_add_event_cb(cancel, settings_confirm_cancel_cb, LV_EVENT_CLICKED, NULL);
 
     /* 确定（黑底白字） */
     lv_obj_t *ok = lv_button_create(card);
-    lv_obj_set_size(ok, settings_scaled(120), settings_scaled(44));
-    lv_obj_set_pos(ok, settings_scaled(190), settings_scaled(180));
+    lv_obj_set_size(ok, espaperplay_ui_scaled(120), espaperplay_ui_scaled(44));
+    lv_obj_set_pos(ok, espaperplay_ui_scaled(190), espaperplay_ui_scaled(180));
     lv_obj_set_style_bg_color(ok, lv_color_black(), 0);
     lv_obj_set_style_border_width(ok, 0, 0);
     lv_obj_set_style_radius(ok, 8, 0);
     lv_obj_t *ok_label = lv_label_create(ok);
     lv_label_set_text(ok_label, "确定");
     lv_obj_set_style_text_color(ok_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(ok_label, settings_font(20), 0);
+    lv_obj_set_style_text_font(ok_label, espaperplay_ui_font(20), 0);
     lv_obj_center(ok_label);
     lv_obj_add_event_cb(ok, settings_confirm_ok_cb, LV_EVENT_CLICKED, NULL);
 
@@ -1137,7 +1083,7 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     s_modal_value = row->get_value();
 
     int32_t scr_w, scr_h;
-    settings_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -1153,7 +1099,7 @@ static void settings_stepper_modal_open(settings_row_t *row) {
 
     /* 卡片（尺寸按屏高缩放） */
     lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, settings_scaled(340), settings_scaled(280));
+    lv_obj_set_size(card, espaperplay_ui_scaled(340), espaperplay_ui_scaled(280));
     lv_obj_center(card);
     lv_obj_set_style_bg_color(card, lv_color_white(), 0);
     lv_obj_set_style_border_color(card, lv_color_black(), 0);
@@ -1163,19 +1109,19 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题 */
-    lv_obj_t *title = settings_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *title = espaperplay_ui_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, settings_scaled(14));
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(14));
 
     /* 大号数值 */
-    s_modal_value_label = settings_label_create(card, "", 32, LV_TEXT_ALIGN_CENTER);
+    s_modal_value_label = espaperplay_ui_label_create(card, "", 32, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_modal_value_label, LV_PCT(100));
-    lv_obj_set_pos(s_modal_value_label, 0, settings_scaled(66));
+    lv_obj_set_pos(s_modal_value_label, 0, espaperplay_ui_scaled(66));
 
     /* [-] [+] 步进按钮 */
     lv_obj_t *minus = lv_button_create(card);
-    lv_obj_set_size(minus, settings_scaled(72), settings_scaled(52));
-    lv_obj_set_pos(minus, settings_scaled(30), settings_scaled(150));
+    lv_obj_set_size(minus, espaperplay_ui_scaled(72), espaperplay_ui_scaled(52));
+    lv_obj_set_pos(minus, espaperplay_ui_scaled(30), espaperplay_ui_scaled(150));
     lv_obj_set_style_bg_color(minus, lv_color_white(), 0);
     lv_obj_set_style_border_color(minus, lv_color_black(), 0);
     lv_obj_set_style_border_width(minus, 2, 0);
@@ -1183,13 +1129,13 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     lv_obj_t *minus_label = lv_label_create(minus);
     lv_label_set_text(minus_label, "-");
     lv_obj_set_style_text_color(minus_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(minus_label, settings_font(24), 0);
+    lv_obj_set_style_text_font(minus_label, espaperplay_ui_font(24), 0);
     lv_obj_center(minus_label);
     lv_obj_add_event_cb(minus, settings_modal_minus_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *plus = lv_button_create(card);
-    lv_obj_set_size(plus, settings_scaled(72), settings_scaled(52));
-    lv_obj_set_pos(plus, settings_scaled(238), settings_scaled(150));
+    lv_obj_set_size(plus, espaperplay_ui_scaled(72), espaperplay_ui_scaled(52));
+    lv_obj_set_pos(plus, espaperplay_ui_scaled(238), espaperplay_ui_scaled(150));
     lv_obj_set_style_bg_color(plus, lv_color_white(), 0);
     lv_obj_set_style_border_color(plus, lv_color_black(), 0);
     lv_obj_set_style_border_width(plus, 2, 0);
@@ -1197,21 +1143,21 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     lv_obj_t *plus_label = lv_label_create(plus);
     lv_label_set_text(plus_label, "+");
     lv_obj_set_style_text_color(plus_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(plus_label, settings_font(24), 0);
+    lv_obj_set_style_text_font(plus_label, espaperplay_ui_font(24), 0);
     lv_obj_center(plus_label);
     lv_obj_add_event_cb(plus, settings_modal_plus_cb, LV_EVENT_CLICKED, NULL);
 
     /* 完成按钮 */
     lv_obj_t *done = lv_button_create(card);
-    lv_obj_set_size(done, settings_scaled(140), settings_scaled(44));
-    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, -settings_scaled(12));
+    lv_obj_set_size(done, espaperplay_ui_scaled(140), espaperplay_ui_scaled(44));
+    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, -espaperplay_ui_scaled(12));
     lv_obj_set_style_bg_color(done, lv_color_black(), 0);
     lv_obj_set_style_border_width(done, 0, 0);
     lv_obj_set_style_radius(done, 8, 0);
     lv_obj_t *done_label = lv_label_create(done);
     lv_label_set_text(done_label, "完成");
     lv_obj_set_style_text_color(done_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(done_label, settings_font(20), 0);
+    lv_obj_set_style_text_font(done_label, espaperplay_ui_font(20), 0);
     lv_obj_center(done_label);
     lv_obj_add_event_cb(done, settings_modal_done_cb, LV_EVENT_CLICKED, NULL);
 
@@ -1277,7 +1223,7 @@ static void settings_font_modal_open(void) {
     settings_font_collect();
 
     int32_t scr_w, scr_h;
-    settings_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -1292,10 +1238,10 @@ static void settings_font_modal_open(void) {
     lv_obj_add_event_cb(s_modal, settings_modal_overlay_cb, LV_EVENT_CLICKED, NULL);
 
     /* 卡片（宽高按屏高缩放，宽不超过屏幕） */
-    const int card_w = settings_scaled(400) > scr_w - 2 * SETTINGS_MARGIN
+    const int card_w = espaperplay_ui_scaled(400) > scr_w - 2 * SETTINGS_MARGIN
                            ? scr_w - 2 * SETTINGS_MARGIN
-                           : settings_scaled(400);
-    const int card_h = settings_scaled(480);
+                           : espaperplay_ui_scaled(400);
+    const int card_h = espaperplay_ui_scaled(480);
     lv_obj_t *card = lv_obj_create(s_modal);
     lv_obj_set_size(card, card_w, card_h);
     lv_obj_center(card);
@@ -1307,19 +1253,19 @@ static void settings_font_modal_open(void) {
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题 */
-    lv_obj_t *title = settings_label_create(card, "选择字体", 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *title = espaperplay_ui_label_create(card, "选择字体", 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, settings_scaled(12));
+    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(12));
 
     /* 提示（重启生效） */
-    lv_obj_t *hint = settings_label_create(card, "选择后重启设备生效", 16, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *hint = espaperplay_ui_label_create(card, "选择后重启设备生效", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(hint, LV_PCT(100));
-    lv_obj_set_pos(hint, 0, settings_scaled(44));
+    lv_obj_set_pos(hint, 0, espaperplay_ui_scaled(44));
 
     /* 字体列表（可滚动） */
     lv_obj_t *list = lv_obj_create(card);
-    lv_obj_set_size(list, card_w - 24, card_h - settings_scaled(100));
-    lv_obj_set_pos(list, 12, settings_scaled(76));
+    lv_obj_set_size(list, card_w - 24, card_h - espaperplay_ui_scaled(100));
+    lv_obj_set_pos(list, 12, espaperplay_ui_scaled(76));
     lv_obj_set_style_bg_color(list, lv_color_white(), 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 0, 0);
@@ -1338,7 +1284,7 @@ static void settings_font_modal_open(void) {
         const bool is_builtin = (strcmp(s_font_names[i], ESPAPERPLAY_FONTS_DEFAULT_NAME) == 0);
         const bool is_current = (strcmp(s_font_names[i], current) == 0);
 
-        const int item_h = settings_scaled(44) < 32 ? 32 : settings_scaled(44);
+        const int item_h = espaperplay_ui_scaled(44) < 32 ? 32 : espaperplay_ui_scaled(44);
         lv_obj_t *item = lv_obj_create(list);
         lv_obj_set_size(item, card_w - 24, item_h);
         lv_obj_set_pos(item, 0, i * (item_h + 2));
@@ -1353,7 +1299,7 @@ static void settings_font_modal_open(void) {
         lv_obj_t *label = lv_label_create(item);
         lv_label_set_text(label, s_font_names[i]);
         lv_obj_set_style_text_color(label, is_current ? lv_color_white() : lv_color_black(), 0);
-        lv_obj_set_style_text_font(label, settings_font(16), 0);
+        lv_obj_set_style_text_font(label, espaperplay_ui_font(16), 0);
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
         lv_obj_set_width(label, card_w - 24 - 70);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
@@ -1363,7 +1309,7 @@ static void settings_font_modal_open(void) {
             lv_obj_t *tag = lv_label_create(item);
             lv_label_set_text(tag, "内置");
             lv_obj_set_style_text_color(tag, is_current ? lv_color_white() : lv_color_black(), 0);
-            lv_obj_set_style_text_font(tag, settings_font(16), 0);
+            lv_obj_set_style_text_font(tag, espaperplay_ui_font(16), 0);
             lv_obj_align(tag, LV_ALIGN_RIGHT_MID, -10, 0);
         }
     }
@@ -1428,9 +1374,9 @@ static settings_row_t *settings_hit_row(const lv_point_t *p) {
                     row->type != SETTINGS_ROW_FONT && row->type != SETTINGS_ROW_ACTION) {
                     continue;
                 }
-                const int x = settings_obj_screen_x(row->row_obj);
-                const int y = settings_obj_screen_y(row->row_obj);
-                if (settings_point_in(p, x, y, lv_obj_get_width(row->row_obj),
+                const int x = espaperplay_ui_obj_screen_x(row->row_obj);
+                const int y = espaperplay_ui_obj_screen_y(row->row_obj);
+                if (espaperplay_ui_point_in(p, x, y, lv_obj_get_width(row->row_obj),
                                       lv_obj_get_height(row->row_obj))) {
                     return row;
                 }
@@ -1508,10 +1454,10 @@ static void settings_enter(void) {
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     int32_t scr_w, scr_h;
-    settings_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 按屏高计算缩放因子（基准 800；横屏 480 高 -> 0.6，小屏 600 -> 0.75）。 */
-    s_scale = (float)scr_h / (float)SETTINGS_REF_H;
+    espaperplay_ui_scale_init(SETTINGS_REF_H);
     const int bar_h = settings_bar_h();
 
     /* 统一状态栏：左侧时间、居中"设置"、右侧 WiFi/睡眠图标 */

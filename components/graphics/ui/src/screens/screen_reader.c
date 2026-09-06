@@ -12,6 +12,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
@@ -131,7 +132,6 @@ static lv_obj_t *s_loading_modal = NULL;
 static uint32_t s_pending_start = 0;      /*!< 待恢复的全局起始页 */
 static bool s_loading = false;
 static uint32_t s_last_footer_tick = 0;
-static char s_footer_last[48];  /*!< 上次页码文本（去重，避免墨水屏无谓局刷） */
 
 /* 底边栏 / 跳转输入 */
 static lv_obj_t *s_bar_overlay = NULL;
@@ -162,12 +162,6 @@ static void reader_gray4_mode_set(bool on);
 /* ------------------------------------------------------------------ */
 
 /** 逻辑分辨率（旋转后）。 */
-static void reader_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
 /** 基础字号（当前档位）。 */
 static int reader_base_size(void) { return READER_FONT_SIZES[s_font_idx]; }
 
@@ -817,7 +811,7 @@ static void reader_loading_open(void) {
     }
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    reader_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     s_loading_modal = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_loading_modal, scr_w, scr_h);
     lv_obj_set_pos(s_loading_modal, 0, 0);
@@ -968,16 +962,9 @@ static void reader_footer_update(void) {
             snprintf(buf, sizeof(buf), "%d / …", s_local_page + 1);
         }
     }
-    if (strcmp(s_footer_last, buf) == 0) {
-        return; /* 文本未变化：跳过，避免墨水屏无谓局刷 */
-    }
-    strlcpy(s_footer_last, buf, sizeof(s_footer_last));
-    if (s_page_label != NULL) {
-        lv_label_set_text(s_page_label, buf);
-    }
-    if (s_bar_page_label != NULL) {
-        lv_label_set_text(s_bar_page_label, buf);
-    }
+    /* 按标签现文本去重（EPD 上避免无谓局刷）。 */
+    espaperplay_ui_label_set_text_dedup(s_page_label, buf);
+    espaperplay_ui_label_set_text_dedup(s_bar_page_label, buf);
 }
 
 /** 显示指定（章节, 章内页）。 */
@@ -1269,7 +1256,7 @@ static void reader_bar_close(void) {
 static void reader_bar_open(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    reader_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     reader_gray4_mode_set(false);
 
@@ -1477,7 +1464,7 @@ static void reader_toc_close(void) {
 static void reader_toc_open(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    reader_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const int total = espaperplay_reader_chapter_count();
     if (total <= 0) {
         return;
@@ -1645,7 +1632,7 @@ static void reader_jump_cancel_cb(lv_event_t *e) {
 static void reader_jump_open(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    reader_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     const int margin = READER_MARGIN;
     const int pad = 10;
@@ -1830,7 +1817,7 @@ static void reader_enter(void) {
 
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    reader_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 标题：书名（EPUB dc:title / TXT 文件名） */
     char bar_title[40];
@@ -1917,7 +1904,6 @@ static void reader_enter(void) {
     s_loading = false;
     s_pending_start = 0;
     s_ch_zero_pstart = false;
-    s_footer_last[0] = '\0';
     reader_gray4_mode_set(false);
 
     /* 章页数表 */
@@ -2113,7 +2099,7 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
     if (adx > READER_EDGE_SWIPE_PX && adx > ady * READER_SWIPE_MIN_RATIO) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
-        reader_screen_size(&scr_w, &scr_h);
+        espaperplay_ui_screen_size(&scr_w, &scr_h);
         if ((s_touch_start.x < READER_EDGE_PX && dx > 0) ||
             (s_touch_start.x > scr_w - READER_EDGE_PX && dx < 0)) {
             if (espaperplay_ui_page_depth() > 1) {
@@ -2139,7 +2125,7 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
     if (adx <= READER_CLICK_MAX_PX && ady <= READER_CLICK_MAX_PX) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
-        reader_screen_size(&scr_w, &scr_h);
+        espaperplay_ui_screen_size(&scr_w, &scr_h);
         if (s_touch_start.x < scr_w / 3) {
             reader_prev_page();
         } else if (s_touch_start.x >= scr_w * 2 / 3) {

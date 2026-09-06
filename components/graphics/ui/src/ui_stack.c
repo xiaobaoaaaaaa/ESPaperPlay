@@ -18,6 +18,7 @@
 #include "espaperplay_input.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_wifi.h" /* WiFi 状态/强度图标 */
 #include "icons_data.h"
 
@@ -383,15 +384,8 @@ void espaperplay_ui_status_bar_refresh(espaperplay_ui_status_bar_t *bar) {
         } else if (ws.connected) {
             int rssi = 0;
             if (espaperplay_wifi_get_rssi(&rssi) == ESP_OK) {
-                if (rssi >= -50) {
-                    wifi_icon = &icon_wifi4_16;
-                } else if (rssi >= -60) {
-                    wifi_icon = &icon_wifi3_16;
-                } else if (rssi >= -70) {
-                    wifi_icon = &icon_wifi2_16;
-                } else {
-                    wifi_icon = &icon_wifi1_16;
-                }
+                /* RSSI 分档与 wifi 列表共用同一实现（>=-60/-70/-80 四档）。 */
+                wifi_icon = espaperplay_ui_wifi_rssi_icon(rssi);
             } else {
                 wifi_icon = &icon_wifi_16;
             }

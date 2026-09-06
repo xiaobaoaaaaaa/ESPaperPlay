@@ -14,6 +14,7 @@
 #include "esp_system.h"
 
 #include "espaperplay_clock.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_config.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_power.h"
@@ -128,26 +129,11 @@ static int s_touch_card = -1;             /*!< 手势跟踪：按下起点命中
 /* 页 1 天气行数据缓冲（快照较大，放 PSRAM，页面生命周期内复用）。 */
 static espaperplay_weather_snapshot_t *s_weather_snap = NULL;
 
-/* ---- 各标签「上次已显示的文本」缓存：内容未变化时不重复 set_text，
- *      避免 LVGL 无效化 -> EPD 无谓局刷（秒级轮询下尤为关键）。 ---- */
-static char s_prev_clock_h[4] = "";        /*!< 页 0 时钟：时 */
-static char s_prev_clock_m[4] = "";        /*!< 页 0 时钟：分 */
-static char s_prev_week[8] = "";           /*!< 页 0 时钟：星期（英文缩写） */
-static char s_prev_date[16] = "";          /*!< 页 0 时钟：日期 M/D */
-static char s_prev_clock_big[8] = "";      /*!< 页 1 大时钟 HH:MM */
-static char s_prev_info_date[64] = "";     /*!< 页 1 日期（年月日 星期） */
-static char s_prev_info_weather[256] = ""; /*!< 页 1 天气摘要 */
-static char s_prev_info_footer[128] = "";  /*!< 页 1 版本 / 堆 / 提示 */
-
 /* ------------------------------------------------------------------ */
 /* 工具函数                                                             */
 /* ------------------------------------------------------------------ */
 
 /** FreeType 字体按需加载（缓存命中由字体组件管理；字号集合固定 4 项）。 */
-static lv_font_t *home_font(int size_px) {
-    return espaperplay_fonts_load(HOME_FONT_NAME, (uint32_t)size_px, ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
 /** 时钟字号按屏宽自适应：窄屏缩小防溢出。 */
 static int home_clock_font_px(int32_t scr_w) {
     if (scr_w >= 400) {
@@ -160,27 +146,7 @@ static int home_clock_font_px(int32_t scr_w) {
 }
 
 /** 通用标签创建：白底黑字 + FreeType 字体 + 给定对齐。 */
-static lv_obj_t *home_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                   lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = home_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    return label;
-}
-
 /** 逻辑分辨率（旋转后，LVGL 线程内读取）。 */
-static void home_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
 /** 当前本地时间（NTP 已同步）或 NULL。 */
 static const struct tm *home_local_time(void) {
     static struct tm s_tm;
@@ -231,19 +197,19 @@ static int home_clock_area_h(int32_t avail_h) {
 /** 时钟区构建：行距按实际占用高度相对基准等比收缩。 */
 static void home_clock_area_create(lv_obj_t *scr, int x, int y, int area_h) {
     int32_t scr_w, scr_h;
-    home_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const int clock_px = home_clock_font_px(scr_w);
 
-    s_clock_h = home_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
+    s_clock_h = espaperplay_ui_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_clock_h, x, y);
 
-    s_clock_m = home_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
+    s_clock_m = espaperplay_ui_label_create(scr, "--", clock_px, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_clock_m, x, y + area_h * 90 / HOME_CLOCK_AREA_H_BASE);
 
-    s_week_label = home_label_create(scr, "---", 20, LV_TEXT_ALIGN_LEFT);
+    s_week_label = espaperplay_ui_label_create(scr, "---", 20, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_week_label, x + 2, y + area_h * 196 / HOME_CLOCK_AREA_H_BASE);
 
-    s_date_label = home_label_create(scr, "--/--", 20, LV_TEXT_ALIGN_LEFT);
+    s_date_label = espaperplay_ui_label_create(scr, "--/--", 20, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_date_label, x + 2, y + area_h * 224 / HOME_CLOCK_AREA_H_BASE);
 }
 
@@ -277,7 +243,7 @@ static lv_obj_t *home_app_card_create(lv_obj_t *parent, const home_app_t *app, i
     lv_obj_t *name = lv_label_create(card);
     lv_label_set_text(name, app->name_zh);
     lv_obj_set_style_text_color(name, lv_color_black(), 0);
-    lv_font_t *font20 = home_font(20);
+    lv_font_t *font20 = espaperplay_ui_font(20);
     if (font20 != NULL) {
         lv_obj_set_style_text_font(name, font20, 0);
     }
@@ -292,7 +258,7 @@ static lv_obj_t *home_app_card_create(lv_obj_t *parent, const home_app_t *app, i
 /** 页 0 构建：时钟区 + 应用区（列数随分辨率动态调整）。 */
 static void home_page0_create(lv_obj_t *scr) {
     int32_t scr_w, scr_h;
-    home_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     s_page0 = lv_obj_create(scr);
     lv_obj_set_size(s_page0, LV_PCT(100), scr_h - HOME_STATUS_H_PX);
@@ -364,7 +330,7 @@ static void home_page0_create(lv_obj_t *scr) {
 /** 子页 1：大时钟 + 日期 + 天气摘要 + 版本状态（垂直百分比布局，横竖屏自适应）。 */
 static void home_page1_create(lv_obj_t *scr) {
     int32_t scr_w, scr_h;
-    home_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     s_page1 = lv_obj_create(scr);
     lv_obj_set_size(s_page1, LV_PCT(100), scr_h - HOME_STATUS_H_PX);
@@ -377,23 +343,23 @@ static void home_page1_create(lv_obj_t *scr) {
     const int32_t area_h = scr_h - HOME_STATUS_H_PX;
     const int clock_px = home_clock_font_px(scr_w);
 
-    s_clock_big = home_label_create(s_page1, "--:--", clock_px, LV_TEXT_ALIGN_CENTER);
+    s_clock_big = espaperplay_ui_label_create(s_page1, "--:--", clock_px, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_clock_big, 0, area_h * 13 / 100);
 
-    s_info_date = home_label_create(s_page1, "", 20, LV_TEXT_ALIGN_CENTER);
+    s_info_date = espaperplay_ui_label_create(s_page1, "", 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_info_date, 0, area_h * 42 / 100);
 
-    s_info_weather = home_label_create(s_page1, "", 20, LV_TEXT_ALIGN_CENTER);
+    s_info_weather = espaperplay_ui_label_create(s_page1, "", 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_info_weather, 0, area_h * 54 / 100);
 
-    s_info_footer = home_label_create(s_page1, "", 16, LV_TEXT_ALIGN_CENTER);
+    s_info_footer = espaperplay_ui_label_create(s_page1, "", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_info_footer, 0, area_h * 72 / 100);
 }
 
 /** 页面指示点（底部中央，当前页实心黑、其余空心）。 */
 static void home_dots_create(lv_obj_t *scr) {
     int32_t scr_w, scr_h;
-    home_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     for (int i = 0; i < HOME_PAGE_CNT; i++) {
         s_dots[i] = lv_obj_create(scr);
@@ -410,18 +376,6 @@ static void home_dots_create(lv_obj_t *scr) {
 /* 内容刷新                                                             */
 /* ------------------------------------------------------------------ */
 
-/** 仅当文本实际变化时才更新标签（EPD 上避免无谓刷新）。
- *  @param label  目标标签（本页构建期内非 NULL）。
- *  @param prev   该标签上次已显示的文本缓存（更新时同步写入）。
- *  @param text   本次要显示的新文本。 */
-static void home_label_update(lv_obj_t *label, char *prev, size_t prev_size, const char *text) {
-    if (strcmp(prev, text) == 0) {
-        return; /* 内容未变：跳过 set_text，不触发 LVGL 无效化 */
-    }
-    strlcpy(prev, text, prev_size);
-    lv_label_set_text(label, text);
-}
-
 /** 刷新状态栏、页 0 时钟区、页 1 信息（时间 / WiFi / 天气 / 版本）。 */
 static void home_refresh(void) {
     char buf[128];
@@ -434,31 +388,30 @@ static void home_refresh(void) {
     /* 页 0 时钟区：时 / 分 / 星期 / 日期 */
     if (tm != NULL) {
         snprintf(buf, sizeof(buf), "%02d", tm->tm_hour);
-        home_label_update(s_clock_h, s_prev_clock_h, sizeof(s_prev_clock_h), buf);
+        espaperplay_ui_label_set_text_dedup(s_clock_h, buf);
         snprintf(buf, sizeof(buf), "%02d", tm->tm_min);
-        home_label_update(s_clock_m, s_prev_clock_m, sizeof(s_prev_clock_m), buf);
-        home_label_update(s_week_label, s_prev_week, sizeof(s_prev_week),
-                          s_weekday_en[tm->tm_wday]);
+        espaperplay_ui_label_set_text_dedup(s_clock_m, buf);
+        espaperplay_ui_label_set_text_dedup(s_week_label, s_weekday_en[tm->tm_wday]);
         snprintf(buf, sizeof(buf), "%d/%d", tm->tm_mon + 1, tm->tm_mday);
-        home_label_update(s_date_label, s_prev_date, sizeof(s_prev_date), buf);
+        espaperplay_ui_label_set_text_dedup(s_date_label, buf);
     } else {
-        home_label_update(s_clock_h, s_prev_clock_h, sizeof(s_prev_clock_h), "--");
-        home_label_update(s_clock_m, s_prev_clock_m, sizeof(s_prev_clock_m), "--");
-        home_label_update(s_week_label, s_prev_week, sizeof(s_prev_week), "---");
-        home_label_update(s_date_label, s_prev_date, sizeof(s_prev_date), "--/--");
+        espaperplay_ui_label_set_text_dedup(s_clock_h, "--");
+        espaperplay_ui_label_set_text_dedup(s_clock_m, "--");
+        espaperplay_ui_label_set_text_dedup(s_week_label, "---");
+        espaperplay_ui_label_set_text_dedup(s_date_label, "--/--");
     }
 
     /* 页 1 大时钟 + 日期 */
     if (tm != NULL) {
         snprintf(buf, sizeof(buf), "%02d:%02d", tm->tm_hour, tm->tm_min);
-        home_label_update(s_clock_big, s_prev_clock_big, sizeof(s_prev_clock_big), buf);
+        espaperplay_ui_label_set_text_dedup(s_clock_big, buf);
         snprintf(buf, sizeof(buf), "%04d年%02d月%02d日 星期%s", tm->tm_year + 1900, tm->tm_mon + 1,
                  tm->tm_mday, s_weekday_zh[tm->tm_wday]);
     } else {
-        home_label_update(s_clock_big, s_prev_clock_big, sizeof(s_prev_clock_big), "--:--");
+        espaperplay_ui_label_set_text_dedup(s_clock_big, "--:--");
         snprintf(buf, sizeof(buf), "正在同步时间…");
     }
-    home_label_update(s_info_date, s_prev_info_date, sizeof(s_prev_info_date), buf);
+    espaperplay_ui_label_set_text_dedup(s_info_date, buf);
 
     /* 页 1 天气摘要（快照较大，缓冲在 PSRAM）+ 天气应用图标（实时天气图标） */
     if (s_weather_snap == NULL) {
@@ -471,13 +424,13 @@ static void home_refresh(void) {
         char wbuf[256]; /* location_name 最长 127 字符 */
         snprintf(wbuf, sizeof(wbuf), "%s · %s %s℃  湿度 %s%%", s_weather_snap->location_name,
                  s_weather_snap->now.text, s_weather_snap->now.temp, s_weather_snap->now.humidity);
-        home_label_update(s_info_weather, s_prev_info_weather, sizeof(s_prev_info_weather), wbuf);
+        espaperplay_ui_label_set_text_dedup(s_info_weather, wbuf);
 
         /* 天气应用图标 = 和风实时天气图标（未收录的代码回退 mdi 图标） */
         qw_icon = qweather_icon_get(s_weather_snap->now.icon);
     } else {
         snprintf(buf, sizeof(buf), "天气：未配置或不可用（Web 页面设置）");
-        home_label_update(s_info_weather, s_prev_info_weather, sizeof(s_prev_info_weather), buf);
+        espaperplay_ui_label_set_text_dedup(s_info_weather, buf);
     }
     if (s_app_icons[0] != NULL) {
         const lv_image_dsc_t *target = (qw_icon != NULL) ? qw_icon : s_apps[0].icon;
@@ -490,7 +443,7 @@ static void home_refresh(void) {
     snprintf(buf, sizeof(buf), "v%s   heap %u.%u MB   左右滑动切换页面", ESPAPERPLAY_VERSION,
              (unsigned)(esp_get_free_heap_size() / 1048576u),
              (unsigned)((esp_get_free_heap_size() % 1048576u) / 104857u));
-    home_label_update(s_info_footer, s_prev_info_footer, sizeof(s_prev_info_footer), buf);
+    espaperplay_ui_label_set_text_dedup(s_info_footer, buf);
 }
 
 /** 周期刷新（LVGL 线程内，lv_timer 驱动）。 */
@@ -578,16 +531,6 @@ static void home_enter(void) {
     for (int i = 0; i < HOME_PAGE_CNT; i++) {
         lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
-
-    /* 标签为本次进入新建（初始占位文本）：清空文本缓存，首次刷新强制落数据。 */
-    s_prev_clock_h[0] = '\0';
-    s_prev_clock_m[0] = '\0';
-    s_prev_week[0] = '\0';
-    s_prev_date[0] = '\0';
-    s_prev_clock_big[0] = '\0';
-    s_prev_info_date[0] = '\0';
-    s_prev_info_weather[0] = '\0';
-    s_prev_info_footer[0] = '\0';
 
     s_timer = lv_timer_create(home_timer_cb, HOME_UI_PERIOD_MS, NULL);
     if (s_timer == NULL) {

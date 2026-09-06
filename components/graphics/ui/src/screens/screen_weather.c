@@ -13,6 +13,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_clock.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_system.h"
@@ -86,8 +87,6 @@ static const char *TAG = "ESPaperPlay_UI";
 
 /** 数据是否变化才更新标签（EPD 上避免无谓刷新）。 */
 static char s_last_update[32] = "";
-/** 「最近更新」标签当前文本（档位变化才刷新，避免 EPD 无谓重绘）。 */
-static char s_last_ago_text[32] = "";
 
 /** 快照不可用时的状态（避免秒级轮询重复刷新同一提示文本 / 无谓 EPD 刷新）。 */
 static char s_hint[80] = "";
@@ -158,27 +157,7 @@ static void weather_timer_cb(lv_timer_t *timer);
 /* ------------------------------------------------------------------ */
 
 /** FreeType 字体按需加载（与主界面共用缓存字号档）。 */
-static lv_font_t *weather_font(int size_px) {
-    return espaperplay_fonts_load(WEATHER_FONT_NAME, (uint32_t)size_px,
-                                  ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
 /** 通用标签：白底黑字 + FreeType 字体 + 禁用 LVGL 滚动（防误滑页面）。 */
-static lv_obj_t *weather_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                      lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = weather_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
-    return label;
-}
-
 /** 圆角卡片容器（白底黑边框，禁用滚动）。 */
 static lv_obj_t *weather_card_create(lv_obj_t *parent, int x, int y, int w, int h) {
     lv_obj_t *card = lv_obj_create(parent);
@@ -194,38 +173,8 @@ static lv_obj_t *weather_card_create(lv_obj_t *parent, int x, int y, int w, int 
 }
 
 /** 逻辑分辨率（旋转后）。 */
-static void weather_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
 /** 点在矩形内（逻辑坐标）。 */
-static bool weather_point_in(const lv_point_t *p, int x, int y, int w, int h) {
-    return p->x >= x && p->x < x + w && p->y >= y && p->y < y + h;
-}
-
 /** 对象相对屏幕的坐标（累加父级偏移；LVGL 的 get_x/y 只返回相对父）。 */
-static int weather_obj_screen_x(const lv_obj_t *obj) {
-    int x = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        x += lv_obj_get_x(p);
-        p = lv_obj_get_parent(p);
-    }
-    return x;
-}
-
-static int weather_obj_screen_y(const lv_obj_t *obj) {
-    int y = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        y += lv_obj_get_y(p);
-        p = lv_obj_get_parent(p);
-    }
-    return y;
-}
-
 /** 解析 "YYYY-MM-DD" 为中文星期（"周一"…"周日"）。 */
 static const char *weather_weekday_zh(const char *date) {
     static const char *const wd[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
@@ -321,10 +270,7 @@ static void weather_updated_refresh(void) {
     weather_ago_text(diff, ago, sizeof(ago));
     char text[sizeof(ago) + 16];
     snprintf(text, sizeof(text), "最近更新：%s", ago);
-    if (strcmp(s_last_ago_text, text) != 0) {
-        strlcpy(s_last_ago_text, text, sizeof(s_last_ago_text));
-        lv_label_set_text(s_updated_label, text);
-    }
+    espaperplay_ui_label_set_text_dedup(s_updated_label, text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -402,20 +348,20 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     const int block_w = temp_w + 8 + side_w;
     const int x0 = (w - block_w) / 2;
     const int side_x = x0 + temp_w + 8;
-    s_temp_label = weather_label_create(parent, "--", 96, LV_TEXT_ALIGN_RIGHT);
+    s_temp_label = espaperplay_ui_label_create(parent, "--", 96, LV_TEXT_ALIGN_RIGHT);
     lv_obj_set_width(s_temp_label, temp_w);
     lv_obj_set_pos(s_temp_label, x0, temp_y);
 
-    s_unit_label = weather_label_create(parent, "°C", 20, LV_TEXT_ALIGN_LEFT);
+    s_unit_label = espaperplay_ui_label_create(parent, "°C", 20, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_unit_label, 50);
     lv_obj_set_pos(s_unit_label, side_x, temp_y + 10);
 
-    s_feel_label = weather_label_create(parent, "体感\n--°", 20, LV_TEXT_ALIGN_LEFT);
+    s_feel_label = espaperplay_ui_label_create(parent, "体感\n--°", 20, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_feel_label, side_w);
     lv_obj_set_pos(s_feel_label, side_x, temp_y + temp_h - feel_h);
 
     /* 天气 + 今日高低温 */
-    s_cond_label = weather_label_create(parent, "晴 --℃～--℃", 24, LV_TEXT_ALIGN_CENTER);
+    s_cond_label = espaperplay_ui_label_create(parent, "晴 --℃～--℃", 24, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_cond_label, LV_PCT(100));
     lv_obj_align(s_cond_label, LV_ALIGN_TOP_MID, 0, cond_y);
 
@@ -431,7 +377,7 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     lv_obj_t *warn_text = lv_label_create(s_warn_bar);
     lv_label_set_text(warn_text, "⚠ 预警");
     lv_obj_set_style_text_color(warn_text, lv_color_white(), 0);
-    lv_obj_set_style_text_font(warn_text, weather_font(16), 0);
+    lv_obj_set_style_text_font(warn_text, espaperplay_ui_font(16), 0);
     lv_obj_center(warn_text);
     lv_obj_set_user_data(s_warn_bar, warn_text);
 
@@ -440,7 +386,7 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
         weather_card_create(parent, WEATHER_MARGIN, card_y, w - 2 * WEATHER_MARGIN, card_h);
 
     lv_obj_t *title =
-        weather_label_create(s_hourly_card, "未来 24 小时气温", 16, LV_TEXT_ALIGN_LEFT);
+        espaperplay_ui_label_create(s_hourly_card, "未来 24 小时气温", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 4, 2);
 
@@ -464,7 +410,7 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     /* 温度标注行（每 3 小时一个值，中心对齐曲线点；点 0 内容 x = 12） */
     for (int i = 0; i < WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL; i++) {
         const int x = i * WEATHER_HOURLY_LABEL * WEATHER_HOURLY_STEP - 18;
-        lv_obj_t *v = weather_label_create(scroll, "--", 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *v = espaperplay_ui_label_create(scroll, "--", 16, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(v, 60);
         lv_obj_set_pos(v, x, 0);
         s_hourly_vals[i] = v;
@@ -500,7 +446,7 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
     s_daily_card =
         weather_card_create(parent, WEATHER_MARGIN, card_y, w - 2 * WEATHER_MARGIN, card_h);
 
-    lv_obj_t *title = weather_label_create(s_daily_card, "未来 7 天预报", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *title = espaperplay_ui_label_create(s_daily_card, "未来 7 天预报", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 4, 2);
 
@@ -527,15 +473,15 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
     for (int i = 0; i < WEATHER_DAILY_CNT; i++) {
         /* 列中心对齐图表点（点 i 内容 x = 12 + i*84） */
         const int cx = 12 + i * WEATHER_DAILY_STEP;
-        lv_obj_t *hi = weather_label_create(scroll, "--", 20, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *hi = espaperplay_ui_label_create(scroll, "--", 20, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(hi, col_w);
         lv_obj_set_pos(hi, cx - col_w / 2, hi_y);
-        lv_obj_t *wk = weather_label_create(scroll, "--", 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *wk = espaperplay_ui_label_create(scroll, "--", 16, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(wk, col_w);
         lv_obj_set_pos(wk, cx - col_w / 2, week_y);
         lv_obj_t *ic = lv_image_create(scroll);
         lv_obj_set_pos(ic, cx - 16, icon_y);
-        lv_obj_t *lo = weather_label_create(scroll, "--", 20, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *lo = espaperplay_ui_label_create(scroll, "--", 20, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(lo, col_w);
         lv_obj_set_pos(lo, cx - col_w / 2, lo_y);
         s_daily_hi[i] = hi;
@@ -569,10 +515,10 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
         lv_obj_t *ic = lv_image_create(card);
         lv_image_set_src(ic, infos[i].icon);
         lv_obj_set_pos(ic, 6, 3);
-        lv_obj_t *n = weather_label_create(card, infos[i].name, 16, LV_TEXT_ALIGN_LEFT);
+        lv_obj_t *n = espaperplay_ui_label_create(card, infos[i].name, 16, LV_TEXT_ALIGN_LEFT);
         lv_obj_set_width(n, cw - 30);
         lv_obj_set_pos(n, 28, 2);
-        lv_obj_t *v = weather_label_create(card, "--", 20, LV_TEXT_ALIGN_LEFT);
+        lv_obj_t *v = espaperplay_ui_label_create(card, "--", 20, LV_TEXT_ALIGN_LEFT);
         lv_obj_set_width(v, cw - 12);
         lv_obj_set_pos(v, 6, 22);
         s_info_labels[i] = v;
@@ -599,19 +545,19 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
 
     lv_obj_t *card = weather_card_create(parent, margin, arc_y, w - 2 * margin, arc_h);
 
-    lv_obj_t *sun_l = weather_label_create(card, "日出 --", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *sun_l = espaperplay_ui_label_create(card, "日出 --", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(sun_l, 90);
     lv_obj_set_pos(sun_l, 6, 4);
-    lv_obj_t *sun_r = weather_label_create(card, "日落 --", 16, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_t *sun_r = espaperplay_ui_label_create(card, "日落 --", 16, LV_TEXT_ALIGN_RIGHT);
     lv_obj_set_width(sun_r, 90);
     lv_obj_align(sun_r, LV_ALIGN_TOP_RIGHT, -6, 4);
 
-    lv_obj_t *moon_l = weather_label_create(card, "月出 --", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *moon_l = espaperplay_ui_label_create(card, "月出 --", 16, LV_TEXT_ALIGN_LEFT);
     /* 120px：容纳"月出 昨23:33"（今日无月出回退前一日月出时的标注），
      * 文字实际约 94px，不触及弧线左端点（x=100）。 */
     lv_obj_set_width(moon_l, 120);
     lv_obj_set_pos(moon_l, 6, 8 + arc_h / 2);
-    lv_obj_t *moon_r = weather_label_create(card, "月落 --", 16, LV_TEXT_ALIGN_RIGHT);
+    lv_obj_t *moon_r = espaperplay_ui_label_create(card, "月落 --", 16, LV_TEXT_ALIGN_RIGHT);
     /* 120px：容纳"月落 明00:20"（今日无月落回填次日月落时的标注），
      * 右对齐文字实际约 94px，不触及弧线右端点。 */
     lv_obj_set_width(moon_r, 120);
@@ -675,7 +621,7 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
         const int c = i % cols;
         lv_obj_t *icard =
             weather_card_create(parent, margin + c * (cw + gap), idx_y + r * (ch + gap), cw, ch);
-        lv_obj_t *label = weather_label_create(icard, "--", 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_t *label = espaperplay_ui_label_create(icard, "--", 16, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(label, LV_PCT(100));
         lv_obj_center(label);
         s_index_labels[i] = label;
@@ -709,7 +655,7 @@ static void weather_enter(void) {
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
     int32_t scr_w, scr_h;
-    weather_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const bool portrait = scr_w < scr_h;
 
     /* 统一状态栏：左侧时间、居中位置名（动态）、右侧 WiFi/睡眠图标 */
@@ -734,7 +680,7 @@ static void weather_enter(void) {
 
     /* 「最近更新：xx前」（状态栏下方左上角，三个子页共用、全程可见；
      * 在子页之后创建保证不被白底子页容器遮挡） */
-    s_updated_label = weather_label_create(scr, "", 16, LV_TEXT_ALIGN_LEFT);
+    s_updated_label = espaperplay_ui_label_create(scr, "", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_pos(s_updated_label, 12, WEATHER_BAR_H_PX + 4);
 
     /* 指示点 */
@@ -764,15 +710,14 @@ static void weather_enter(void) {
     s_warn_detail =
         weather_card_create(scr, WEATHER_MARGIN, area_y + 60, scr_w - 2 * WEATHER_MARGIN, detail_h);
     lv_obj_add_flag(s_warn_detail, LV_OBJ_FLAG_HIDDEN);
-    s_warn_title = weather_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
+    s_warn_title = espaperplay_ui_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_warn_title, LV_PCT(100));
     lv_obj_set_pos(s_warn_title, 4, 4);
-    s_warn_desc = weather_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
+    s_warn_desc = espaperplay_ui_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_warn_desc, LV_PCT(100));
     lv_obj_set_pos(s_warn_desc, 4, 40);
 
     s_last_update[0] = '\0';
-    s_last_ago_text[0] = '\0';
     s_hint[0] = '\0';
     s_fast_poll = false;
     s_nudge_cnt = 0;
@@ -1178,20 +1123,20 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
             /* 图表滚动区优先判定（含边缘区域：在图表上滑动应滚图表，
              * 而不是返回主页或切换子页） */
             if (s_page == 0 && s_hourly_scroll != NULL &&
-                weather_point_in(&p, weather_obj_screen_x(s_hourly_scroll),
-                                 weather_obj_screen_y(s_hourly_scroll),
+                espaperplay_ui_point_in(&p, espaperplay_ui_obj_screen_x(s_hourly_scroll),
+                                 espaperplay_ui_obj_screen_y(s_hourly_scroll),
                                  lv_obj_get_width(s_hourly_scroll),
                                  lv_obj_get_height(s_hourly_scroll))) {
                 s_touch_zone = 1; /* 24h 图表滚动区（仅子页 0） */
             } else if (s_page == 1 && s_daily_scroll != NULL &&
-                       weather_point_in(&p, weather_obj_screen_x(s_daily_scroll),
-                                        weather_obj_screen_y(s_daily_scroll),
+                       espaperplay_ui_point_in(&p, espaperplay_ui_obj_screen_x(s_daily_scroll),
+                                        espaperplay_ui_obj_screen_y(s_daily_scroll),
                                         lv_obj_get_width(s_daily_scroll),
                                         lv_obj_get_height(s_daily_scroll))) {
                 s_touch_zone = 1; /* 7 天图表滚动区（仅子页 1） */
             } else if (s_page == 0 && !lv_obj_has_flag(s_warn_bar, LV_OBJ_FLAG_HIDDEN) &&
-                       weather_point_in(
-                           &p, weather_obj_screen_x(s_warn_bar), weather_obj_screen_y(s_warn_bar),
+                       espaperplay_ui_point_in(
+                           &p, espaperplay_ui_obj_screen_x(s_warn_bar), espaperplay_ui_obj_screen_y(s_warn_bar),
                            lv_obj_get_width(s_warn_bar), lv_obj_get_height(s_warn_bar))) {
                 s_touch_zone = 2; /* 预警条（仅子页 0） */
             } else if (p.x < WEATHER_EDGE_PX || p.x > scr_w - WEATHER_EDGE_PX) {

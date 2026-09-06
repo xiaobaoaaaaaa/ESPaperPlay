@@ -24,6 +24,7 @@
 #include "esp_log.h"
 
 #include "espaperplay_config.h"
+#include "espaperplay_ui_util.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
@@ -192,7 +193,6 @@ static lv_obj_t *s_row_objs[FILES_ROWS_MAX]; /*!< 当前已构建页的行对象
 static int s_row_idx[FILES_ROWS_MAX];        /*!< 行 -> 条目下标 */
 static int s_row_cnt = 0;                    /*!< 当前页行数 */
 
-static float s_scale = 1.0f; /*!< 屏高缩放因子（enter 时计算） */
 static int s_bar_h = 30;     /*!< 状态栏高度 */
 static int s_path_y = 0;     /*!< 路径条顶部 y */
 static int s_path_h = 40;    /*!< 路径条高度 */
@@ -244,40 +244,12 @@ static void files_info_open(int idx);
 /* ------------------------------------------------------------------ */
 
 /** FreeType 字体按需加载（16 / 20 / 24 档，与各页面共用缓存）。 */
-static lv_font_t *files_font(int size_px) {
-    const char *name = FILES_FONT_NAME[0] ? FILES_FONT_NAME : ESPAPERPLAY_FONTS_DEFAULT_NAME;
-    return espaperplay_fonts_load(name, (uint32_t)size_px, ESPAPERPLAY_FONT_STYLE_NORMAL);
-}
-
 /** 通用标签：白底黑字 + FreeType 字体 + 禁用滚动。 */
-static lv_obj_t *files_label_create(lv_obj_t *parent, const char *text, int font_px,
-                                    lv_text_align_t align) {
-    lv_obj_t *label = lv_label_create(parent);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = files_font(font_px);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
-    }
-    lv_obj_set_style_text_align(label, align, 0);
-    lv_obj_set_width(label, LV_PCT(100));
-    lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
-    return label;
-}
-
 /** 逻辑分辨率（旋转后）。 */
-static void files_screen_size(int32_t *out_w, int32_t *out_h) {
-    lv_display_t *disp = lv_display_get_default();
-    *out_w = lv_display_get_horizontal_resolution(disp);
-    *out_h = lv_display_get_vertical_resolution(disp);
-}
-
 /** 基准值按屏高缩放（取整）。 */
-static int files_scaled(int v) { return (int)(v * s_scale); }
-
 /** 弹窗按钮标准高度（缩放 + 下限）。 */
 static int files_btn_h(void) {
-    const int h = files_scaled(44);
+    const int h = espaperplay_ui_scaled(44);
     return h < 38 ? 38 : h;
 }
 
@@ -286,59 +258,18 @@ static int files_btn_h(void) {
 static int files_modal_card_w(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    files_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const int avail_w = scr_w - 2 * FILES_MARGIN;
-    return avail_w < files_scaled(360) ? avail_w : files_scaled(360);
+    return avail_w < espaperplay_ui_scaled(360) ? avail_w : espaperplay_ui_scaled(360);
 }
 
 /** 点在矩形内（逻辑坐标）。 */
-static bool files_point_in(const lv_point_t *p, int x, int y, int w, int h) {
-    return p->x >= x && p->x < x + w && p->y >= y && p->y < y + h;
-}
-
 /** 对象相对屏幕的坐标（累加父级偏移；LVGL 的 get_x/y 只返回相对父）。 */
-static int files_obj_screen_x(const lv_obj_t *obj) {
-    int x = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        x += lv_obj_get_x(p);
-        p = lv_obj_get_parent(p);
-    }
-    return x;
-}
-
-static int files_obj_screen_y(const lv_obj_t *obj) {
-    int y = 0;
-    const lv_obj_t *p = obj;
-    while (p != NULL && lv_obj_get_parent(p) != NULL) {
-        y += lv_obj_get_y(p);
-        p = lv_obj_get_parent(p);
-    }
-    return y;
-}
-
 /**
  * 显示名截断：UTF-8 边界安全截断到 @p n 字节内（含省略号），保证弹窗
  * 文案长度上界可证（-Werror=format-truncation 下 snprintf 拼 %s 必报错，
  * 故路径拼接一律 strlcpy/strlcat、文案拼接先截断名称再拼固定短语）。
  */
-static void files_disp_name(const char *src, char *dst, size_t n) {
-    size_t len = strlen(src);
-    bool truncated = false;
-    if (len > n - 4) { /* 预留 "…"（3 字节）+ NUL */
-        len = n - 4;
-        while (len > 0 && (((unsigned char)src[len] & 0xC0) == 0x80)) {
-            len--; /* 回退到 UTF-8 字符边界 */
-        }
-        truncated = true;
-    }
-    memcpy(dst, src, len);
-    dst[len] = '\0';
-    if (truncated) {
-        strlcat(dst, "…", n);
-    }
-}
-
 /** 条目名合法性：非空、非 "."/".."、不含 '/' 与控制字符（UTF-8 直通）。 */
 static bool files_name_valid(const char *s) {
     size_t n = strlen(s);
@@ -383,17 +314,6 @@ static int files_entry_cmp(const void *a, const void *b) {
 }
 
 /** 路径拼接并检测截断：成功返回 true，超长返回 false（dst 不定）。 */
-static bool files_path_join_checked(char *dst, size_t n, const char *a, const char *b) {
-    const size_t need = strlen(a) + 1 + strlen(b) + 1; /* a + "/" + b + NUL */
-    if (need > n) {
-        return false;
-    }
-    strlcpy(dst, a, n);
-    strlcat(dst, "/", n);
-    strlcat(dst, b, n);
-    return true;
-}
-
 /** 检查 SD 卡是否已挂载，未挂载则弹提示并返回 false。 */
 static bool files_require_mounted(void) {
     if (espaperplay_storage_is_mounted()) {
@@ -469,7 +389,7 @@ static esp_err_t files_rm_rf(const char *path, int depth) {
             continue;
         }
         char child[FILES_PATH_MAX];
-        if (!files_path_join_checked(child, sizeof(child), path, e->d_name)) {
+        if (!espaperplay_ui_path_join(child, sizeof(child), path, e->d_name)) {
             ESP_LOGW(TAG, "files: rm child path too long (%s/%s)", path, e->d_name);
             ret = ESP_FAIL;
             continue;
@@ -583,16 +503,16 @@ static void files_work_post(files_pending_op_t op) {
     switch (op) {
     case FILES_PENDING_MKDIR:
         w.type = FILES_WOP_MKDIR;
-        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_new);
+        ok = espaperplay_ui_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_new);
         break;
     case FILES_PENDING_RENAME:
         w.type = FILES_WOP_RENAME;
-        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old) &&
-             files_path_join_checked(w.path_b, sizeof(w.path_b), s_cwd, s_pending_new);
+        ok = espaperplay_ui_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old) &&
+             espaperplay_ui_path_join(w.path_b, sizeof(w.path_b), s_cwd, s_pending_new);
         break;
     case FILES_PENDING_DELETE:
         w.type = FILES_WOP_DELETE;
-        ok = files_path_join_checked(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old);
+        ok = espaperplay_ui_path_join(w.path_a, sizeof(w.path_a), s_cwd, s_pending_old);
         break;
     default:
         return;
@@ -672,11 +592,11 @@ static void files_page_build(int idx) {
 
         /* 名称（目录以 "/" 结尾标记；超长省略号截断） */
         char text[FILES_DISP_MAX + 2];
-        files_disp_name(ent->name, text, sizeof(text) - 2);
+        espaperplay_ui_utf8_truncate(ent->name, text, sizeof(text) - 2);
         if (ent->is_dir) {
             strlcat(text, "/", sizeof(text));
         }
-        lv_obj_t *label = files_label_create(row, text, 16, LV_TEXT_ALIGN_LEFT);
+        lv_obj_t *label = espaperplay_ui_label_create(row, text, 16, LV_TEXT_ALIGN_LEFT);
         lv_obj_set_width(label, s_card_w - 2 * pad - 20);
         lv_obj_align(label, LV_ALIGN_LEFT_MID, 4, 0);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
@@ -772,7 +692,7 @@ static void files_scan(void) {
             if (e->d_type == DT_UNKNOWN) {
                 /* d_type 不可靠时 stat 兜底；路径过长则跳过该条目。 */
                 char full[FILES_PATH_MAX];
-                if (!files_path_join_checked(full, sizeof(full), s_cwd, e->d_name)) {
+                if (!espaperplay_ui_path_join(full, sizeof(full), s_cwd, e->d_name)) {
                     ESP_LOGW(TAG, "files: entry path too long, skip %s", e->d_name);
                     continue;
                 }
@@ -825,7 +745,7 @@ static void files_scan(void) {
     /* 指示点（数量随分页变化，每次重扫重建） */
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    files_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     for (int i = 0; i < s_page_count && i < FILES_PAGE_MAX; i++) {
         s_dots[i] = lv_obj_create(lv_screen_active());
         lv_obj_set_size(s_dots[i], 10, 10);
@@ -855,7 +775,7 @@ static void files_enter_dir(const char *name) {
         return;
     }
     char target[FILES_PATH_MAX];
-    if (!files_path_join_checked(target, sizeof(target), s_cwd, name)) {
+    if (!espaperplay_ui_path_join(target, sizeof(target), s_cwd, name)) {
         files_confirm_open("操作失败", "路径过长", true);
         return;
     }
@@ -898,7 +818,7 @@ static void files_entry_activate(int idx) {
     /* TXT/EPUB：直接打开阅读器 */
     if (espaperplay_reader_is_supported_file(s_entries[idx].name)) {
         char full[FILES_PATH_MAX];
-        if (!files_path_join_checked(full, sizeof(full), s_cwd, s_entries[idx].name)) {
+        if (!espaperplay_ui_path_join(full, sizeof(full), s_cwd, s_entries[idx].name)) {
             files_confirm_open("提示", "路径过长", true);
             return;
         }
@@ -969,7 +889,7 @@ static lv_obj_t *files_modal_base(const char *title, const char *msg, int card_h
                                   bool mid_press) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    files_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层：拦截触摸，背景透明——卡片靠黑边框区分，避免 BW 模式下浅灰
      * 背景渲染成纯白把页面内容整片盖掉（与阅读器底边栏同款修复）。 */
@@ -997,15 +917,15 @@ static lv_obj_t *files_modal_base(const char *title, const char *msg, int card_h
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *title_label = files_label_create(card, title, 20, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *title_label = espaperplay_ui_label_create(card, title, 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title_label, LV_PCT(100));
     lv_label_set_long_mode(title_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(title_label, 0, files_scaled(14));
+    lv_obj_set_pos(title_label, 0, espaperplay_ui_scaled(14));
 
     if (msg != NULL) {
-        lv_obj_t *msg_label = files_label_create(card, msg, 16, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_width(msg_label, card_w - files_scaled(40));
-        lv_obj_set_pos(msg_label, files_scaled(20), files_scaled(52));
+        lv_obj_t *msg_label = espaperplay_ui_label_create(card, msg, 16, LV_TEXT_ALIGN_CENTER);
+        lv_obj_set_width(msg_label, card_w - espaperplay_ui_scaled(40));
+        lv_obj_set_pos(msg_label, espaperplay_ui_scaled(20), espaperplay_ui_scaled(52));
         lv_label_set_long_mode(msg_label, LV_LABEL_LONG_WRAP);
     }
 
@@ -1034,7 +954,7 @@ static lv_obj_t *files_card_button(lv_obj_t *card, const char *text, int x, int 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
-    lv_font_t *btn_font = files_font(20);
+    lv_font_t *btn_font = espaperplay_ui_font(20);
     if (btn_font != NULL) {
         lv_obj_set_style_text_font(label, btn_font, 0);
     }
@@ -1080,20 +1000,20 @@ static void files_confirm_ok_cb(lv_event_t *e) {
  * "确定" 按钮，用于失败提示）。由抬起后的点击链路打开，无需点击抑制。
  */
 static void files_confirm_open(const char *title, const char *msg, bool alert_only) {
-    const int card_h = files_scaled(250) < 210 ? 210 : files_scaled(250);
+    const int card_h = espaperplay_ui_scaled(250) < 210 ? 210 : espaperplay_ui_scaled(250);
     lv_obj_t *card = files_modal_base(title, msg, card_h, true, false);
 
     const int card_w = files_modal_card_w(); /* 布局前读宽为 0，须算术求得 */
     const int bh = files_btn_h();
-    const int by = card_h - bh - files_scaled(14);
+    const int by = card_h - bh - espaperplay_ui_scaled(14);
     if (alert_only) {
-        files_card_button(card, "确定", files_scaled(24), by, card_w - files_scaled(48), bh, true,
+        files_card_button(card, "确定", espaperplay_ui_scaled(24), by, card_w - espaperplay_ui_scaled(48), bh, true,
                           files_confirm_ok_cb, NULL);
     } else {
-        const int bw = (card_w - files_scaled(60)) / 2;
-        files_card_button(card, "取消", files_scaled(24), by, bw, bh, false,
+        const int bw = (card_w - espaperplay_ui_scaled(60)) / 2;
+        files_card_button(card, "取消", espaperplay_ui_scaled(24), by, bw, bh, false,
                           files_confirm_cancel_cb, NULL);
-        files_card_button(card, "确定", files_scaled(36) + bw, by, bw, bh, true,
+        files_card_button(card, "确定", espaperplay_ui_scaled(36) + bw, by, bw, bh, true,
                           files_confirm_ok_cb, NULL);
     }
     ESP_LOGI(TAG, "files: confirm modal open (%s)", title);
@@ -1128,10 +1048,10 @@ static void files_info_open(int idx) {
     }
     const files_entry_t *ent = &s_entries[idx];
     char disp[FILES_DISP_MAX];
-    files_disp_name(ent->name, disp, sizeof(disp));
+    espaperplay_ui_utf8_truncate(ent->name, disp, sizeof(disp));
 
     char full[FILES_PATH_MAX];
-    if (!files_path_join_checked(full, sizeof(full), s_cwd, ent->name)) {
+    if (!espaperplay_ui_path_join(full, sizeof(full), s_cwd, ent->name)) {
         files_confirm_open("提示", "路径过长", true);
         return;
     }
@@ -1179,7 +1099,7 @@ static void files_menu_cb(lv_event_t *e) {
     /* 长按菜单中的"打开阅读"（TXT / EPUB） */
     if (action == FILES_MENU_RENAME + 10) {
         char full[FILES_PATH_MAX];
-        if (!files_path_join_checked(full, sizeof(full), s_cwd, s_pending_old)) {
+        if (!espaperplay_ui_path_join(full, sizeof(full), s_cwd, s_pending_old)) {
             files_modal_close();
             files_confirm_open("提示", "路径过长", true);
             return;
@@ -1222,7 +1142,7 @@ static void files_menu_cb(lv_event_t *e) {
         return;
     }
     char old[FILES_DISP_MAX];
-    files_disp_name(s_pending_old, old, sizeof(old));
+    espaperplay_ui_utf8_truncate(s_pending_old, old, sizeof(old));
     /* 固定短语为 UTF-8 中文（每字 3 字节），缓冲按「显示名 + 充裕短语」取值。 */
     char msg[FILES_DISP_MAX + 96];
     if (s_pending_is_dir) {
@@ -1248,30 +1168,30 @@ static void files_menu_open(int idx) {
     s_pending_is_dir = s_entries[idx].is_dir;
 
     char disp[FILES_DISP_MAX];
-    files_disp_name(s_pending_old, disp, sizeof(disp));
+    espaperplay_ui_utf8_truncate(s_pending_old, disp, sizeof(disp));
 
     const bool is_txt = !s_pending_is_dir && espaperplay_reader_is_supported_file(s_pending_old);
     const int btn_cnt = is_txt ? 4 : 3;
     const int bh = files_btn_h();
     const int gap = 10;
-    const int card_h = files_scaled(56) + btn_cnt * bh + (btn_cnt - 1) * gap + files_scaled(16);
+    const int card_h = espaperplay_ui_scaled(56) + btn_cnt * bh + (btn_cnt - 1) * gap + espaperplay_ui_scaled(16);
     lv_obj_t *card = files_modal_base(disp, NULL, card_h, true, true);
 
     const int card_w = files_modal_card_w(); /* 布局前读宽为 0，须算术求得 */
-    const int bw = card_w - files_scaled(48);
-    int by = files_scaled(56);
+    const int bw = card_w - espaperplay_ui_scaled(48);
+    int by = espaperplay_ui_scaled(56);
     if (is_txt) {
-        files_card_button(card, "打开阅读", files_scaled(24), by, bw, bh, true, files_menu_cb,
+        files_card_button(card, "打开阅读", espaperplay_ui_scaled(24), by, bw, bh, true, files_menu_cb,
                           (void *)(intptr_t)FILES_MENU_RENAME + 10);
         by += bh + gap;
     }
-    files_card_button(card, "重命名", files_scaled(24), by, bw, bh, false, files_menu_cb,
+    files_card_button(card, "重命名", espaperplay_ui_scaled(24), by, bw, bh, false, files_menu_cb,
                       (void *)(intptr_t)FILES_MENU_RENAME);
     by += bh + gap;
-    files_card_button(card, "删除", files_scaled(24), by, bw, bh, false, files_menu_cb,
+    files_card_button(card, "删除", espaperplay_ui_scaled(24), by, bw, bh, false, files_menu_cb,
                       (void *)(intptr_t)FILES_MENU_DELETE);
     by += bh + gap;
-    files_card_button(card, "取消", files_scaled(24), by, bw, bh, true, files_menu_cb,
+    files_card_button(card, "取消", espaperplay_ui_scaled(24), by, bw, bh, true, files_menu_cb,
                       (void *)(intptr_t)FILES_MENU_CANCEL);
     ESP_LOGI(TAG, "files: context menu open (%s)", s_pending_old);
 }
@@ -1312,7 +1232,7 @@ static void files_kb_ok_cb(lv_event_t *e) {
     strlcpy(s_pending_new, text, sizeof(s_pending_new));
     /* 路径长度预检（避免二次确认后才报路径过长）。 */
     char probe[FILES_PATH_MAX];
-    if (!files_path_join_checked(probe, sizeof(probe), s_cwd, s_pending_new)) {
+    if (!espaperplay_ui_path_join(probe, sizeof(probe), s_cwd, s_pending_new)) {
         if (s_kb_status != NULL) {
             lv_label_set_text(s_kb_status, "路径过长");
         }
@@ -1330,8 +1250,8 @@ static void files_kb_ok_cb(lv_event_t *e) {
     }
     char old_disp[FILES_DISP_MAX];
     char new_disp[FILES_DISP_MAX];
-    files_disp_name(s_pending_old, old_disp, sizeof(old_disp));
-    files_disp_name(s_pending_new, new_disp, sizeof(new_disp));
+    espaperplay_ui_utf8_truncate(s_pending_old, old_disp, sizeof(old_disp));
+    espaperplay_ui_utf8_truncate(s_pending_new, new_disp, sizeof(new_disp));
 
     char msg[2 * FILES_DISP_MAX + 48];
     if (s_input_mode == FILES_INPUT_RENAME) {
@@ -1366,7 +1286,7 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
 
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    files_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
     s_modal = lv_obj_create(lv_screen_active());
@@ -1385,10 +1305,10 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     const int panel_w = scr_w - 2 * FILES_MARGIN;
     const int pad = 10;
     const int title_h = 30;
-    const int ta_h = files_scaled(52) < 40 ? 40 : files_scaled(52);
+    const int ta_h = espaperplay_ui_scaled(52) < 40 ? 40 : espaperplay_ui_scaled(52);
     const int status_h = 22;
     const int bh = files_btn_h();
-    const int kb_h = files_scaled(240) < 170 ? 170 : files_scaled(240);
+    const int kb_h = espaperplay_ui_scaled(240) < 170 ? 170 : espaperplay_ui_scaled(240);
     /* 面板仅含标题/输入框/提示/按钮（不含键盘，键盘单独挂全屏 modal 贴底，避免被面板裁剪）。 */
     const int panel_h = pad + title_h + 6 + ta_h + 4 + status_h + 6 + bh + pad;
     const int kb_y = scr_h - kb_h - 6;      /* 键盘贴底 */
@@ -1405,7 +1325,7 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 标题 */
-    lv_obj_t *title = files_label_create(
+    lv_obj_t *title = espaperplay_ui_label_create(
         panel, mode == FILES_INPUT_RENAME ? "重命名" : "新建文件夹", 20, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 0, pad);
@@ -1419,7 +1339,7 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     lv_textarea_set_max_length(ta, FILES_NAME_MAX - 1);
     lv_textarea_set_text(ta, init_text != NULL ? init_text : "");
     lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-    lv_font_t *ta_font = files_font(20);
+    lv_font_t *ta_font = espaperplay_ui_font(20);
     if (ta_font != NULL) {
         lv_obj_set_style_text_font(ta, ta_font, 0);
     }
@@ -1433,7 +1353,7 @@ static void files_keyboard_open(files_input_mode_t mode, const char *init_text) 
     lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
 
     /* 校验提示（默认空） */
-    lv_obj_t *status = files_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *status = espaperplay_ui_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
     s_kb_status = status;
     lv_obj_set_width(status, LV_PCT(100));
     lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
@@ -1478,9 +1398,9 @@ static int files_hit_entry(const lv_point_t *p) {
         if (row == NULL) {
             continue;
         }
-        const int x = files_obj_screen_x(row);
-        const int y = files_obj_screen_y(row);
-        if (files_point_in(p, x, y, lv_obj_get_width(row), lv_obj_get_height(row))) {
+        const int x = espaperplay_ui_obj_screen_x(row);
+        const int y = espaperplay_ui_obj_screen_y(row);
+        if (espaperplay_ui_point_in(p, x, y, lv_obj_get_width(row), lv_obj_get_height(row))) {
             return s_row_idx[i];
         }
     }
@@ -1495,9 +1415,9 @@ static int files_hit_button(const lv_point_t *p) {
         if (btn == NULL) {
             continue;
         }
-        const int x = files_obj_screen_x(btn);
-        const int y = files_obj_screen_y(btn);
-        if (files_point_in(p, x, y, lv_obj_get_width(btn), lv_obj_get_height(btn))) {
+        const int x = espaperplay_ui_obj_screen_x(btn);
+        const int y = espaperplay_ui_obj_screen_y(btn);
+        if (espaperplay_ui_point_in(p, x, y, lv_obj_get_width(btn), lv_obj_get_height(btn))) {
             return i;
         }
     }
@@ -1517,16 +1437,16 @@ static void files_enter(void) {
 
     int32_t scr_w = 0;
     int32_t scr_h = 0;
-    files_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
 
     /* 几何布局（按屏高缩放 + 下限；构建期布局未完成读宽为 0，全部算术求得） */
-    s_scale = (float)scr_h / (float)FILES_REF_H;
-    s_bar_h = files_scaled(30) < 24 ? 24 : files_scaled(30);
-    s_path_h = files_scaled(FILES_PATH_H) < FILES_MIN_H ? FILES_MIN_H : files_scaled(FILES_PATH_H);
+    espaperplay_ui_scale_init(FILES_REF_H);
+    s_bar_h = espaperplay_ui_scaled(30) < 24 ? 24 : espaperplay_ui_scaled(30);
+    s_path_h = espaperplay_ui_scaled(FILES_PATH_H) < FILES_MIN_H ? FILES_MIN_H : espaperplay_ui_scaled(FILES_PATH_H);
     s_path_y = s_bar_h + 6;
-    const int bottom_h = files_scaled(FILES_BOTTOM_H) < FILES_MIN_BOTTOM_H
+    const int bottom_h = espaperplay_ui_scaled(FILES_BOTTOM_H) < FILES_MIN_BOTTOM_H
                              ? FILES_MIN_BOTTOM_H
-                             : files_scaled(FILES_BOTTOM_H);
+                             : espaperplay_ui_scaled(FILES_BOTTOM_H);
     s_bottom_y = scr_h - bottom_h - 4;
     s_list_y = s_path_y + s_path_h + 6;
     s_list_h = s_bottom_y - s_list_y - 26; /* 底部留出指示点空间 */
@@ -1535,7 +1455,7 @@ static void files_enter(void) {
     }
     s_card_w = scr_w - 2 * FILES_MARGIN;
     s_row_h =
-        files_scaled(FILES_ROW_H) < FILES_MIN_ROW_H ? FILES_MIN_ROW_H : files_scaled(FILES_ROW_H);
+        espaperplay_ui_scaled(FILES_ROW_H) < FILES_MIN_ROW_H ? FILES_MIN_ROW_H : espaperplay_ui_scaled(FILES_ROW_H);
     s_btn_w = (s_card_w - 12) / 2;
     s_btn_h = bottom_h - 12;
 
@@ -1552,13 +1472,13 @@ static void files_enter(void) {
     lv_obj_set_style_radius(path_bar, 8, 0);
     lv_obj_set_style_pad_all(path_bar, 0, 0);
     lv_obj_remove_flag(path_bar, LV_OBJ_FLAG_SCROLLABLE);
-    s_path_label = files_label_create(path_bar, "/", 16, LV_TEXT_ALIGN_LEFT);
+    s_path_label = espaperplay_ui_label_create(path_bar, "/", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_path_label, s_card_w - 16);
     lv_obj_align(s_path_label, LV_ALIGN_LEFT_MID, 8, 0);
     lv_label_set_long_mode(s_path_label, LV_LABEL_LONG_DOT);
 
     /* 空目录 / 未挂载提示（居中于列表区，默认隐藏） */
-    s_hint_label = files_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
+    s_hint_label = espaperplay_ui_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_hint_label, s_card_w);
     lv_obj_set_pos(s_hint_label, FILES_MARGIN, s_list_y + s_list_h / 2 - 12);
     lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
