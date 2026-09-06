@@ -19,6 +19,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_sd_fonts.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
@@ -1172,35 +1173,23 @@ static void settings_stepper_modal_open(settings_row_t *row) {
 /* 模态：字体选择                                                        */
 /* ------------------------------------------------------------------ */
 
-/** 校验字体文件名：以 .ttf / .otf / .ttc 结尾（大小写不敏感）。 */
-static bool settings_font_ext_ok(const char *name) {
-    size_t len = strlen(name);
-    if (len < 5) {
-        return false;
-    }
-    const char *ext = name + len - 4;
-    return strcasecmp(ext, ".ttf") == 0 || strcasecmp(ext, ".otf") == 0 ||
-           strcasecmp(ext, ".ttc") == 0;
-}
-
-/** 收集字体列表：出厂内置 + SD 卡（/sdcard/system/fonts/）。 */
+/** 收集字体列表：出厂内置 + SD 卡（/sdcard/system/fonts/，规则见 sd_fonts 组件）。 */
 static void settings_font_collect(void) {
     s_font_count = 0;
     strlcpy(s_font_names[s_font_count++], ESPAPERPLAY_FONTS_DEFAULT_NAME, sizeof(s_font_names[0]));
 
-    if (espaperplay_storage_is_mounted()) {
-        DIR *d = opendir(ESPAPERPLAY_FONTS_SD_DIR);
-        if (d != NULL) {
-            struct dirent *e = NULL;
-            while ((e = readdir(d)) != NULL && s_font_count < SETTINGS_FONT_MAX) {
-                if (settings_font_ext_ok(e->d_name)) {
-                    strlcpy(s_font_names[s_font_count], e->d_name, sizeof(s_font_names[0]));
-                    s_font_count++;
-                }
-            }
-            closedir(d);
-        }
+    char (*sd_names)[ESPAPERPLAY_SD_FONTS_NAME_MAX] =
+        heap_caps_malloc(SETTINGS_FONT_MAX * ESPAPERPLAY_SD_FONTS_NAME_MAX,
+                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (sd_names == NULL) {
+        return;
     }
+    const int n = espaperplay_sd_fonts_list(sd_names, SETTINGS_FONT_MAX - 1);
+    for (int i = 0; i < n && s_font_count < SETTINGS_FONT_MAX; i++) {
+        strlcpy(s_font_names[s_font_count], sd_names[i], sizeof(s_font_names[0]));
+        s_font_count++;
+    }
+    heap_caps_free(sd_names);
 }
 
 /** 字体行点击：投递选择操作并关闭模态（NVS 写入由设置应用任务执行，重启后生效）。 */

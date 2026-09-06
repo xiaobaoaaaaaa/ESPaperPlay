@@ -57,6 +57,20 @@ esp_err_t espaperplay_sd_fonts_get_path(const char *file_name, char *buf, size_t
  */
 bool espaperplay_sd_fonts_exists(const char *file_name);
 
+/** SD 字体文件名的缓冲长度（FAT LFN 常用上界，与系统组件的字体名上限对齐）。 */
+#define ESPAPERPLAY_SD_FONTS_NAME_MAX 64
+
+/**
+ * @brief 枚举 SD 卡 fonts 目录内的字体文件（.ttf/.otf/.ttc，大小写不敏感）。
+ *
+ * 设备端设置页与 Web 字体列表共用同一扩展名规则。
+ *
+ * @param[out] names 条目名缓冲数组（每项 ESPAPERPLAY_SD_FONTS_NAME_MAX 字节）。
+ * @param[in]  max   数组容量。
+ * @return 实际填入的条目数；SD 未挂载 / 目录不存在返回 0。
+ */
+int espaperplay_sd_fonts_list(char names[][ESPAPERPLAY_SD_FONTS_NAME_MAX], int max);
+
 #ifdef __cplusplus
 }
 #endif

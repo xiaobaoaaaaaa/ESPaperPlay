@@ -5,6 +5,7 @@
 #include "espaperplay_ui_util.h"
 
 #include "espaperplay_fonts.h"
+#include "espaperplay_fs.h"
 #include "espaperplay_system.h"
 #include "icons_data.h"
 
@@ -112,19 +113,11 @@ void espaperplay_ui_utf8_truncate(const char *src, char *dst, size_t n) {
 }
 
 bool espaperplay_ui_path_join(char *dst, size_t n, const char *a, const char *b) {
-    const size_t need = strlen(a) + 1 + strlen(b) + 1;
-    if (need > n) {
-        return false;
-    }
-    strlcpy(dst, a, n);
-    strlcat(dst, "/", n);
-    strlcat(dst, b, n);
-    return true;
+    return espaperplay_fs_join(dst, n, a, b);
 }
 
 const char *espaperplay_ui_path_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return (slash != NULL && slash[1] != '\0') ? slash + 1 : path;
+    return espaperplay_fs_basename(path);
 }
 
 /* ------------------------------------------------------------------ */

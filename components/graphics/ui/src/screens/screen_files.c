@@ -25,6 +25,8 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espcache.h"
+#include "espaperplay_fs.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
@@ -263,40 +265,11 @@ static int files_modal_card_w(void) {
     return avail_w < espaperplay_ui_scaled(360) ? avail_w : espaperplay_ui_scaled(360);
 }
 
-/** 点在矩形内（逻辑坐标）。 */
-/** 对象相对屏幕的坐标（累加父级偏移；LVGL 的 get_x/y 只返回相对父）。 */
 /**
- * 显示名截断：UTF-8 边界安全截断到 @p n 字节内（含省略号），保证弹窗
- * 文案长度上界可证（-Werror=format-truncation 下 snprintf 拼 %s 必报错，
- * 故路径拼接一律 strlcpy/strlcat、文案拼接先截断名称再拼固定短语）。
+ * 显示名截断说明（util 见 espaperplay_ui_utf8_truncate）：文案长度上界可证
+ * （-Werror=format-truncation 下 snprintf 拼 %s 必报错），故路径拼接一律
+ * strlcpy/strlcat、文案拼接先截断名称再拼固定短语。
  */
-/** 条目名合法性：非空、非 "."/".."、不含 '/' 与控制字符（UTF-8 直通）。 */
-static bool files_name_valid(const char *s) {
-    size_t n = strlen(s);
-    if (n == 0 || n >= FILES_NAME_MAX) {
-        return false;
-    }
-    if (strcmp(s, ".") == 0 || strcmp(s, "..") == 0) {
-        return false;
-    }
-    /* FAT 禁止尾随空格/点，且部分实现对首尾空格处理不一致，提前拦截。 */
-    if (s[n - 1] == ' ' || s[n - 1] == '.') {
-        return false;
-    }
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c == '/' || c < 0x20 || c == 0x7F) {
-            return false;
-        }
-        /* FAT 保留字符： \ : * ? " < > |  */
-        if (c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' ||
-            c == '|') {
-            return false;
-        }
-    }
-    return true;
-}
-
 /** 取当前目录的相对显示路径（根目录显示 "/"）。 */
 static const char *files_rel_path(void) {
     const char *rel = s_cwd + strlen(FILES_ROOT);
@@ -323,7 +296,7 @@ static bool files_require_mounted(void) {
     return false;
 }
 
-/** 名称是否全为空格（经 files_name_valid 后调用）。 */
+/** 名称是否全为空格（经 espaperplay_fs_name_valid 后调用）。 */
 static bool files_name_is_all_spaces(const char *s) {
     for (size_t i = 0; s[i] != '\0'; i++) {
         if ((unsigned char)s[i] != ' ') {
@@ -365,47 +338,6 @@ static void files_update_bottom_buttons(void) {
  * 栈）执行，完成后经 espaperplay_gui_lv_call 回 LVGL 线程重扫刷新。
  */
 
-/** 递归删除目录 / 文件（深度受限，防御异常嵌套）。 */
-static esp_err_t files_rm_rf(const char *path, int depth) {
-    if (depth > FILES_RM_DEPTH_MAX) {
-        ESP_LOGE(TAG, "files: rm depth limit exceeded (%s)", path);
-        return ESP_ERR_INVALID_STATE;
-    }
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        return ESP_FAIL;
-    }
-    if (!S_ISDIR(st.st_mode)) {
-        return unlink(path) == 0 ? ESP_OK : ESP_FAIL;
-    }
-    DIR *d = opendir(path);
-    if (d == NULL) {
-        return ESP_FAIL;
-    }
-    esp_err_t ret = ESP_OK;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
-            continue;
-        }
-        char child[FILES_PATH_MAX];
-        if (!espaperplay_ui_path_join(child, sizeof(child), path, e->d_name)) {
-            ESP_LOGW(TAG, "files: rm child path too long (%s/%s)", path, e->d_name);
-            ret = ESP_FAIL;
-            continue;
-        }
-        esp_err_t sub = files_rm_rf(child, depth + 1);
-        if (sub != ESP_OK) {
-            ret = sub; /* 尽力删完其余条目，最后统一报失败 */
-        }
-    }
-    closedir(d);
-    if (ret == ESP_OK && rmdir(path) != 0) {
-        ret = ESP_FAIL;
-    }
-    return ret;
-}
-
 /** 回 LVGL 线程：应用写结果（重扫刷新 / 失败提示）。 */
 static void files_op_done_lv(void *arg) {
     files_result_t *r = arg;
@@ -438,7 +370,7 @@ static void files_worker_task_fn(void *arg) {
         } else if (w.type == FILES_WOP_RENAME) {
             err = rename(w.path_a, w.path_b) == 0 ? ESP_OK : ESP_FAIL;
         } else {
-            err = files_rm_rf(w.path_a, 0);
+            err = espaperplay_fs_rm_rf(w.path_a, FILES_RM_DEPTH_MAX);
         }
         const int err_no = errno;
         if (err == ESP_OK) {
@@ -1221,7 +1153,7 @@ static void files_kb_ok_cb(lv_event_t *e) {
         return;
     }
     const char *text = lv_textarea_get_text(s_kb_ta);
-    if (!files_name_valid(text) || files_name_is_all_spaces(text)) {
+    if (!espaperplay_fs_name_valid(text) || files_name_is_all_spaces(text)) {
         if (s_kb_status != NULL) {
             lv_label_set_text(s_kb_status, "名称无效：不能为空、全空格，且不能含 / 或控制字符");
         }

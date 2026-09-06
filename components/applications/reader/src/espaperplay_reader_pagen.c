@@ -5,6 +5,7 @@
  */
 
 #include "espaperplay_reader_pagen.h"
+#include "espcache.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -69,35 +70,80 @@ static void pagen_cache_path(char *buf, size_t n, uint32_t token, int chapter, u
              (unsigned)font_key);
 }
 
+/** 读缓存回调：校验头并读入分页表（容量不足走 KEEP，保留文件）。 */
+typedef struct {
+    uint32_t token;
+    int chapter;
+    uint32_t font_key;
+    uint32_t *blocks;
+    uint16_t *lines;
+    int max_cnt;
+    int cnt; /*!< 出参：读入条数（KEEP 且容量不足时为 -n） */
+} pagen_read_ctx_t;
+
+static espcache_result_t pagen_read_fn(FILE *f, void *ud) {
+    pagen_read_ctx_t *ctx = ud;
+    uint32_t hdr[6] = {0}; /* magic, ver, token, font_key, chapter, cnt */
+    if (fread(hdr, sizeof(uint32_t), 6, f) != 6) {
+        return ESPCACHE_CORRUPT;
+    }
+    if (hdr[0] != PAGEN_MAGIC || hdr[1] != PAGEN_VER || hdr[2] != ctx->token ||
+        hdr[3] != ctx->font_key || hdr[4] != (uint32_t)ctx->chapter || hdr[5] == 0) {
+        return ESPCACHE_CORRUPT;
+    }
+    const int n = (int)hdr[5];
+    if (n > ctx->max_cnt) {
+        /* 缓存有效但调用方表容量不足：返回所需容量（负值），由调用方
+         * 扩表后重读；绝不删除文件（大章节否则会被误删反复重算） */
+        ctx->cnt = -n;
+        return ESPCACHE_KEEP;
+    }
+    if (fread(ctx->blocks, sizeof(uint32_t), (size_t)n, f) != (size_t)n ||
+        fread(ctx->lines, sizeof(uint16_t), (size_t)n, f) != (size_t)n) {
+        return ESPCACHE_CORRUPT;
+    }
+    ctx->cnt = n;
+    return ESPCACHE_OK;
+}
+
 int espaperplay_pagen_load(uint32_t token, int chapter, uint32_t font_key, uint32_t *blocks,
                            uint16_t *lines, int max_cnt) {
     char path[96];
     pagen_cache_path(path, sizeof(path), token, chapter, font_key);
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        return 0;
+    pagen_read_ctx_t ctx = {
+        .token = token,
+        .chapter = chapter,
+        .font_key = font_key,
+        .blocks = blocks,
+        .lines = lines,
+        .max_cnt = max_cnt,
+        .cnt = 0,
+    };
+    if (espcache_read(path, pagen_read_fn, &ctx) == ESPCACHE_OK) {
+        return ctx.cnt;
     }
-    uint32_t hdr[6] = {0}; /* magic, ver, token, font_key, chapter, cnt */
-    int cnt = -1;
-    if (fread(hdr, sizeof(uint32_t), 6, f) == 6 && hdr[0] == PAGEN_MAGIC && hdr[1] == PAGEN_VER &&
-        hdr[2] == token && hdr[3] == font_key && hdr[4] == (uint32_t)chapter && hdr[5] > 0) {
-        const int n = (int)hdr[5];
-        if (n > max_cnt) {
-            /* 缓存有效但调用方表容量不足：返回所需容量（负值），由调用方
-             * 扩表后重读；绝不删除文件（大章节否则会被误删反复重算） */
-            fclose(f);
-            return -n;
-        }
-        if (fread(blocks, sizeof(uint32_t), (size_t)n, f) == (size_t)n &&
-            fread(lines, sizeof(uint16_t), (size_t)n, f) == (size_t)n) {
-            cnt = n;
-        }
+    return ctx.cnt < 0 ? ctx.cnt : 0;
+}
+
+/** 写缓存上下文与回调（头部 + blocks/lines 两段载荷）。 */
+typedef struct {
+    uint32_t token;
+    int chapter;
+    uint32_t font_key;
+    int cnt;
+    const uint32_t *blocks;
+    const uint16_t *lines;
+} pagen_write_ctx_t;
+
+static bool pagen_write_fn(FILE *f, void *ud) {
+    pagen_write_ctx_t *w = ud;
+    const uint32_t hdr[6] = {PAGEN_MAGIC, PAGEN_VER,     w->token,
+                             w->font_key, (uint32_t)w->chapter, (uint32_t)w->cnt};
+    if (fwrite(hdr, sizeof(uint32_t), 6, f) != 6) {
+        return false;
     }
-    fclose(f);
-    if (cnt < 0) {
-        remove(path); /* 损坏：删除待重建 */
-    }
-    return cnt;
+    return fwrite(w->blocks, sizeof(uint32_t), (size_t)w->cnt, f) == (size_t)w->cnt &&
+           fwrite(w->lines, sizeof(uint16_t), (size_t)w->cnt, f) == (size_t)w->cnt;
 }
 
 /** worker：把单槽任务写盘（临时文件 + rename 原子替换）。 */
@@ -115,28 +161,18 @@ static void pagen_worker_task(void *arg) {
             continue;
         }
 
-        mkdir(ESPAPERPLAY_SYSTEM_SD_DIR, 0755);
-        mkdir(ESPAPERPLAY_SYSTEM_SD_DIR "/cache", 0755);
-        mkdir(PAGEN_CACHE_DIR, 0755);
-
         char path[96];
         pagen_cache_path(path, sizeof(path), job.token, job.chapter, job.font_key);
-        char tmp[104];
-        snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-        FILE *f = fopen(tmp, "wb");
-        if (f != NULL) {
-            const uint32_t hdr[6] = {PAGEN_MAGIC,     PAGEN_VER,          job.token,
-                                     job.font_key,    (uint32_t)job.chapter, (uint32_t)job.cnt};
-            bool ok = fwrite(hdr, sizeof(uint32_t), 6, f) == 6;
-            ok = ok && fwrite(job.blocks, sizeof(uint32_t), (size_t)job.cnt, f) == (size_t)job.cnt;
-            ok = ok && fwrite(job.lines, sizeof(uint16_t), (size_t)job.cnt, f) == (size_t)job.cnt;
-            fclose(f);
-            if (ok) {
-                rename(tmp, path);
-                ESP_LOGI(TAG, "pagen: cached ch%d (%d page(s))", job.chapter + 1, job.cnt);
-            } else {
-                remove(tmp);
-            }
+        pagen_write_ctx_t wctx = {
+            .token = job.token,
+            .chapter = job.chapter,
+            .font_key = job.font_key,
+            .cnt = job.cnt,
+            .blocks = job.blocks,
+            .lines = job.lines,
+        };
+        if (espcache_write_atomic(path, pagen_write_fn, &wctx)) {
+            ESP_LOGI(TAG, "pagen: cached ch%d (%d page(s))", job.chapter + 1, job.cnt);
         }
         heap_caps_free(job.blocks);
         heap_caps_free(job.lines);

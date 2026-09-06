@@ -5,6 +5,7 @@
  */
 
 #include "espaperplay_reader_epub.h"
+#include "espcache.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -2349,33 +2350,37 @@ static bool epub_steal_ready(int idx, epub_packet_t *out) {
 #endif /* !ESPAPERPLAY_READER_EPUB_HOST */
 
 
-esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
-    if (abs_path == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    espaperplay_reader_epub_close();
-    memset(&s_epub.zip, 0, sizeof(s_epub.zip));
-    s_epub.zip.fp = fopen(abs_path, "rb");
-    if (s_epub.zip.fp == NULL) {
+/**
+ * EPUB 打开引导（open 与 probe_cover 共用）：打开文件 → zip 解析 →
+ * container.xml → OPF 条目定位并解出 OPF 文本。
+ * 成功：*z 持有打开句柄，*opf_out 为堆上 OPF 文本（调用方 heap_caps_free），
+ *       opf_dir 为 OPF 所在目录（可 NULL）。
+ * 失败：*z 已关闭，返回错误码。
+ */
+static esp_err_t epub_zip_load_opf(const char *abs_path, epub_zip_t *z, char **opf_out,
+                                   char *opf_dir, size_t dir_len) {
+    memset(z, 0, sizeof(*z));
+    z->fp = fopen(abs_path, "rb");
+    if (z->fp == NULL) {
         return ESP_ERR_NOT_FOUND;
     }
-    esp_err_t err = epub_zip_parse(&s_epub.zip);
+    esp_err_t err = epub_zip_parse(z);
     if (err != ESP_OK) {
-        epub_zip_close(&s_epub.zip);
+        epub_zip_close(z);
         return err;
     }
 
     /* container.xml → OPF 路径 */
-    int zi = epub_zip_find(&s_epub.zip, "META-INF/container.xml");
+    int zi = epub_zip_find(z, "META-INF/container.xml");
     if (zi < 0) {
-        epub_zip_close(&s_epub.zip);
-        ESP_LOGW(TAG, "epub: container.xml missing");
+        epub_zip_close(z);
+        ESP_LOGD(TAG, "epub: container.xml missing");
         return ESP_ERR_NOT_SUPPORTED;
     }
     char *container = NULL;
-    err = epub_zip_extract(&s_epub.zip, zi, &container, NULL);
+    err = epub_zip_extract(z, zi, &container, NULL);
     if (err != ESP_OK) {
-        epub_zip_close(&s_epub.zip);
+        epub_zip_close(z);
         return err;
     }
     char opf_path[600];
@@ -2387,22 +2392,38 @@ esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
     }
     heap_caps_free(container);
     if (!ok) {
-        epub_zip_close(&s_epub.zip);
+        epub_zip_close(z);
         ESP_LOGW(TAG, "epub: OPF path not found in container.xml");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    zi = epub_zip_find(&s_epub.zip, opf_path);
+    zi = epub_zip_find(z, opf_path);
     if (zi < 0) {
-        epub_zip_close(&s_epub.zip);
+        epub_zip_close(z);
         ESP_LOGW(TAG, "epub: OPF missing: %s", opf_path);
         return ESP_ERR_NOT_SUPPORTED;
     }
-    path_dir(opf_path, s_epub.opf_dir, sizeof(s_epub.opf_dir));
-    char *opf = NULL;
-    err = epub_zip_extract(&s_epub.zip, zi, &opf, NULL);
+    if (opf_dir != NULL) {
+        path_dir(opf_path, opf_dir, dir_len);
+    }
+    *opf_out = NULL;
+    err = epub_zip_extract(z, zi, opf_out, NULL);
     if (err != ESP_OK) {
-        epub_zip_close(&s_epub.zip);
+        epub_zip_close(z);
+        return err;
+    }
+    return ESP_OK;
+}
+
+esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
+    if (abs_path == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    espaperplay_reader_epub_close();
+    char *opf = NULL;
+    esp_err_t err = epub_zip_load_opf(abs_path, &s_epub.zip, &opf, s_epub.opf_dir,
+                                      sizeof(s_epub.opf_dir));
+    if (err != ESP_OK) {
         return err;
     }
     err = epub_parse_opf(opf);
@@ -2416,17 +2437,8 @@ esp_err_t espaperplay_reader_epub_open(const char *abs_path) {
         return err;
     }
 
-    /* 书指纹：路径哈希 ^ mtime ^ size（缓存名与预取槽校验；书变更自动失效） */
-    struct stat st;
-    uint32_t token = 1073741827u;
-    const char *tp_ = abs_path;
-    while (*tp_ != '\0') {
-        token = (token ^ (uint32_t)(unsigned char)*tp_++) * 16777619u; /* FNV-1a */
-    }
-    if (stat(abs_path, &st) == 0) {
-        token ^= (uint32_t)st.st_mtime ^ (uint32_t)st.st_size;
-    }
-    s_epub.token = token;
+    /* 书指纹（缓存名与预取槽校验；书变更自动失效） */
+    s_epub.token = espcache_file_token(abs_path);
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
     s_worker_state = 0; /* 换书重试创建（上次失败可能是内存瞬时不足） */
     epub_worker_ensure();
@@ -2512,97 +2524,83 @@ static void epub_cache_path(char *buf, size_t n, uint32_t token, int idx) {
     snprintf(buf, n, "%s/%08x.ch%03d", EPUB_CACHE_DIR, (unsigned)token, idx);
 }
 
+/** 读缓存回调：校验头并把章节包读入 PSRAM（损坏由模块统一删文件）。
+ *  调用方在 pkt 中预填 token/chapter 作校验键。 */
+static espcache_result_t epub_cache_read_fn(FILE *f, void *ud) {
+    epub_packet_t *pkt = ud;
+    const uint32_t token = pkt->token;
+    const int idx = pkt->chapter;
+    uint32_t hdr[6] = {0}; /* magic, ver, token, chapter, text_len, block_cnt */
+    if (fread(hdr, sizeof(uint32_t), 6, f) != 6) {
+        return ESPCACHE_CORRUPT;
+    }
+    int32_t cnts[2] = {0}; /* block_cnt, image_cnt */
+    if (fread(cnts, sizeof(int32_t), 2, f) != 2) {
+        return ESPCACHE_CORRUPT;
+    }
+    if (hdr[0] != EPUB_CACHE_MAGIC || hdr[1] != EPUB_CACHE_VER || hdr[3] != (uint32_t)idx ||
+        hdr[2] != token) {
+        return ESPCACHE_CORRUPT;
+    }
+    if (cnts[0] < 0 || cnts[0] > 20000 || cnts[1] < 0 || cnts[1] > 256 ||
+        hdr[4] == 0 || hdr[4] > ESPAPERPLAY_EPUB_MAX_ENTRY_BYTES) {
+        return ESPCACHE_CORRUPT;
+    }
+    memset(pkt, 0, sizeof(*pkt));
+    pkt->token = token;
+    pkt->chapter = idx;
+    if (fread(pkt->title, 1, sizeof(pkt->title), f) != sizeof(pkt->title)) {
+        return ESPCACHE_CORRUPT;
+    }
+    pkt->title[sizeof(pkt->title) - 1] = '\0';
+    pkt->block_cnt = cnts[0];
+    pkt->image_cnt = cnts[1];
+    pkt->text_len = hdr[4];
+    bool bad = false;
+    if (pkt->block_cnt > 0) {
+        pkt->blocks = heap_caps_malloc((size_t)pkt->block_cnt * sizeof(*pkt->blocks),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (pkt->blocks == NULL ||
+            fread(pkt->blocks, sizeof(*pkt->blocks), (size_t)pkt->block_cnt, f) !=
+                (size_t)pkt->block_cnt) {
+            bad = true;
+        }
+    }
+    if (!bad && pkt->image_cnt > 0) {
+        pkt->images = heap_caps_malloc((size_t)pkt->image_cnt * sizeof(int),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (pkt->images == NULL ||
+            fread(pkt->images, sizeof(int), (size_t)pkt->image_cnt, f) != (size_t)pkt->image_cnt) {
+            bad = true;
+        }
+    }
+    if (!bad) {
+        pkt->text = heap_caps_malloc(pkt->text_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (pkt->text == NULL || fread(pkt->text, 1, pkt->text_len, f) != pkt->text_len) {
+            bad = true;
+        } else {
+            pkt->text[pkt->text_len] = '\0';
+        }
+    }
+    if (bad) {
+        epub_packet_free(pkt);
+        return ESPCACHE_CORRUPT;
+    }
+    return ESPCACHE_OK;
+}
+
 /** 读缓存到包（命中返回 true；worker / LVGL 均可调用，只读不写）。 */
 static bool epub_cache_read(epub_packet_t *pkt, uint32_t token, int idx) {
     char path[96];
     epub_cache_path(path, sizeof(path), token, idx);
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        return false;
-    }
-    uint32_t hdr[6] = {0}; /* magic, ver, token, chapter, text_len, block_cnt */
-    bool ok = false;
-    do {
-        if (fread(hdr, sizeof(uint32_t), 6, f) != 6) {
-            break;
-        }
-        int32_t cnts[2] = {0}; /* block_cnt, image_cnt */
-        if (fread(cnts, sizeof(int32_t), 2, f) != 2) {
-            break;
-        }
-        if (hdr[0] != EPUB_CACHE_MAGIC || hdr[1] != EPUB_CACHE_VER || hdr[3] != (uint32_t)idx ||
-            hdr[2] != token) {
-            break;
-        }
-        if (cnts[0] < 0 || cnts[0] > 20000 || cnts[1] < 0 || cnts[1] > 256 ||
-            hdr[4] == 0 || hdr[4] > ESPAPERPLAY_EPUB_MAX_ENTRY_BYTES) {
-            break;
-        }
-        memset(pkt, 0, sizeof(*pkt));
-        pkt->token = token;
-        pkt->chapter = idx;
-        if (fread(pkt->title, 1, sizeof(pkt->title), f) != sizeof(pkt->title)) {
-            break;
-        }
-        pkt->title[sizeof(pkt->title) - 1] = '\0';
-        pkt->block_cnt = cnts[0];
-        pkt->image_cnt = cnts[1];
-        pkt->text_len = hdr[4];
-        bool bad = false;
-        if (pkt->block_cnt > 0) {
-            pkt->blocks = heap_caps_malloc((size_t)pkt->block_cnt * sizeof(*pkt->blocks),
-                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (pkt->blocks == NULL ||
-                fread(pkt->blocks, sizeof(*pkt->blocks), (size_t)pkt->block_cnt, f) !=
-                    (size_t)pkt->block_cnt) {
-                bad = true;
-            }
-        }
-        if (!bad && pkt->image_cnt > 0) {
-            pkt->images = heap_caps_malloc((size_t)pkt->image_cnt * sizeof(int),
-                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (pkt->images == NULL ||
-                fread(pkt->images, sizeof(int), (size_t)pkt->image_cnt, f) !=
-                    (size_t)pkt->image_cnt) {
-                bad = true;
-            }
-        }
-        if (!bad) {
-            pkt->text = heap_caps_malloc(pkt->text_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (pkt->text == NULL ||
-                fread(pkt->text, 1, pkt->text_len, f) != pkt->text_len) {
-                bad = true;
-            } else {
-                pkt->text[pkt->text_len] = '\0';
-            }
-        }
-        if (bad) {
-            epub_packet_free(pkt);
-            break;
-        }
-        ok = true;
-    } while (false);
-    fclose(f);
-    if (!ok) {
-        remove(path); /* 损坏缓存：删除待重建 */
-    }
-    return ok;
+    pkt->token = token;
+    pkt->chapter = idx;
+    return espcache_read(path, epub_cache_read_fn, pkt) == ESPCACHE_OK;
 }
 
-/** 写缓存（仅 worker 调用：SD 写不进 LVGL 线程）。 */
-static void epub_cache_write(const epub_packet_t *pkt) {
-    /* 目录惰性创建 */
-    mkdir(ESPAPERPLAY_SYSTEM_SD_DIR, 0755);
-    mkdir(ESPAPERPLAY_SYSTEM_SD_DIR "/cache", 0755);
-    mkdir(EPUB_CACHE_DIR, 0755);
-    char path[96];
-    epub_cache_path(path, sizeof(path), pkt->token, pkt->chapter);
-    char tmp[104];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (f == NULL) {
-        return;
-    }
+/** 写缓存回调：头 + 计数 + 标题 + blocks/images/text 载荷。 */
+static bool epub_cache_write_fn(FILE *f, void *ud) {
+    const epub_packet_t *pkt = ud;
     const uint32_t hdr[6] = {EPUB_CACHE_MAGIC,
                              EPUB_CACHE_VER,
                              pkt->token,
@@ -2622,12 +2620,14 @@ static void epub_cache_write(const epub_packet_t *pkt) {
              (size_t)pkt->image_cnt;
     }
     ok = ok && fwrite(pkt->text, 1, pkt->text_len, f) == pkt->text_len;
-    fclose(f);
-    if (ok) {
-        rename(tmp, path); /* 原子替换，避免半写文件被读到 */
-    } else {
-        remove(tmp);
-    }
+    return ok;
+}
+
+/** 写缓存（仅 worker 调用：SD 写不进 LVGL 线程）。 */
+static void epub_cache_write(const epub_packet_t *pkt) {
+    char path[96];
+    epub_cache_path(path, sizeof(path), pkt->token, pkt->chapter);
+    espcache_write_atomic(path, epub_cache_write_fn, (void *)pkt);
 }
 
 #endif /* !ESPAPERPLAY_READER_EPUB_HOST */
@@ -3283,53 +3283,10 @@ esp_err_t espaperplay_reader_epub_probe_cover(const char *abs_path, int max_w, i
         return ESP_ERR_INVALID_ARG;
     }
     epub_zip_t z;
-    memset(&z, 0, sizeof(z));
-    z.fp = fopen(abs_path, "rb");
-    if (z.fp == NULL) {
-        return ESP_ERR_NOT_FOUND;
-    }
-    esp_err_t err = epub_zip_parse(&z);
-    if (err != ESP_OK) {
-        epub_zip_close(&z);
-        return err;
-    }
-
-    /* container.xml → OPF 路径（与 open 同路） */
-    int zi = epub_zip_find(&z, "META-INF/container.xml");
-    if (zi < 0) {
-        epub_zip_close(&z);
-        ESP_LOGD(TAG, "cover: container.xml missing");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-    char *container = NULL;
-    err = epub_zip_extract(&z, zi, &container, NULL);
-    if (err != ESP_OK) {
-        epub_zip_close(&z);
-        return err;
-    }
-    char opf_path[600];
-    const char *fp_attr = strcasestr(container, "full-path");
-    bool ok = false;
-    if (fp_attr != NULL) {
-        const char *qe = strchr(fp_attr, '>');
-        ok = qe != NULL && xml_attr(fp_attr, qe, "full-path", opf_path, sizeof(opf_path));
-    }
-    heap_caps_free(container);
-    if (!ok) {
-        epub_zip_close(&z);
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-    zi = epub_zip_find(&z, opf_path);
-    if (zi < 0) {
-        epub_zip_close(&z);
-        return ESP_ERR_NOT_SUPPORTED;
-    }
     char opf_dir[300];
-    path_dir(opf_path, opf_dir, sizeof(opf_dir));
     char *opf = NULL;
-    err = epub_zip_extract(&z, zi, &opf, NULL);
+    esp_err_t err = epub_zip_load_opf(abs_path, &z, &opf, opf_dir, sizeof(opf_dir));
     if (err != ESP_OK) {
-        epub_zip_close(&z);
         return err;
     }
 

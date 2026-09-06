@@ -25,6 +25,11 @@
 
 #include "webserver_internal.h"
 
+#include "espaperplay_fs.h"
+#include "espaperplay_sd_fonts.h"
+
+#define FONTS_LIST_MAX 32 /* 字体列表上限（SD 卡字体数防御值） */
+
 static const char *TAG = "ESPaperPlay_WEB_FONT";
 
 /** 上传请求体的流式读写缓冲（分块写入 SD，避免整文件驻留 RAM）。 */
@@ -83,40 +88,28 @@ esp_err_t webserver_handle_fonts_get(httpd_req_t *req) {
 
     cJSON *fonts = cJSON_AddArrayToObject(root, "fonts");
     if (mounted) {
-        DIR *d = opendir(ESPAPERPLAY_FONTS_SD_DIR);
-        if (d != NULL) {
-            struct dirent *e = NULL;
-            while ((e = readdir(d)) != NULL) {
-                const char *nm = e->d_name;
-                size_t len = strlen(nm);
-                if (len < 5) {
-                    continue;
-                }
-                const char *ext = nm + len - 4;
-                if (strcasecmp(ext, ".ttf") == 0 || strcasecmp(ext, ".otf") == 0 ||
-                    strcasecmp(ext, ".ttc") == 0) {
-                    cJSON *item = cJSON_CreateObject();
-                    if (item == NULL) {
-                        closedir(d);
-                        cJSON_Delete(root);
-                        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-                        return ESP_FAIL;
-                    }
-                    cJSON_AddStringToObject(item, "name", nm);
-                    /* 文件大小（字节），用于前端展示。 */
-                    char fpath[sizeof(ESPAPERPLAY_FONTS_SD_DIR) +
-                               ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN] = {0};
-                    snprintf(fpath, sizeof(fpath), "%s/%s", ESPAPERPLAY_FONTS_SD_DIR, nm);
-                    struct stat st;
-                    cJSON_AddNumberToObject(item, "size",
-                                            stat(fpath, &st) == 0 ? (double)st.st_size : 0);
-                    cJSON_AddBoolToObject(item, "deletable", true);
-                    cJSON_AddBoolToObject(item, "active",
-                                          strcmp(espaperplay_fonts_get_active_name(), nm) == 0);
-                    cJSON_AddItemToArray(fonts, item);
-                }
+        char names[FONTS_LIST_MAX][ESPAPERPLAY_SD_FONTS_NAME_MAX] = {{0}};
+        const int n = espaperplay_sd_fonts_list(names, FONTS_LIST_MAX);
+        for (int i = 0; i < n; i++) {
+            const char *nm = names[i];
+            cJSON *item = cJSON_CreateObject();
+            if (item == NULL) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+                return ESP_FAIL;
             }
-            closedir(d);
+            cJSON_AddStringToObject(item, "name", nm);
+            /* 文件大小（字节），用于前端展示。 */
+            char fpath[sizeof(ESPAPERPLAY_FONTS_SD_DIR) + ESPAPERPLAY_SD_FONTS_NAME_MAX];
+            struct stat st = {0};
+            if (espaperplay_fs_join(fpath, sizeof(fpath), ESPAPERPLAY_FONTS_SD_DIR, nm)) {
+                (void)stat(fpath, &st);
+            }
+            cJSON_AddNumberToObject(item, "size", (double)st.st_size);
+            cJSON_AddBoolToObject(item, "deletable", true);
+            cJSON_AddBoolToObject(item, "active",
+                                  strcmp(espaperplay_fonts_get_active_name(), nm) == 0);
+            cJSON_AddItemToArray(fonts, item);
         }
     }
 
@@ -184,9 +177,8 @@ esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 逐级创建字体目录（FAT mkdir 不支持一次建多级）。 */
-    mkdir(ESPAPERPLAY_STORAGE_MOUNT_POINT "/system", 0777);
-    if (mkdir(ESPAPERPLAY_FONTS_SD_DIR, 0777) != 0 && errno != EEXIST) {
+    /* 字体目录（逐级创建，已存在静默通过）。 */
+    if (espaperplay_fs_mkdir_p(ESPAPERPLAY_FONTS_SD_DIR) != ESP_OK) {
         webserver_send_json_err(req, "无法创建字体目录");
         return ESP_FAIL;
     }

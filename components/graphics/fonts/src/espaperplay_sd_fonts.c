@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <dirent.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -248,4 +250,32 @@ esp_err_t espaperplay_sd_fonts_get_path(const char *file_name, char *buf, size_t
         return ESP_ERR_INVALID_SIZE;
     }
     return ESP_OK;
+}
+
+int espaperplay_sd_fonts_list(char names[][ESPAPERPLAY_SD_FONTS_NAME_MAX], int max) {
+    if (names == NULL || max <= 0 || !espaperplay_storage_is_mounted()) {
+        return 0;
+    }
+    int cnt = 0;
+    DIR *d = opendir(ESPAPERPLAY_FONTS_SD_DIR);
+    if (d == NULL) {
+        return 0;
+    }
+    struct dirent *e = NULL;
+    while ((e = readdir(d)) != NULL && cnt < max) {
+        const char *nm = e->d_name;
+        const size_t len = strlen(nm);
+        if (len < 5 || len >= ESPAPERPLAY_SD_FONTS_NAME_MAX) {
+            continue;
+        }
+        const char *ext = nm + len - 4;
+        if (strcasecmp(ext, ".ttf") != 0 && strcasecmp(ext, ".otf") != 0 &&
+            strcasecmp(ext, ".ttc") != 0) {
+            continue;
+        }
+        strlcpy(names[cnt], nm, ESPAPERPLAY_SD_FONTS_NAME_MAX);
+        cnt++;
+    }
+    closedir(d);
+    return cnt;
 }

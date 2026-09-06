@@ -5,6 +5,7 @@
  */
 
 #include "espaperplay_reader.h"
+#include "espcache.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,16 +159,8 @@ static esp_err_t reader_open_txt(const char *abs_path, size_t file_size) {
         *dot = '\0';
     }
 
-    /* 书指纹：路径哈希 ^ mtime ^ size（分页缓存键；文件变更自动失效） */
-    struct stat st;
-    uint32_t token = 1073741827u;
-    for (const char *c = abs_path; *c != '\0'; c++) {
-        token = (token ^ (uint32_t)(unsigned char)*c) * 16777619u; /* FNV-1a */
-    }
-    if (stat(abs_path, &st) == 0) {
-        token ^= (uint32_t)st.st_mtime ^ (uint32_t)st.st_size;
-    }
-    s_txt_token = token;
+    /* 书指纹（分页缓存键；文件变更自动失效） */
+    s_txt_token = espcache_file_token(abs_path);
 
     strlcpy(s_path, abs_path, sizeof(s_path));
     s_open = true;

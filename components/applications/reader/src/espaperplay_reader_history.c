@@ -5,6 +5,7 @@
  */
 
 #include "espaperplay_reader_history.h"
+#include "espaperplay_fs.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -89,10 +90,9 @@ static int hist_parse_line(char *line, espaperplay_reader_history_entry_t *e) {
     return 0;
 }
 
-/** 确保历史目录存在（mkdir 已存在时静默忽略）。 */
+/** 确保历史目录存在（逐级创建，已存在静默忽略）。 */
 static void hist_ensure_dir(void) {
-    (void)mkdir(ESPAPERPLAY_SYSTEM_SD_DIR, 0775);
-    (void)mkdir(HIST_FILE_DIR, 0775);
+    (void)espaperplay_fs_mkdir_p(HIST_FILE_DIR);
 }
 
 /** 把全部条目写回文件（最前 = 最近）。 */

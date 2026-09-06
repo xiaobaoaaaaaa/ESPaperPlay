@@ -21,6 +21,8 @@
 #include "espaperplay_storage.h"
 
 #include "webserver_internal.h"
+#include "espcache.h"
+#include "espaperplay_fs.h"
 
 static const char *TAG = "ESPaperPlay_WEB_FILES";
 
@@ -114,23 +116,6 @@ static bool files_rel_normalize(const char *in, char *out, size_t out_size) {
     return true;
 }
 
-/** 条目名合法性：非空、非 "."/".."、不含路径分隔符与控制字符。 */
-static bool files_name_valid(const char *name) {
-    if (name == NULL || name[0] == '\0') {
-        return false;
-    }
-    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
-        return false;
-    }
-    for (const char *p = name; *p != '\0'; p++) {
-        unsigned char c = (unsigned char)*p;
-        if (c == '/' || c == '\\' || c < 0x20 || c == 0x7F) {
-            return false;
-        }
-    }
-    return true;
-}
-
 /** 由规范化相对路径构造绝对路径（挂载点 + rel；rel 空串 = 挂载点本身）。 */
 static bool files_abs_path(const char *rel, char *dst, size_t size) {
     if (strlcpy(dst, ESPAPERPLAY_STORAGE_MOUNT_POINT, size) >= size) {
@@ -140,17 +125,6 @@ static bool files_abs_path(const char *rel, char *dst, size_t size) {
         return false;
     }
     return true;
-}
-
-/** 拼接目录 + "/" + 条目名（strlcpy/strlcat 恒 NUL 结尾；超长返回 false）。 */
-static bool files_abs_join(char *dst, size_t size, const char *dir, const char *name) {
-    if (strlcpy(dst, dir, size) >= size) {
-        return false;
-    }
-    if (strlcat(dst, "/", size) >= size) {
-        return false;
-    }
-    return strlcat(dst, name, size) < size;
 }
 
 /** 从表单解析目录 path 字段并转为绝对路径；失败已响应并返回 false。 */
@@ -168,7 +142,7 @@ static bool files_resolve_dir(httpd_req_t *req, const char *body, char *abs, siz
 /** 从表单解析名称字段并校验；失败已响应并返回 false。 */
 static bool files_name_field(httpd_req_t *req, const char *body, const char *field, char *out,
                              size_t size) {
-    if (!webserver_form_get_field(body, field, out, size) || !files_name_valid(out)) {
+    if (!webserver_form_get_field(body, field, out, size) || !espaperplay_fs_name_valid(out)) {
         webserver_send_json_err(req, "缺少或非法名称字段");
         return false;
     }
@@ -245,45 +219,6 @@ static void files_content_disposition(const char *name, char *out, size_t out_si
 }
 
 /** 递归删除文件 / 目录（深度受限；尽力删完其余条目，最后统一报失败）。 */
-static esp_err_t files_rm_rf(const char *path, int depth) {
-    if (depth > FILES_RM_DEPTH_MAX) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        return ESP_FAIL;
-    }
-    if (!S_ISDIR(st.st_mode)) {
-        return (unlink(path) == 0) ? ESP_OK : ESP_FAIL;
-    }
-    DIR *d = opendir(path);
-    if (d == NULL) {
-        return ESP_FAIL;
-    }
-    esp_err_t ret = ESP_OK;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.' &&
-            (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0'))) {
-            continue;
-        }
-        char child[FILES_ABS_MAX];
-        if (!files_abs_join(child, sizeof(child), path, e->d_name)) {
-            ret = ESP_ERR_INVALID_SIZE;
-            continue;
-        }
-        esp_err_t sub = files_rm_rf(child, depth + 1);
-        if (sub != ESP_OK) {
-            ret = sub;
-        }
-    }
-    closedir(d);
-    if (ret == ESP_OK && rmdir(path) != 0) {
-        ret = ESP_FAIL;
-    }
-    return ret;
-}
-
 /* ------------------------------------------------------------------ */
 /* 路由处理器                                                           */
 /* ------------------------------------------------------------------ */
@@ -341,7 +276,7 @@ esp_err_t webserver_handle_files_get(httpd_req_t *req) {
                 }
                 char full[FILES_ABS_MAX];
                 struct stat st;
-                if (!files_abs_join(full, sizeof(full), abs, e->d_name) || stat(full, &st) != 0) {
+                if (!espaperplay_fs_join(full, sizeof(full), abs, e->d_name) || stat(full, &st) != 0) {
                     continue;
                 }
                 const bool is_dir = S_ISDIR(st.st_mode);
@@ -402,7 +337,7 @@ esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req) {
     }
 
     char target[FILES_ABS_MAX];
-    if (!files_abs_join(target, sizeof(target), abs, name)) {
+    if (!espaperplay_fs_join(target, sizeof(target), abs, name)) {
         webserver_send_json_err(req, "路径过长");
         return ESP_FAIL;
     }
@@ -446,8 +381,8 @@ esp_err_t webserver_handle_files_rename_post(httpd_req_t *req) {
 
     char src[FILES_ABS_MAX];
     char dst[FILES_ABS_MAX];
-    if (!files_abs_join(src, sizeof(src), abs, from) ||
-        !files_abs_join(dst, sizeof(dst), abs, to)) {
+    if (!espaperplay_fs_join(src, sizeof(src), abs, from) ||
+        !espaperplay_fs_join(dst, sizeof(dst), abs, to)) {
         webserver_send_json_err(req, "路径过长");
         return ESP_FAIL;
     }
@@ -492,7 +427,7 @@ esp_err_t webserver_handle_files_delete_post(httpd_req_t *req) {
     }
 
     char target[FILES_ABS_MAX];
-    if (!files_abs_join(target, sizeof(target), abs, name)) {
+    if (!espaperplay_fs_join(target, sizeof(target), abs, name)) {
         webserver_send_json_err(req, "路径过长");
         return ESP_FAIL;
     }
@@ -501,7 +436,7 @@ esp_err_t webserver_handle_files_delete_post(httpd_req_t *req) {
         webserver_send_json_err(req, "条目不存在");
         return ESP_FAIL;
     }
-    esp_err_t err = files_rm_rf(target, 0);
+    esp_err_t err = espaperplay_fs_rm_rf(target, FILES_RM_DEPTH_MAX);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "delete failed (%s): %s", target, esp_err_to_name(err));
         webserver_send_json_err(req, S_ISDIR(st.st_mode) ? "删除失败（目录过深或部分内容无法删除）"
@@ -536,7 +471,7 @@ static bool files_resolve_query_target(httpd_req_t *req, char *target, size_t ta
         webserver_send_json_err(req, "缺少或非法目录 path");
         return false;
     }
-    if (!webserver_form_get_field(query, "name", name, sizeof(name)) || !files_name_valid(name)) {
+    if (!webserver_form_get_field(query, "name", name, sizeof(name)) || !espaperplay_fs_name_valid(name)) {
         webserver_send_json_err(req, "缺少或非法名称 name");
         return false;
     }
@@ -547,7 +482,7 @@ static bool files_resolve_query_target(httpd_req_t *req, char *target, size_t ta
     }
 
     char abs[FILES_ABS_MAX];
-    if (!files_abs_path(rel, abs, sizeof(abs)) || !files_abs_join(target, target_size, abs, name)) {
+    if (!files_abs_path(rel, abs, sizeof(abs)) || !espaperplay_fs_join(target, target_size, abs, name)) {
         webserver_send_json_err(req, "路径过长");
         return false;
     }

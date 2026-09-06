@@ -20,6 +20,8 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_storage.h"
+#include "espcache.h"
+#include "espaperplay_fs.h"
 
 #include "espaperplay_reader_epub.h"
 
@@ -57,94 +59,90 @@ static uint32_t s_gen = 0; /* cancel 代际：作废在途任务 */
 /* SD 缓存                                                              */
 /* ------------------------------------------------------------------ */
 
-/** 封面缓存路径（书指纹 = 路径哈希 ^ mtime ^ size，与章节缓存同方案）。 */
-static void cover_cache_path(char *buf, size_t n, const char *path, uint32_t src_size,
-                             uint32_t src_mtime) {
-    uint32_t token = 1073741827u;
-    const char *p = path;
-    while (*p != '\0') {
-        token = (token ^ (uint32_t)(unsigned char)*p++) * 16777619u; /* FNV-1a */
+/** 封面缓存路径（文件指纹 token，与章节/分页缓存同方案）。 */
+static void cover_cache_path(char *buf, size_t n, const char *path) {
+    snprintf(buf, n, "%s/%08x.cov", COVER_CACHE_DIR,
+             (unsigned)espcache_file_token(path));
+}
+
+/** 读缓存上下文：结果出参 + 源指纹（头内必须一致）。 */
+typedef struct {
+    espaperplay_reader_cover_result_t *out;
+    uint32_t src_size;
+    uint32_t src_mtime;
+} cover_read_ctx_t;
+
+/** 读缓存回调：校验头并读出封面（含负缓存 w==0 无封面）。 */
+static espcache_result_t cover_cache_read_fn(FILE *f, void *ud) {
+    cover_read_ctx_t *ctx = ud;
+    espaperplay_reader_cover_result_t *out = ctx->out;
+    uint32_t hdr[6] = {0}; /* magic, ver, w, h, src_size, src_mtime */
+    if (fread(hdr, sizeof(uint32_t), 6, f) != 6) {
+        return ESPCACHE_CORRUPT;
     }
-    token ^= src_mtime ^ src_size;
-    snprintf(buf, n, "%s/%08x.cov", COVER_CACHE_DIR, (unsigned)token);
+    if (hdr[0] != COVER_CACHE_MAGIC || hdr[1] != COVER_CACHE_VER || hdr[4] != ctx->src_size ||
+        hdr[5] != ctx->src_mtime) {
+        return ESPCACHE_CORRUPT;
+    }
+    const uint32_t w = hdr[2];
+    const uint32_t h = hdr[3];
+    if (w == 0 && h == 0) { /* 负缓存：无封面 */
+        out->w = 0;
+        out->h = 0;
+        out->buf = NULL;
+        return ESPCACHE_OK;
+    }
+    if (w == 0 || h == 0 || w > 1024 || h > 1024) {
+        return ESPCACHE_CORRUPT;
+    }
+    uint8_t *buf = heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (buf == NULL) {
+        return ESPCACHE_CORRUPT;
+    }
+    if (fread(buf, 1, (size_t)w * h * 2, f) != (size_t)w * h * 2) {
+        heap_caps_free(buf);
+        return ESPCACHE_CORRUPT;
+    }
+    out->w = (uint16_t)w;
+    out->h = (uint16_t)h;
+    out->buf = buf;
+    return ESPCACHE_OK;
 }
 
 /** 读缓存。命中返回 true（含负缓存：w==0 无封面）。 */
 static bool cover_cache_load(const char *cache_path, uint32_t src_size, uint32_t src_mtime,
                              espaperplay_reader_cover_result_t *out) {
-    FILE *f = fopen(cache_path, "rb");
-    if (f == NULL) {
+    cover_read_ctx_t ctx = {.out = out, .src_size = src_size, .src_mtime = src_mtime};
+    return espcache_read(cache_path, cover_cache_read_fn, &ctx) == ESPCACHE_OK;
+}
+
+/** 写缓存上下文。 */
+typedef struct {
+    uint32_t hdr[6];    /* magic, ver, w, h, src_size, src_mtime */
+    const uint8_t *data; /*!< NULL=负缓存（仅写头部） */
+} cover_write_ctx_t;
+
+/** 写缓存回调：头部 + 像素载荷（data==NULL 时仅头部 = 负缓存）。 */
+static bool cover_cache_write_fn(FILE *f, void *ud) {
+    cover_write_ctx_t *ctx = ud;
+    if (fwrite(ctx->hdr, sizeof(uint32_t), 6, f) != 6) {
         return false;
     }
-    uint32_t hdr[6] = {0}; /* magic, ver, w, h, src_size, src_mtime */
-    bool ok = false;
-    do {
-        if (fread(hdr, sizeof(uint32_t), 6, f) != 6) {
-            break;
-        }
-        if (hdr[0] != COVER_CACHE_MAGIC || hdr[1] != COVER_CACHE_VER ||
-            hdr[4] != src_size || hdr[5] != src_mtime) {
-            break;
-        }
-        const uint32_t w = hdr[2];
-        const uint32_t h = hdr[3];
-        if (w == 0 || h == 0) {
-            if (w == 0 && h == 0) { /* 负缓存：无封面 */
-                out->w = 0;
-                out->h = 0;
-                out->buf = NULL;
-                ok = true;
-            }
-            break;
-        }
-        if (w > 1024 || h > 1024) {
-            break;
-        }
-        uint8_t *buf = heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (buf == NULL) {
-            break;
-        }
-        if (fread(buf, 1, (size_t)w * h * 2, f) != (size_t)w * h * 2) {
-            heap_caps_free(buf);
-            break;
-        }
-        out->w = (uint16_t)w;
-        out->h = (uint16_t)h;
-        out->buf = buf;
-        ok = true;
-    } while (false);
-    fclose(f);
-    if (!ok) {
-        remove(cache_path); /* 损坏 / 失配缓存：删除待重建 */
+    if (ctx->data != NULL) {
+        const size_t bytes = (size_t)ctx->hdr[2] * ctx->hdr[3] * 2;
+        return fwrite(ctx->data, 1, bytes, f) == bytes;
     }
-    return ok;
+    return true;
 }
 
 /** 写缓存（仅 worker 调用）。data==NULL 时写负缓存（w=h=0）。 */
 static void cover_cache_write(const char *cache_path, uint32_t src_size, uint32_t src_mtime, int w,
                               int h, const uint8_t *data) {
-    mkdir(ESPAPERPLAY_SYSTEM_SD_DIR, 0755);
-    mkdir(ESPAPERPLAY_SYSTEM_SD_DIR "/cache", 0755);
-    mkdir(ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader", 0755);
-    mkdir(COVER_CACHE_DIR, 0755);
-    char tmp[sizeof(COVER_CACHE_DIR) + 24];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", cache_path);
-    FILE *f = fopen(tmp, "wb");
-    if (f == NULL) {
-        return;
-    }
-    const uint32_t hdr[6] = {COVER_CACHE_MAGIC, COVER_CACHE_VER, (uint32_t)w,
-                             (uint32_t)h,       src_size,        src_mtime};
-    bool ok = fwrite(hdr, sizeof(uint32_t), 6, f) == 6;
-    if (ok && data != NULL) {
-        ok = fwrite(data, 1, (size_t)w * h * 2, f) == (size_t)w * h * 2;
-    }
-    fclose(f);
-    if (ok) {
-        rename(tmp, cache_path); /* 原子替换，避免半写文件被读到 */
-    } else {
-        remove(tmp);
-    }
+    cover_write_ctx_t ctx = {
+        .hdr = {COVER_CACHE_MAGIC, COVER_CACHE_VER, (uint32_t)w, (uint32_t)h, src_size, src_mtime},
+        .data = data,
+    };
+    espcache_write_atomic(cache_path, cover_cache_write_fn, &ctx);
 }
 
 /* ------------------------------------------------------------------ */
@@ -191,7 +189,7 @@ static void cover_process(const cover_job_t *job) {
         src_mtime = (uint32_t)st.st_mtime;
     }
     char cache_path[64];
-    cover_cache_path(cache_path, sizeof(cache_path), job->path, src_size, src_mtime);
+    cover_cache_path(cache_path, sizeof(cache_path), job->path);
 
     espaperplay_reader_cover_result_t res;
     memset(&res, 0, sizeof(res));
