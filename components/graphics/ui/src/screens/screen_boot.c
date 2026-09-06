@@ -117,13 +117,16 @@ static void boot_build_cb(void *arg) {
         espaperplay_system_get_config()->selected_font, BOOT_LOG_FONT_PX,
         ESPAPERPLAY_FONT_STYLE_NORMAL);
 
+    /* 纵向坐标按屏高百分比（基准 480x800 = 72/124/164/196px），矮屏/横屏自适应 */
+    const int32_t scr_h = lv_display_get_vertical_resolution(lv_display_get_default());
+
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, ESPAPERPLAY_PROJECT_NAME);
     lv_obj_set_style_text_color(title, lv_color_black(), 0);
     if (font_title != NULL) {
         lv_obj_set_style_text_font(title, font_title, 0);
     }
-    lv_obj_set_pos(title, BOOT_MARGIN, 72);
+    lv_obj_set_pos(title, BOOT_MARGIN, scr_h * 9 / 100);
 
     lv_obj_t *sub = lv_label_create(scr);
     lv_label_set_text(sub, "v" ESPAPERPLAY_VERSION " 正在启动…");
@@ -131,11 +134,11 @@ static void boot_build_cb(void *arg) {
     if (font_sub != NULL) {
         lv_obj_set_style_text_font(sub, font_sub, 0);
     }
-    lv_obj_set_pos(sub, BOOT_MARGIN, 124);
+    lv_obj_set_pos(sub, BOOT_MARGIN, scr_h * 155 / 1000);
 
     lv_obj_t *line = lv_obj_create(scr);
     lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, 164);
+    lv_obj_set_pos(line, 0, scr_h * 205 / 1000);
     lv_obj_set_style_bg_color(line, lv_color_black(), 0);
     lv_obj_set_style_border_width(line, 0, 0);
     lv_obj_set_style_radius(line, 0, 0);
@@ -147,7 +150,7 @@ static void boot_build_cb(void *arg) {
     }
     const int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
     lv_obj_set_width(s_log_label, scr_w - 2 * BOOT_MARGIN);
-    lv_obj_set_pos(s_log_label, BOOT_MARGIN, 196);
+    lv_obj_set_pos(s_log_label, BOOT_MARGIN, scr_h * 245 / 1000);
 
     boot_rebuild_label();
 }

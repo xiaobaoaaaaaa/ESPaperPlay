@@ -381,8 +381,16 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     const int temp_y = portrait ? 40 : 24;
     const int cond_y = portrait ? 200 : 130;
     const int warn_y = portrait ? 252 : 168;
+    /* 卡片设计值封顶 + 余量不足贴底收缩（底部 24px 留给指示点区），
+     * 矮竖屏（如 480x640）不再越出子页容器 */
     const int card_y = portrait ? 300 : 206;
-    const int card_h = portrait ? 350 : 210;
+    int card_h = portrait ? 350 : 210;
+    if (card_y + card_h > h - 24) {
+        card_h = h - 24 - card_y;
+        if (card_h < 96) {
+            card_h = 96;
+        }
+    }
 
     /* 温度大字（96px）：文本右对齐；°C 与体感（两行）文本左对齐，
      * 三者组成一个块并整体居中于屏宽（temp_w + 间隔 + side_w），
@@ -448,8 +456,10 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     const int chart_w = (WEATHER_HOURLY_CHART_CNT - 1) * WEATHER_HOURLY_STEP + 12;
     const int val_h = 22; /* 标注行高 */
     const int scroll_h = card_h - scroll_y - 8;
-    const int icon_y = scroll_h - 52;       /* 图标行固定，距滚动区底 20px（防贴框） */
-    const int chart_h = icon_y - val_h - 8; /* 曲线高 */
+    /* 卡片贴底收缩后滚动区变矮：图标行贴底、曲线高钳制非负（极端矮屏下
+     * 图标与曲线轻微重叠，优先保证不越屏不裁切） */
+    const int icon_y = (scroll_h > 52) ? scroll_h - 52 : 0;
+    const int chart_h = (icon_y > val_h + 8) ? icon_y - val_h - 8 : 24;
 
     /* 温度标注行（每 3 小时一个值，中心对齐曲线点；点 0 内容 x = 12） */
     for (int i = 0; i < WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL; i++) {
@@ -474,8 +484,19 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
 /* ------------------------------------------------------------------ */
 
 static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) {
-    const int card_h = portrait ? 320 : 240;
+    /* 信息卡区先预留完整网格（竖屏 2 列 x3 行 / 横屏 3 列 x2 行）：
+     * 余量不足先收缩 7 天卡高度（下限 200 保住曲线内容），避免信息卡
+     * 退化为单行 6 列窄条或越出子页容器。 */
+    const int gap = 12;
+    const int need_info_h = portrait ? (3 * 66 + 2 * gap) : (2 * 66 + gap);
+    int card_h = portrait ? 320 : 240;
     const int card_y = portrait ? 40 : 30;
+    if (card_y + card_h + 14 + need_info_h > h - 8) {
+        card_h = h - 8 - card_y - 14 - need_info_h;
+        if (card_h < 200) {
+            card_h = 200;
+        }
+    }
     s_daily_card =
         weather_card_create(parent, WEATHER_MARGIN, card_y, w - 2 * WEATHER_MARGIN, card_h);
 
@@ -525,13 +546,10 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
 
     /* 次要信息：湿度 / 风 / 降水 / 气压 / 能见度 / 体感（卡片网格）。
      * 列数按剩余高度约束（避免横屏两行超出容器底部）：
-     * 两行放得下 -> 竖屏 2 列 x3 行 / 横屏 3 列 x2 行；否则单行 6 列。 */
+     * 网格需求 need_info_h 已在函数开头预留；仍放不下则单行 6 列。 */
     const int margin = WEATHER_MARGIN;
-    const int gap = 12;
     const int info_y = card_y + card_h + 14;
     const int avail_info_h = h - info_y; /* 子页容器内剩余高度 */
-    /* 竖屏 2 列需 3 行、横屏 3 列需 2 行；放不下则压缩为单行 6 列。 */
-    const int need_info_h = portrait ? 3 * 66 + 2 * gap : 2 * 66 + gap;
     int cols = (avail_info_h >= need_info_h) ? (portrait ? 2 : 3) : 6;
     const int cw = (w - 2 * margin - (cols - 1) * gap) / cols;
     const int ch = 66;
@@ -567,8 +585,17 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
 
 static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) {
     const int margin = WEATHER_MARGIN;
-    const int arc_h = portrait ? 300 : 210;
+    /* 指数区保 2 行（4 列网格）优先：余量不足先收缩弧线卡高度（下限 120
+     * 保住双弧+标注），避免矮屏上指数卡退化成 8 列窄条。 */
     const int arc_y = portrait ? 40 : 30;
+    int arc_h = portrait ? 300 : 210;
+    const int idx_need_h = 2 * (56 + 12); /* rows_fit>=2 需 2 整行（含尾行距） */
+    if (arc_y + arc_h + 14 + idx_need_h > h - 8) {
+        arc_h = h - 8 - arc_y - 14 - idx_need_h;
+        if (arc_h < 120) {
+            arc_h = 120;
+        }
+    }
 
     lv_obj_t *card = weather_card_create(parent, margin, arc_y, w - 2 * margin, arc_h);
 
@@ -729,9 +756,13 @@ static void weather_enter(void) {
         lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
 
-    /* 预警详情覆盖卡（初始隐藏） */
+    /* 预警详情覆盖卡（初始隐藏；高度封顶 340，矮屏贴底收缩防越屏） */
+    int detail_h = area_h - 90 < 340 ? area_h - 90 : 340;
+    if (detail_h < 120) {
+        detail_h = 120;
+    }
     s_warn_detail =
-        weather_card_create(scr, WEATHER_MARGIN, area_y + 60, scr_w - 2 * WEATHER_MARGIN, 340);
+        weather_card_create(scr, WEATHER_MARGIN, area_y + 60, scr_w - 2 * WEATHER_MARGIN, detail_h);
     lv_obj_add_flag(s_warn_detail, LV_OBJ_FLAG_HIDDEN);
     s_warn_title = weather_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_warn_title, LV_PCT(100));

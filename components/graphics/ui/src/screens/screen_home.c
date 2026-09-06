@@ -212,7 +212,7 @@ static void home_status_bar_create(lv_obj_t *scr) {
  * 并同步收缩行距，见 home_clock_area_h() / home_clock_area_create()。 */
 #define HOME_CLOCK_AREA_H_BASE 250
 /* 时钟区内部行距（基准 250px 高）：时(0) 分(90) 周(196) 日(224)。 */
-#define HOME_CLOCK_MIN_H 240 /* 内容最小高度：分(80px)与周(20px)不重叠、日期行底不裁切的下限 */
+#define HOME_CLOCK_MIN_H 120 /* 内容最小高度下限：须小于矮屏 45% cap，否则反向把应用区推出屏幕 */
 
 /** 时钟区实际占用高度：基准值与「可用高度 45%」取小，且不低于内容最小高度。
  * 防止矮竖屏面板上应用区 app_y 计算为负、与时钟区重叠。 */
@@ -306,7 +306,9 @@ static void home_page0_create(lv_obj_t *scr) {
 
     /* 应用区列数：按最小间距估算，随分辨率自适应（竖屏 480 -> 5 列）。
      * 实际间距 G 均匀分摊：边缘应用到屏幕边缘的间距 = 应用间间距。 */
-    const int app_w = portrait ? scr_w : (scr_w - 260);
+    /* 横屏时钟区占左侧约 32.5% 屏宽（设计基准 800 -> 260），窄横屏同步收缩 */
+    const int land_clock_w = scr_w * 325 / 1000;
+    const int app_w = portrait ? scr_w : (scr_w - land_clock_w);
     int cols = (app_w + HOME_APP_GAP_MIN) / (HOME_APP_CARD_W + HOME_APP_GAP_MIN);
     if (cols < 1) {
         cols = 1;
@@ -334,7 +336,7 @@ static void home_page0_create(lv_obj_t *scr) {
         /* 横屏：时钟区左侧；应用区右侧垂直居中 */
         clock_x = 24;
         clock_y = 60;
-        app_x = 260;
+        app_x = land_clock_w;
         app_y = (scr_h - HOME_STATUS_H_PX - grid_h) / 2;
         clock_h = home_clock_area_h(scr_h - HOME_STATUS_H_PX - clock_y);
     }
