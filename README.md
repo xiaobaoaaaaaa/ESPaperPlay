@@ -794,7 +794,7 @@ On a fresh clone, `sdkconfig.defaults` (16MB Flash / 8MB PSRAM) is applied autom
 #### CI / Releases
 
 GitHub Actions (`.github/workflows/build.yml`) builds with the
-`espressif/idf:v6.1.0` container on every push to `main`, every `v*` tag and
+`espressif/idf:v6.1` container on every push to `main`, every `v*` tag and
 every PR, and uploads the **full flash image set** (bootloader / partition
 table / app / fonts partition / flash_args) as artifacts.
 
@@ -1514,7 +1514,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 #### CI / 发布
 
 GitHub Actions（`.github/workflows/build.yml`）在每次推送到 `main`、打
-`v*` tag 以及每个 PR 时用 `espressif/idf:v6.1.0` 容器构建，并上传**完整
+`v*` tag 以及每个 PR 时用 `espressif/idf:v6.1` 容器构建，并上传**完整
 烧录镜像组**（bootloader / 分区表 / APP / fonts 分区 / flash_args）为
 Artifacts。
 
