@@ -396,7 +396,19 @@ static void gui_worker_task(void *arg) {
         }
 
         const int64_t t0 = esp_timer_get_time();
-        const esp_err_t ret = gui_execute_op(&op);
+        /* 有界重试 2 次（200/400ms 退避）：瞬时失败（如内部 RAM 峰值期的
+         * NO_MEM）不丢帧；epd 驱动失败后置控制器状态未知，重试的刷新会
+         * 自动重新初始化控制器，重复执行安全。 */
+        esp_err_t ret = ESP_OK;
+        for (int attempt = 0;; attempt++) {
+            ret = gui_execute_op(&op);
+            if (ret == ESP_OK || attempt >= 2) {
+                break;
+            }
+            ESP_LOGW(TAG, "worker: refresh failed (%s), retry #%d", esp_err_to_name(ret),
+                     attempt + 1);
+            vTaskDelay(pdMS_TO_TICKS(attempt == 0 ? 200 : 400));
+        }
         if (op.type == GUI_OP_CLEAR) {
             ESP_LOGI(TAG, "worker: clear -> %s (%lld ms)", esp_err_to_name(ret),
                      (esp_timer_get_time() - t0) / 1000);
