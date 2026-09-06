@@ -1818,10 +1818,10 @@ static void weather_rel_date(int days, char *out, size_t out_size) {
     strftime(out, out_size, "%Y%m%d", &tm_local);
 }
 
-/** 请求指定日期（yyyyMMdd）的月升/月落，成功且字段非空时回填 out。
- * 仅取对应字段（该日 moonPhase 等不回传）；失败不影响调用方今日数据。 */
-static void weather_fetch_moon_field(const char *loc_id, const char *date, bool rise,
-                                     char *out, size_t out_size) {
+/** 请求指定日期（yyyyMMdd）的月升/月落，成功时经 rise_out / set_out 回填
+ * （可为 NULL 跳过）。失败不影响调用方今日数据。 */
+static bool weather_fetch_moon_day(const char *loc_id, const char *date, char *rise_out,
+                                   size_t rise_size, char *set_out, size_t set_size) {
     char extra[24];
     snprintf(extra, sizeof(extra), "date=%s", date);
     char query[ESPAPERPLAY_WEATHER_LOCATION_MAX_LEN * 3 + 32];
@@ -1834,19 +1834,25 @@ static void weather_fetch_moon_field(const char *loc_id, const char *date, bool 
         err = weather_parse_astronomy(body, false, &tmp);
     }
     free(body);
-    const char *src = rise ? tmp.moonrise : tmp.moonset;
-    if (err == ESP_OK && src[0] != '\0') {
-        strlcpy(out, src, out_size);
-        ESP_LOGI(TAG, "backfilled %s from %s: %s", rise ? "moonrise" : "moonset", date, src);
-    } else if (err != ESP_OK) {
-        ESP_LOGW(TAG, "moon field fetch for %s failed: %s", date, esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "moon fetch for %s failed: %s", date, esp_err_to_name(err));
+        return false;
     }
+    if (rise_out != NULL) {
+        strlcpy(rise_out, tmp.moonrise, rise_size);
+    }
+    if (set_out != NULL) {
+        strlcpy(set_out, tmp.moonset, set_size);
+    }
+    ESP_LOGI(TAG, "backfilled moon data from %s: rise=%s set=%s", date, tmp.moonrise,
+             tmp.moonset);
+    return true;
 }
 
-/*! 月亮地平线上平均时长（约 12h25m）：月出/月落缺失且无真实值可回填时，
- * 以配对事件粗推邻日时间（无月出日必有月落，反之亦然）。该时长随月赤纬
- * 与纬度在约 11~14.5h 间浮动，估算误差可至 ±1.5h，仅保证弧线月亮图标
- * 不缺席。 */
+/*! 月亮地平线上平均时长（约 12h25m）：回填链全部失败时以配对事件粗推
+ * 邻日时间（无月出日必有月落，反之亦然）作最后兜底。该时长随月赤纬与
+ * 纬度浮动剧烈（上板实测案例 16h15m），误差可达 ±4h，仅保证弧线月亮
+ * 图标不缺席。 */
 #define WEATHER_MOON_ABOVE_MIN (12 * 60 + 25)
 
 /** 解析天文时间戳（"2026-08-16T05:12+08:00" 或短格式 "05:12"）为分钟数。 */
@@ -1926,10 +1932,12 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     }
 
     /* 今日无月出/月落（月升月落每日推迟约 50 分钟，跨过午夜的那天该事件记入
-     * 前后日，和风当日字段返回空串，每朔望月各约 1-2 天）时回填，优先级：
-     * 真实值（上次月出缓存 / 相邻日请求，date 仅支持今日起未来 60 天）→
-     * 配对事件粗推（见 WEATHER_MOON_ABOVE_MIN）→ 留空显示 "--"。
-     * 回填失败不影响今日数据；正常日子不多花请求。 */
+     * 前后日，和风当日字段返回空串，每朔望月各约 1-2 天）时回填邻日数据，
+     * 供时间显示与弧线定位。前一日无接口可查（date 仅支持今日起未来 60 天，
+     * 过去日期 400）：月出缺时优先上次月出缓存；缓存缺席则请求次日取
+     * "下一次月出"（连同次日月落配成完整明日弧段，UI 配对使用）；月落缺时
+     * 直接请求次日。请求全部失败才按配对事件粗推兜底（误差可达 ±4h）。
+     * 正常日子不多花请求；回填失败不影响今日数据。 */
     if (tmp.moonrise[0] == '\0') {
         if (s_cache_astronomy != NULL && s_cache_astronomy->last_moonrise[0] != '\0') {
             strlcpy(tmp.moonrise_prev, s_cache_astronomy->last_moonrise,
@@ -1937,22 +1945,27 @@ static esp_err_t weather_fetch_astronomy(const char *location,
             ESP_LOGI(TAG, "moonrise empty today, backfilled from cache: %s",
                      tmp.moonrise_prev);
         } else {
-            const int ms_min = weather_moon_ts_to_min(tmp.moonset);
-            if (ms_min >= 0) {
-                const int est = ((ms_min - WEATHER_MOON_ABOVE_MIN) % 1440 + 1440) % 1440;
-                snprintf(tmp.moonrise_prev, sizeof(tmp.moonrise_prev), "%02d:%02d",
-                         est / 60, est % 60);
-                ESP_LOGW(TAG, "moonrise empty, estimated from moonset %s: %s", tmp.moonset,
-                         tmp.moonrise_prev);
+            char next_date[16];
+            weather_rel_date(+1, next_date, sizeof(next_date));
+            if (!weather_fetch_moon_day(loc_id, next_date, tmp.moonrise_next,
+                                        sizeof(tmp.moonrise_next), tmp.moonset_next,
+                                        sizeof(tmp.moonset_next))) {
+                const int ms_min = weather_moon_ts_to_min(tmp.moonset);
+                if (ms_min >= 0) {
+                    const int est = ((ms_min - WEATHER_MOON_ABOVE_MIN) % 1440 + 1440) % 1440;
+                    snprintf(tmp.moonrise_prev, sizeof(tmp.moonrise_prev), "%02d:%02d",
+                             est / 60, est % 60);
+                    ESP_LOGW(TAG, "moonrise empty, estimated from moonset %s: %s", tmp.moonset,
+                             tmp.moonrise_prev);
+                }
             }
         }
     }
     if (tmp.moonset[0] == '\0') {
         char next_date[16];
         weather_rel_date(+1, next_date, sizeof(next_date));
-        weather_fetch_moon_field(loc_id, next_date, false, tmp.moonset_next,
-                                 sizeof(tmp.moonset_next));
-        if (tmp.moonset_next[0] == '\0') {
+        if (!weather_fetch_moon_day(loc_id, next_date, NULL, 0, tmp.moonset_next,
+                                    sizeof(tmp.moonset_next))) {
             const int mr_min = weather_moon_ts_to_min(tmp.moonrise);
             if (mr_min >= 0) {
                 const int est = (mr_min + WEATHER_MOON_ABOVE_MIN) % 1440;

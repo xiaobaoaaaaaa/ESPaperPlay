@@ -192,8 +192,9 @@ typedef struct {
     char sunset[24];         /*!< 日落时间（时间戳） */
     char moonrise[24];       /*!< 月升时间（时间戳） */
     char moonset[24];        /*!< 月落时间（时间戳） */
-    char moonrise_prev[24];  /*!< 最近一次月出（前一日，仅今日无月出时回填） */
-    char moonset_next[24];   /*!< 下一次月落（次日，仅今日无月落时回填） */
+    char moonrise_prev[24];  /*!< 最近一次月出（前一日，仅今日无月出且有缓存时回填） */
+    char moonrise_next[24];  /*!< 下一次月出（次日，今日无月出且无前一日缓存时回填） */
+    char moonset_next[24];   /*!< 下一次月落（次日，今日无月落或弧段配对时回填） */
     char moon_phase[16];     /*!< 月相名称（如 "盈凸月"） */
     char moon_phase_icon[8]; /*!< 月相图标代码 */
 } espaperplay_weather_astronomy_t;

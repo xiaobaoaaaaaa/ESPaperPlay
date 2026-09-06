@@ -1000,21 +1000,39 @@ static void weather_refresh(void) {
     }
 
     /* 日出日落 / 月出月落：时间 + 弧线图标定位。
-     * 今日无月出/月落时回退相邻日数据（月出取前一日、月落取次日），
-     * 显示加"昨/明"标注；弧线定位用它覆盖跨午夜的"邻日弧段"。 */
+     * 今日无月出/月落时回退相邻日数据，显示加"昨/明"标注。弧线把两端点
+     * 放到"今日0点"绝对分钟线上（昨日为负、明日 +1440），并保证两端点
+     * 属同一弧段：月出缺失时优先昨日弧段 [prev月出, 今日月落]，无缓存则
+     * 明日弧段 [next月出, next月落]（月落强制取次日配对）；月落缺失时为
+     * 今晚跨午夜弧段 [今日月出, next月落]。 */
     {
-        const char *mr_src = snap->astronomy.moonrise[0] ? snap->astronomy.moonrise
-                                                         : snap->astronomy.moonrise_prev;
-        const bool mr_is_prev =
-            snap->astronomy.moonrise[0] == '\0' && mr_src[0] != '\0';
-        const char *ms_src = snap->astronomy.moonset[0] ? snap->astronomy.moonset
-                                                        : snap->astronomy.moonset_next;
-        const bool ms_is_next =
-            snap->astronomy.moonset[0] == '\0' && ms_src[0] != '\0';
+        const bool mr_has = snap->astronomy.moonrise[0] != '\0';
+        const bool ms_has = snap->astronomy.moonset[0] != '\0';
+        const bool mr_use_prev = !mr_has && snap->astronomy.moonrise_prev[0] != '\0';
+        const bool mr_use_next = !mr_has && !mr_use_prev &&
+                                 snap->astronomy.moonrise_next[0] != '\0';
+        /* 明日弧段时月落强制取次日；其余情况今日月落优先 */
+        const bool ms_force_next = mr_use_next;
+        const bool ms_use_next =
+            ((ms_force_next || !ms_has) && snap->astronomy.moonset_next[0] != '\0');
+        const bool ms_is_next = ms_use_next;
+        const char *mr_src = mr_has      ? snap->astronomy.moonrise
+                             : mr_use_prev ? snap->astronomy.moonrise_prev
+                                           : snap->astronomy.moonrise_next;
+        const char *ms_src = ms_use_next ? snap->astronomy.moonset_next
+                                         : snap->astronomy.moonset;
         const int sr = weather_time_to_min(snap->astronomy.sunrise);
         const int ss = weather_time_to_min(snap->astronomy.sunset);
         const int mr = weather_time_to_min(mr_src);
         const int ms = weather_time_to_min(ms_src);
+        /* 端点绝对化（"今日0点"原点）：昨日 -1440、明日 +1440；
+         * 同弧段内月落早于月出（含普通日深夜月出+次晨月落）则弧段跨午夜，
+         * 月落 +1440 补齐。 */
+        int mr_abs = mr_has ? mr : (mr_use_prev ? mr - 1440 : mr + 1440);
+        int ms_abs = ms_use_next ? ms + 1440 : ms;
+        if (ms_abs < mr_abs) {
+            ms_abs += 1440;
+        }
 
         lv_obj_t *card = lv_obj_get_parent(s_sun_arc);
         lv_obj_t *sun_l = lv_obj_get_child(card, 0);
@@ -1028,8 +1046,11 @@ static void weather_refresh(void) {
                      weather_time_hm(snap->astronomy.sunrise, t1, sizeof(t1)));
             snprintf(b2, sizeof(b2), "日落 %s",
                      weather_time_hm(snap->astronomy.sunset, t2, sizeof(t2)));
-            if (mr_is_prev) {
+            if (mr_use_prev) {
                 snprintf(b3, sizeof(b3), "月出 昨%s",
+                         weather_time_hm(mr_src, t3, sizeof(t3)));
+            } else if (mr_use_next) {
+                snprintf(b3, sizeof(b3), "月出 明%s",
                          weather_time_hm(mr_src, t3, sizeof(t3)));
             } else {
                 snprintf(b3, sizeof(b3), "月出 %s",
@@ -1084,20 +1105,17 @@ static void weather_refresh(void) {
         } else {
             lv_obj_add_flag(s_sun_icon, LV_OBJ_FLAG_HIDDEN);
         }
-        if (have_time && mr >= 0) {
-            /* 跨午夜：月落早于月出时按次日处理（含取邻日数据的情形：
-             * 昨 23:33 月出 + 今 12:10 月落，或今 17:00 月出 + 明 00:20 月落，
-             * 跨午夜时段 now+1440 恰入弧段） */
-            int ms_adj = ms;
-            if (ms_adj < mr) {
-                ms_adj += 1440;
+        if (have_time && mr >= 0 && ms >= 0 && ms_abs != mr_abs) {
+            /* 端点已绝对化（昨日为负/明日 +1440），now 取当日与 +1440 两个
+             * 候选，任一落入弧段即定位；都不在则月亮在地平线下，隐藏。 */
+            const int now_min = now_tm.tm_hour * 60 + now_tm.tm_min;
+            float t = -1.0f;
+            if (now_min >= mr_abs && now_min <= ms_abs) {
+                t = (float)(now_min - mr_abs) / (float)(ms_abs - mr_abs);
+            } else if (now_min + 1440 >= mr_abs && now_min + 1440 <= ms_abs) {
+                t = (float)(now_min + 1440 - mr_abs) / (float)(ms_abs - mr_abs);
             }
-            int now_min = now_tm.tm_hour * 60 + now_tm.tm_min;
-            if (now_min < mr && ms_adj > mr) {
-                now_min += 1440; /* 午夜后、月出前的时间段属"前一日弧段" */
-            }
-            const float t = (float)(now_min - mr) / (float)(ms_adj - mr);
-            if (t >= 0.0f && t <= 1.0f) {
+            if (t >= 0.0f) {
                 const int x = s_arc_geom[0] + (int)lroundf((float)s_arc_geom[1] * t);
                 const int y =
                     s_arc_geom[3] - (int)lroundf((float)s_arc_geom[4] * sinf((float)M_PI * t));

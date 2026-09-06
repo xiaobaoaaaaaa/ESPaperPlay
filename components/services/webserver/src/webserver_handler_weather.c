@@ -167,6 +167,8 @@ esp_err_t webserver_handle_weather_get(httpd_req_t *req) {
                                 weather_ts_hm(snap->astronomy.moonset, hm, sizeof(hm)));
         cJSON_AddStringToObject(astro, "moonrise_prev",
                                 weather_ts_hm(snap->astronomy.moonrise_prev, hm, sizeof(hm)));
+        cJSON_AddStringToObject(astro, "moonrise_next",
+                                weather_ts_hm(snap->astronomy.moonrise_next, hm, sizeof(hm)));
         cJSON_AddStringToObject(astro, "moonset_next",
                                 weather_ts_hm(snap->astronomy.moonset_next, hm, sizeof(hm)));
         cJSON_AddStringToObject(astro, "moon_phase", snap->astronomy.moon_phase);
