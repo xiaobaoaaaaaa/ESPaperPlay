@@ -1806,6 +1806,39 @@ static esp_err_t weather_fetch_air(const char *location, espaperplay_weather_air
     return ESP_OK;
 }
 
+/** 以今天为基准偏移 days 天，输出 yyyyMMdd（本地时区，无夏令时环境）。 */
+static void weather_rel_date(int days, char *out, size_t out_size) {
+    time_t t = time(NULL) + (time_t)days * 86400;
+    struct tm tm_local;
+    localtime_r(&t, &tm_local);
+    strftime(out, out_size, "%Y%m%d", &tm_local);
+}
+
+/** 请求指定日期（yyyyMMdd）的月升/月落，成功且字段非空时回填 out。
+ * 仅取对应字段（该日 moonPhase 等不回传）；失败不影响调用方今日数据。 */
+static void weather_fetch_moon_field(const char *loc_id, const char *date, bool rise,
+                                     char *out, size_t out_size) {
+    char extra[24];
+    snprintf(extra, sizeof(extra), "date=%s", date);
+    char query[ESPAPERPLAY_WEATHER_LOCATION_MAX_LEN * 3 + 32];
+    weather_build_query(loc_id, extra, query, sizeof(query));
+    char *body = NULL;
+    espaperplay_weather_astronomy_t tmp = {0};
+    esp_err_t err = weather_request(weather_data_host(), "/v7/astronomy/moon", query,
+                                    ESPAPERPLAY_WEATHER_RESP_ASTRONOMY_MAX, &body);
+    if (err == ESP_OK) {
+        err = weather_parse_astronomy(body, false, &tmp);
+    }
+    free(body);
+    const char *src = rise ? tmp.moonrise : tmp.moonset;
+    if (err == ESP_OK && src[0] != '\0') {
+        strlcpy(out, src, out_size);
+        ESP_LOGI(TAG, "backfilled %s from %s: %s", rise ? "moonrise" : "moonset", date, src);
+    } else if (err != ESP_OK) {
+        ESP_LOGW(TAG, "moon field fetch for %s failed: %s", date, esp_err_to_name(err));
+    }
+}
+
 static esp_err_t weather_fetch_astronomy(const char *location,
                                          espaperplay_weather_astronomy_t *out) {
     char loc_id[16];
@@ -1867,6 +1900,23 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     free(body);
     if (err != ESP_OK) {
         return err;
+    }
+
+    /* 今日无月出/月落（月升月落每日推迟约 50 分钟，跨过午夜的那天该事件记入
+     * 前后日，和风当日字段返回空串，每朔望月各约 1-2 天）时，追加相邻日请求
+     * 回填：月出取前一日、月落取次日，供显示与弧线定位。回填失败不影响今日
+     * 数据；正常日子不多花请求。 */
+    if (tmp.moonrise[0] == '\0') {
+        char prev_date[16];
+        weather_rel_date(-1, prev_date, sizeof(prev_date));
+        weather_fetch_moon_field(loc_id, prev_date, true, tmp.moonrise_prev,
+                                 sizeof(tmp.moonrise_prev));
+    }
+    if (tmp.moonset[0] == '\0') {
+        char next_date[16];
+        weather_rel_date(+1, next_date, sizeof(next_date));
+        weather_fetch_moon_field(loc_id, next_date, false, tmp.moonset_next,
+                                 sizeof(tmp.moonset_next));
     }
 
     if (s_lock != NULL) {

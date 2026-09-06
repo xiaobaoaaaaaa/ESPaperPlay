@@ -184,13 +184,16 @@ typedef struct {
 
 /** 天文（astronomy/sun + astronomy/moon）。
  *  注：sunrise/sunset/moonrise/moonset 为完整时间戳（如 "2026-08-16T05:12+08:00"），
- *  展示时可按需截取 "HH:MM"。 */
+ *  展示时可按需截取 "HH:MM"。moonrise/moonset 当天无月升/月落现象时为空串
+ *  （月升月落每日推迟约 50 分钟，跨午夜的那天无月出或无月落，每朔望月各约 1-2 天）。 */
 typedef struct {
     char date[16];           /*!< 日期 */
     char sunrise[24];        /*!< 日出时间（时间戳） */
     char sunset[24];         /*!< 日落时间（时间戳） */
     char moonrise[24];       /*!< 月升时间（时间戳） */
     char moonset[24];        /*!< 月落时间（时间戳） */
+    char moonrise_prev[24];  /*!< 最近一次月出（前一日，仅今日无月出时回填） */
+    char moonset_next[24];   /*!< 下一次月落（次日，仅今日无月落时回填） */
     char moon_phase[16];     /*!< 月相名称（如 "盈凸月"） */
     char moon_phase_icon[8]; /*!< 月相图标代码 */
 } espaperplay_weather_astronomy_t;

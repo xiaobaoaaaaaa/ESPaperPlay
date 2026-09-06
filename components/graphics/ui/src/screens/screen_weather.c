@@ -577,10 +577,14 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
     lv_obj_align(sun_r, LV_ALIGN_TOP_RIGHT, -6, 4);
 
     lv_obj_t *moon_l = weather_label_create(card, "月出 --", 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_width(moon_l, 90);
+    /* 120px：容纳"月出 昨23:33"（今日无月出回退前一日月出时的标注），
+     * 文字实际约 94px，不触及弧线左端点（x=100）。 */
+    lv_obj_set_width(moon_l, 120);
     lv_obj_set_pos(moon_l, 6, 8 + arc_h / 2);
     lv_obj_t *moon_r = weather_label_create(card, "月落 --", 16, LV_TEXT_ALIGN_RIGHT);
-    lv_obj_set_width(moon_r, 90);
+    /* 120px：容纳"月落 明00:20"（今日无月落回填次日月落时的标注），
+     * 右对齐文字实际约 94px，不触及弧线右端点。 */
+    lv_obj_set_width(moon_r, 120);
     lv_obj_align(moon_r, LV_ALIGN_TOP_RIGHT, -6, 8 + arc_h / 2);
 
     /* 太阳弧（上）与月亮弧（下） */
@@ -959,12 +963,22 @@ static void weather_refresh(void) {
         }
     }
 
-    /* 日出日落 / 月出月落：时间 + 弧线图标定位 */
+    /* 日出日落 / 月出月落：时间 + 弧线图标定位。
+     * 今日无月出/月落时回退相邻日数据（月出取前一日、月落取次日），
+     * 显示加"昨/明"标注；弧线定位用它覆盖跨午夜的"邻日弧段"。 */
     {
+        const char *mr_src = snap->astronomy.moonrise[0] ? snap->astronomy.moonrise
+                                                         : snap->astronomy.moonrise_prev;
+        const bool mr_is_prev =
+            snap->astronomy.moonrise[0] == '\0' && mr_src[0] != '\0';
+        const char *ms_src = snap->astronomy.moonset[0] ? snap->astronomy.moonset
+                                                        : snap->astronomy.moonset_next;
+        const bool ms_is_next =
+            snap->astronomy.moonset[0] == '\0' && ms_src[0] != '\0';
         const int sr = weather_time_to_min(snap->astronomy.sunrise);
         const int ss = weather_time_to_min(snap->astronomy.sunset);
-        const int mr = weather_time_to_min(snap->astronomy.moonrise);
-        const int ms = weather_time_to_min(snap->astronomy.moonset);
+        const int mr = weather_time_to_min(mr_src);
+        const int ms = weather_time_to_min(ms_src);
 
         lv_obj_t *card = lv_obj_get_parent(s_sun_arc);
         lv_obj_t *sun_l = lv_obj_get_child(card, 0);
@@ -978,10 +992,20 @@ static void weather_refresh(void) {
                      weather_time_hm(snap->astronomy.sunrise, t1, sizeof(t1)));
             snprintf(b2, sizeof(b2), "日落 %s",
                      weather_time_hm(snap->astronomy.sunset, t2, sizeof(t2)));
-            snprintf(b3, sizeof(b3), "月出 %s",
-                     weather_time_hm(snap->astronomy.moonrise, t3, sizeof(t3)));
-            snprintf(b4, sizeof(b4), "月落 %s",
-                     weather_time_hm(snap->astronomy.moonset, t4, sizeof(t4)));
+            if (mr_is_prev) {
+                snprintf(b3, sizeof(b3), "月出 昨%s",
+                         weather_time_hm(mr_src, t3, sizeof(t3)));
+            } else {
+                snprintf(b3, sizeof(b3), "月出 %s",
+                         weather_time_hm(mr_src, t3, sizeof(t3)));
+            }
+            if (ms_is_next) {
+                snprintf(b4, sizeof(b4), "月落 明%s",
+                         weather_time_hm(ms_src, t4, sizeof(t4)));
+            } else {
+                snprintf(b4, sizeof(b4), "月落 %s",
+                         weather_time_hm(ms_src, t4, sizeof(t4)));
+            }
             lv_label_set_text(sun_l, b1);
             lv_label_set_text(sun_r, b2);
             lv_label_set_text(moon_l, b3);
@@ -1010,7 +1034,9 @@ static void weather_refresh(void) {
             lv_obj_add_flag(s_sun_icon, LV_OBJ_FLAG_HIDDEN);
         }
         if (have_time && mr >= 0) {
-            /* 跨午夜：月落早于月出时按次日处理 */
+            /* 跨午夜：月落早于月出时按次日处理（含取邻日数据的情形：
+             * 昨 23:33 月出 + 今 12:10 月落，或今 17:00 月出 + 明 00:20 月落，
+             * 跨午夜时段 now+1440 恰入弧段） */
             int ms_adj = ms;
             if (ms_adj < mr) {
                 ms_adj += 1440;
