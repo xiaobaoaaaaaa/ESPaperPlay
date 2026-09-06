@@ -98,7 +98,8 @@ static wifi_list_view_t s_view = WIFI_LIST_VIEW_LIST; /*!< 当前视图 */
 static bool s_page_active = false;                /*!< 页面是否在栈顶（迟到回调守卫） */
 
 static lv_obj_t *s_status_label = NULL; /*!< 状态提示行（扫描中 / 结果数 / 连接反馈） */
-static lv_obj_t *s_list = NULL;         /*!< 扫描结果列表容器 */
+static lv_obj_t *s_list_card = NULL;    /*!< 扫描结果卡片（设置页同款边框，不滚动） */
+static lv_obj_t *s_list = NULL;         /*!< 扫描结果列表滚动区（卡片内嵌） */
 
 /* 扫描结果快照（LVGL 线程内重建列表时拷贝，行点击经下标取回）。 */
 static espaperplay_wifi_scan_item_t s_items[ESPAPERPLAY_WIFI_SCAN_MAX];
@@ -526,10 +527,24 @@ static void wifi_list_build_list_view(lv_obj_t *parent, int32_t scr_w, int32_t s
     s_status_label = wifi_list_label_create(parent, "正在扫描附近网络…", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_status_label, 0, wifi_list_scaled(6));
 
-    /* 扫描结果列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
-    s_list = lv_obj_create(parent);
-    lv_obj_set_size(s_list, scr_w - 2 * WIFI_LIST_MARGIN, btn_y - wifi_list_scaled(40));
-    lv_obj_set_pos(s_list, WIFI_LIST_MARGIN, wifi_list_scaled(40));
+    /* 扫描结果卡片（设置页同款 2px 黑边圆角卡）+ 内嵌滚动区：外卡不滚动，
+     * 行滚动时被内区裁剪，不会压到卡片边框（LVGL 子对象裁剪含边框带）。 */
+    const int card_h = btn_y - wifi_list_scaled(40) - 6; /* 与底部按钮留 6px 间隙 */
+    const int inset = wifi_list_scaled(10) < 6 ? 6 : wifi_list_scaled(10);
+    s_list_card = lv_obj_create(parent);
+    lv_obj_set_size(s_list_card, scr_w - 2 * WIFI_LIST_MARGIN, card_h);
+    lv_obj_set_pos(s_list_card, WIFI_LIST_MARGIN, wifi_list_scaled(40));
+    lv_obj_set_style_bg_color(s_list_card, lv_color_white(), 0);
+    lv_obj_set_style_border_color(s_list_card, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_list_card, 2, 0);
+    lv_obj_set_style_radius(s_list_card, 12, 0);
+    lv_obj_set_style_pad_all(s_list_card, 0, 0);
+    lv_obj_remove_flag(s_list_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 内嵌滚动列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
+    s_list = lv_obj_create(s_list_card);
+    lv_obj_set_size(s_list, scr_w - 2 * WIFI_LIST_MARGIN - 2 * inset, card_h - 2 * inset);
+    lv_obj_set_pos(s_list, inset, inset);
     lv_obj_set_style_bg_color(s_list, lv_color_white(), 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_radius(s_list, 0, 0);
@@ -593,6 +608,7 @@ static void wifi_list_show_view(wifi_list_view_t view) {
     s_view = view;
     s_status_label = NULL;
     s_list = NULL;
+    s_list_card = NULL;
     if (s_content != NULL) {
         lv_obj_del(s_content);
         s_content = NULL;
@@ -843,6 +859,7 @@ static void wifi_list_exit(void) {
     s_content = NULL; /* 页面对象随清屏删除 */
     s_status_label = NULL;
     s_list = NULL;
+    s_list_card = NULL;
     ESP_LOGI(TAG, "wifi list page exited");
 }
 

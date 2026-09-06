@@ -35,8 +35,9 @@ static const char *TAG = "ESPaperPlay_UI";
  * 阅读器主页：最近阅读（历史）+ SD 卡图书（默认目录递归扫描）
  * ====================================================================
  *
- * 布局：统一状态栏（"阅读器"）+ 两个选项卡（最近阅读 / SD 卡图书）+
- * 封面网格卡片 + 页面指示点。条目以网格块呈现：EPUB 显示封面缩略图
+ * 布局：统一状态栏（"阅读器"）+ 封面网格卡片 + 页面指示点 + 底部选项卡
+ * （最近阅读 / SD 卡图书，与文件页底部操作栏同款几何）。条目以网格块呈现：
+ * EPUB 显示封面缩略图
  * （后台探测/解码 + SD 缓存，见 reader 组件 cover 服务），TXT 与无封面
  * 书显示占位框；块下方为文件名（历史块另加阅读进度）。
  *   - 历史：SD 卡持久化的阅读记录（最多 ESPAPERPLAY_READER_HISTORY_MAX 条，
@@ -110,6 +111,7 @@ static int s_card_w = 0;
 static int s_card_x = 0;
 static int s_card_y = 0;
 static int s_card_h = 0;
+static int s_bottom_y = 0; /*!< 底部选项卡栏顶部 y（指示点以其为基准，与文件页一致） */
 /* 网格几何（rdh_grid_calc 产出） */
 static int s_cols = 1;
 static int s_tile_w = RDH_TILE_W;
@@ -508,11 +510,11 @@ static void rdh_rebuild(void) {
         s_page = s_page_count - 1;
     }
 
-    /* 指示点 */
+    /* 指示点（底部选项卡栏上方，与文件页底部操作栏同款几何） */
     int32_t scr_w = 0;
     int32_t scr_h = 0;
     rdh_screen_size(&scr_w, &scr_h);
-    const int dots_y = s_card_y + s_card_h + 14;
+    const int dots_y = s_bottom_y - 18;
     for (int i = 0; i < s_page_count && i < RDH_PAGE_MAX; i++) {
         s_dots[i] = lv_obj_create(lv_screen_active());
         lv_obj_set_size(s_dots[i], 10, 10);
@@ -834,43 +836,17 @@ static void rdh_enter(void) {
     s_bar = espaperplay_ui_status_bar_create(scr, RDH_BAR_H, "阅读器", false);
     espaperplay_ui_status_bar_refresh(s_bar);
 
-    /* 选项卡 */
-    const int tab_w = (scr_w - 3 * RDH_MARGIN) / 2;
-    s_btn_hist = lv_button_create(scr);
-    lv_obj_set_size(s_btn_hist, tab_w, RDH_TAB_H);
-    lv_obj_set_pos(s_btn_hist, RDH_MARGIN, RDH_BAR_H + 6);
-    lv_obj_set_style_bg_color(s_btn_hist, lv_color_black(), 0);
-    lv_obj_set_style_radius(s_btn_hist, 8, 0);
-    lv_obj_t *hl = lv_label_create(s_btn_hist);
-    lv_label_set_text(hl, "最近阅读");
-    lv_obj_set_style_text_color(hl, lv_color_white(), 0);
-    if (rdh_font(20) != NULL) {
-        lv_obj_set_style_text_font(hl, rdh_font(20), 0);
-    }
-    lv_obj_center(hl);
-    lv_obj_add_event_cb(s_btn_hist, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
-
-    s_btn_books = lv_button_create(scr);
-    lv_obj_set_size(s_btn_books, tab_w, RDH_TAB_H);
-    lv_obj_set_pos(s_btn_books, RDH_MARGIN + tab_w + RDH_MARGIN, RDH_BAR_H + 6);
-    lv_obj_set_style_bg_color(s_btn_books, lv_color_white(), 0);
-    lv_obj_set_style_border_color(s_btn_books, lv_color_black(), 0);
-    lv_obj_set_style_border_width(s_btn_books, 2, 0);
-    lv_obj_set_style_radius(s_btn_books, 8, 0);
-    lv_obj_t *bl = lv_label_create(s_btn_books);
-    lv_label_set_text(bl, "SD 卡图书");
-    lv_obj_set_style_text_color(bl, lv_color_black(), 0);
-    if (rdh_font(20) != NULL) {
-        lv_obj_set_style_text_font(bl, rdh_font(20), 0);
-    }
-    lv_obj_center(bl);
-    lv_obj_add_event_cb(s_btn_books, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+    /* 几何布局：底部选项卡栏（与文件页底部操作栏同款：栏顶 scr_h-栏高-4，
+     * 按钮高 RDH_TAB_H、间距 12，指示点悬于栏上方），网格卡片自状态栏下起 */
+    const int card_w = scr_w - 2 * RDH_MARGIN;
+    const int bottom_h = RDH_TAB_H + 12;
+    s_bottom_y = scr_h - bottom_h - 4;
 
     /* 列表卡片 */
     s_card_x = RDH_MARGIN;
-    s_card_y = RDH_BAR_H + 6 + RDH_TAB_H + 6;
-    s_card_w = scr_w - 2 * RDH_MARGIN;
-    s_card_h = scr_h - s_card_y - 34;
+    s_card_y = RDH_BAR_H + 6;
+    s_card_w = card_w;
+    s_card_h = s_bottom_y - s_card_y - 26; /* 底部留出指示点空间（与文件页一致） */
     if (s_card_h < 100) {
         s_card_h = 100;
     }
@@ -884,6 +860,38 @@ static void rdh_enter(void) {
     lv_obj_set_style_radius(s_card, 12, 0);
     lv_obj_set_style_pad_all(s_card, 0, 0);
     lv_obj_remove_flag(s_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* 底部选项卡（最近阅读 / SD 卡图书） */
+    const int tab_w = (card_w - 12) / 2;
+    s_btn_hist = lv_button_create(scr);
+    lv_obj_set_size(s_btn_hist, tab_w, RDH_TAB_H);
+    lv_obj_set_pos(s_btn_hist, RDH_MARGIN, s_bottom_y + 6);
+    lv_obj_set_style_bg_color(s_btn_hist, lv_color_black(), 0);
+    lv_obj_set_style_radius(s_btn_hist, 8, 0);
+    lv_obj_t *hl = lv_label_create(s_btn_hist);
+    lv_label_set_text(hl, "最近阅读");
+    lv_obj_set_style_text_color(hl, lv_color_white(), 0);
+    if (rdh_font(20) != NULL) {
+        lv_obj_set_style_text_font(hl, rdh_font(20), 0);
+    }
+    lv_obj_center(hl);
+    lv_obj_add_event_cb(s_btn_hist, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
+
+    s_btn_books = lv_button_create(scr);
+    lv_obj_set_size(s_btn_books, tab_w, RDH_TAB_H);
+    lv_obj_set_pos(s_btn_books, RDH_MARGIN + tab_w + 12, s_bottom_y + 6);
+    lv_obj_set_style_bg_color(s_btn_books, lv_color_white(), 0);
+    lv_obj_set_style_border_color(s_btn_books, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_btn_books, 2, 0);
+    lv_obj_set_style_radius(s_btn_books, 8, 0);
+    lv_obj_t *bl = lv_label_create(s_btn_books);
+    lv_label_set_text(bl, "SD 卡图书");
+    lv_obj_set_style_text_color(bl, lv_color_black(), 0);
+    if (rdh_font(20) != NULL) {
+        lv_obj_set_style_text_font(bl, rdh_font(20), 0);
+    }
+    lv_obj_center(bl);
+    lv_obj_add_event_cb(s_btn_books, rdh_tab_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
     /* 提示 */
     s_hint_label = rdh_label_create(scr, "", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(s_hint_label, s_card_w);
