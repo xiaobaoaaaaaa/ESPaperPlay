@@ -87,7 +87,11 @@ esp_err_t espaperplay_clock_get_timezone(char *tz_out, size_t tz_out_len);
 esp_err_t espaperplay_clock_ntp_start(void);
 
 /**
- * @brief 等待 NTP 首次时间同步完成。
+ * @brief 等待 NTP 时间同步完成。
+ *
+ * 等待组件自持的同步事件（任一次成功对时置位，取走即清除）。多任务并发
+ * 等待安全：同一次同步会唤醒所有正在等待的任务（广播语义）。SNTP 已同步过
+ * 且事件未被消费时立即返回成功。
  *
  * @param timeout_ms 等待超时（毫秒），0 表示不等待立即返回。
  * @return ESP_OK 已同步；ESP_ERR_TIMEOUT 超时未同步；其他为错误码。
@@ -108,8 +112,9 @@ esp_err_t espaperplay_clock_get_local_time(struct tm *local_time);
 /**
  * @brief 强制立即通过 NTP 重新对时。
  *
- * 停止并重新初始化 SNTP 客户端后阻塞等待一次同步（用于用户唤醒 / 周期标定
- * 等需要即时校正的场景）。同步成功后自动更新内部校正基准。
+ * 重启 SNTP 轮询（立即发起新一轮同步采样）后阻塞等待一次同步（用于用户
+ * 唤醒 / 周期标定等需要即时校正的场景）。不销毁 SNTP 客户端单例——nettime
+ * 任务可能正并发等待对时。同步成功后自动更新内部校正基准。
  *
  * @param timeout_ms 等待同步超时（毫秒）。
  * @return ESP_OK 已同步；ESP_ERR_TIMEOUT 超时；其他为错误码。

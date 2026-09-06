@@ -20,6 +20,7 @@
 #include "espaperplay_config.h"
 #include "espaperplay_diaglog.h"
 #include "espaperplay_epd.h"
+#include "espaperplay_gui.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
 #include "espaperplay_weather.h"
@@ -160,6 +161,12 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* 冻结 GUI 刷新管线：从现在到 esp_light_sleep_start 之间不允许再有任何
+     * EPD 刷新进入执行（epd_sleep 只保证等待"已在执行"的刷新完成，冻结前
+     * 实测仍有新帧在其返回后排入并在睡眠入口执行，SPI DMA 被浅睡眠打断）。
+     * worker 会丢弃已就绪帧，flush 丢弃新帧；唤醒后统一解冻。 */
+    espaperplay_gui_set_frozen(true);
+
     /* 先确保 EPD 面板已进入自身深度睡眠：该函数会等待在途刷新完成
      * （持锁）后睡眠，避免浅睡眠期间有 SPI 传输被中断；面板已睡眠时
      * 为无操作。 */
@@ -167,6 +174,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     if (epd_ret != ESP_OK) {
         ESP_LOGW(TAG, "EPD sleep before light sleep failed: %s (skip light sleep)",
                  esp_err_to_name(epd_ret));
+        espaperplay_gui_set_frozen(false);
         return epd_ret;
     }
 
@@ -230,6 +238,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
                 s_last_skip_log_ms = now_ms;
                 espaperplay_diaglog_write("PWR", "sleep skipped: touch INT still active");
             }
+            espaperplay_gui_set_frozen(false);
             return ESP_ERR_INVALID_STATE;
         }
     }
@@ -246,6 +255,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "light sleep failed: %s", esp_err_to_name(err));
         espaperplay_diaglog_write("PWR", "light sleep FAILED: %s", esp_err_to_name(err));
+        espaperplay_gui_set_frozen(false);
         return err;
     }
     int64_t sleep_us = sleep_end - sleep_start;
@@ -266,6 +276,8 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     espaperplay_diaglog_write("PWR", "woke: causes=0x%x%s%s, slept %lld us", (unsigned)causes,
                               s_wake_was_timer ? " (timer)" : "", woke_by_gpio ? " (gpio)" : "",
                               (long long)sleep_us);
+    /* 唤醒：解冻刷新管线，后续的图标清除 / 界面恢复正常走刷新路径。 */
+    espaperplay_gui_set_frozen(false);
     return ESP_OK;
 }
 

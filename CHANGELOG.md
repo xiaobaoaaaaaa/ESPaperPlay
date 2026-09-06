@@ -8,6 +8,18 @@
 
 ## [未发布]
 
+### 修复
+
+- 修复唤醒重连后偶发 `spinlock_acquire (lock->count == 0)` 断言崩溃：power
+  唤醒路径 `espaperplay_clock_resync_now` 会销毁并重建 SNTP 客户端，而
+  nettime 任务可能正阻塞在 esp_netif_sntp 内部同步信号量上（句柄被删除后
+  唤醒即访问已释放内存）。clock 组件改用自持事件组等待同步（广播语义，
+  多任务并发等待安全），运行期不再销毁 SNTP 单例，重对时改为重启轮询。
+- 修复浅睡眠入口与 GUI 刷新的竞态：`epd_sleep` 返回后 LVGL 定时器仍可在
+  睡眠窗口内排入新帧并在 `esp_light_sleep_start` 处执行（实测 800x480 局刷
+  被睡眠打断）。GUI 组件新增冻结开关（flush 丢帧保留脏区、worker 排空即弃），
+  power 在浅睡眠前冻结、唤醒后解冻。
+
 ### 变更
 
 - README 精简重构：主 README 仅保留简介 / 功能总览 / 硬件平台 / 文档索引 /

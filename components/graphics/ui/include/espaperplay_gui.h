@@ -247,6 +247,18 @@ esp_err_t espaperplay_gui_flush(void);
 esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms);
 
 /**
+ * @brief 冻结/解冻刷新管线（浅睡眠准备专用）。
+ *
+ * 冻结后：新 flush 请求被丢弃（脏区保留，解冻后下一帧自动补刷），worker
+ * 立即排空（丢弃）已就绪的排队帧。用于浅睡眠前保证 esp_light_sleep_start
+ * 时零在途 EPD 刷新（睡眠会打断 SPI DMA 传输，面板/控制器状态将不可知）。
+ * power 组件在进入浅睡眠前置位、唤醒后清除；其他调用方请勿使用。
+ *
+ * @param frozen true=冻结（丢弃后续刷新），false=恢复正常刷新。
+ */
+void espaperplay_gui_set_frozen(bool frozen);
+
+/**
  * @brief 切换到 BW 模式并整帧刷新（页面级操作，GRAY4 -> BW 转换）。
  *
  * = set_color(BW) + 全屏提交 + flush。主帧当前内容按 BW 转换器输出；

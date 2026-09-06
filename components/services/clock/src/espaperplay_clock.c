@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -49,6 +50,16 @@ static char s_posix_tz[ESPAPERPLAY_CLOCK_TZ_MAX_LEN] = "UTC0";
 
 /** SNTP 是否已初始化启动。 */
 static bool s_sntp_started = false;
+
+/** SNTP 同步完成事件位。 */
+#define CLOCK_NTP_SYNCED_BIT BIT0
+/** SNTP 同步事件组：每次成功对时由 sync_cb 置位，等待者 clear-on-exit 取走。
+ * 刻意不使用 esp_netif_sntp 的 wait_for_sync 内部信号量：它随
+ * esp_netif_sntp_deinit 销毁，而运行期 nettime 任务与 power 唤醒路径可能
+ * 并发等待/重启对时——删除他人正阻塞其上的信号量会唤醒后访问已释放内存
+ * （实测：唤醒重连后 spinlock count 断言崩溃）。事件组广播语义天然支持
+ * 多任务并发等待同一次同步。 */
+static EventGroupHandle_t s_ntp_evt = NULL;
 
 /* ------------------------------------------------------------------ */
 /* 软件 RTC 漂移标定（补偿 INT_RC 慢时钟误差，无需外部 32k 晶振）          */
@@ -264,6 +275,9 @@ static void clock_store_timezone(const char *tz_name) {
  * 确保校正基准始终跟踪最新真实时间，避免与软件漂移补偿重复校正。 */
 static void clock_sntp_sync_cb(struct timeval *tv) {
     (void)tv;
+    if (s_ntp_evt != NULL) {
+        xEventGroupSetBits(s_ntp_evt, CLOCK_NTP_SYNCED_BIT);
+    }
     espaperplay_clock_mark_synced();
 }
 
@@ -273,10 +287,16 @@ static esp_err_t clock_sntp_init_start(void) {
         ESPAPERPLAY_CLOCK_NTP_SERVER_COUNT,
         ESP_SNTP_SERVER_LIST(s_ntp_servers[0], s_ntp_servers[1], s_ntp_servers[2]));
     config.sync_cb = clock_sntp_sync_cb;
+    /* 等待同步走组件自持事件组（见 s_ntp_evt 注释），不创建内部信号量。 */
+    config.wait_for_sync = false;
     esp_err_t err = esp_netif_sntp_init(&config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "failed to init sntp: %s", esp_err_to_name(err));
         return err;
+    }
+    if (s_ntp_evt != NULL) {
+        /* 清除历史残留位，使本次启动后的首次同步才视为新鲜事件。 */
+        xEventGroupClearBits(s_ntp_evt, CLOCK_NTP_SYNCED_BIT);
     }
     err = esp_netif_sntp_start();
     if (err != ESP_OK) {
@@ -315,6 +335,10 @@ esp_err_t espaperplay_clock_init(void) {
     if (s_drift_mutex == NULL) {
         ESP_LOGE(TAG, "failed to create drift mutex");
     }
+    s_ntp_evt = xEventGroupCreate();
+    if (s_ntp_evt == NULL) {
+        ESP_LOGE(TAG, "failed to create ntp sync event group");
+    }
     clock_load_drift();
     /* 重启后保留已测得的漂移率用于即时校正；累计睡眠与采样数清零，
      * 由下次对时重新累积（睡眠时长不跨重启持久化）。 */
@@ -346,18 +370,18 @@ esp_err_t espaperplay_clock_get_timezone(char *tz_out, size_t tz_out_len) {
 }
 
 esp_err_t espaperplay_clock_ntp_wait_sync(uint32_t timeout_ms) {
-    if (!s_sntp_started) {
+    if (!s_sntp_started || s_ntp_evt == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
-    if (err == ESP_OK) {
+    const EventBits_t bits =
+        xEventGroupWaitBits(s_ntp_evt, CLOCK_NTP_SYNCED_BIT, pdTRUE, pdFALSE,
+                            pdMS_TO_TICKS(timeout_ms));
+    if (bits & CLOCK_NTP_SYNCED_BIT) {
         ESP_LOGI(TAG, "time synchronized via ntp");
-    } else if (err == ESP_ERR_TIMEOUT) {
-        ESP_LOGW(TAG, "ntp sync timed out after %u ms", timeout_ms);
-    } else {
-        ESP_LOGW(TAG, "ntp sync wait returned %s", esp_err_to_name(err));
+        return ESP_OK;
     }
-    return err;
+    ESP_LOGW(TAG, "ntp sync timed out after %u ms", timeout_ms);
+    return ESP_ERR_TIMEOUT;
 }
 
 /* ------------------------------------------------------------------ */
@@ -440,15 +464,27 @@ esp_err_t espaperplay_clock_mark_synced(void) {
 }
 
 esp_err_t espaperplay_clock_resync_now(uint32_t timeout_ms) {
-    if (s_sntp_started) {
-        esp_netif_sntp_deinit();
-        s_sntp_started = false;
+    esp_err_t err;
+    if (!s_sntp_started) {
+        err = clock_sntp_init_start();
+        if (err != ESP_OK) {
+            return err;
+        }
+    } else {
+        /* 绝不在运行期 esp_netif_sntp_deinit：nettime 任务可能正阻塞在对时
+         * 等待上，deinit 会销毁它脚下的句柄（历史信号量路径已整体弃用）。
+         * 复位事件位并重启轮询（内部 sntp_stop+sntp_init，服务器配置保留），
+         * 立即发起一轮全新同步采样，供漂移标定取得新鲜读数。 */
+        if (s_ntp_evt != NULL) {
+            xEventGroupClearBits(s_ntp_evt, CLOCK_NTP_SYNCED_BIT);
+        }
+        err = esp_netif_sntp_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to restart sntp: %s", esp_err_to_name(err));
+            /* 继续等待：旧轮询可能仍在推进，超时由下方统一处理。 */
+        }
     }
-    esp_err_t err = clock_sntp_init_start();
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
+    err = espaperplay_clock_ntp_wait_sync(timeout_ms);
     if (err == ESP_OK) {
         espaperplay_clock_mark_synced();
     } else if (err == ESP_ERR_TIMEOUT) {

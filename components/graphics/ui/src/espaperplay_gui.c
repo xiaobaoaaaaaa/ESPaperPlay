@@ -54,6 +54,13 @@ static bool s_initialized = false;
 static SemaphoreHandle_t s_lock = NULL;   /*!< 槽位/脏区状态互斥（渲染任务 vs worker） */
 static TaskHandle_t s_worker_task = NULL; /*!< 异步刷新 worker（NULL=退化同步） */
 
+/* 睡眠冻结：置位后 flush 丢弃新帧、worker 出队即弃 READY 槽。浅睡眠准备与
+ * esp_light_sleep_start 之间不允许再有任何 EPD 刷新进入执行——否则 SPI DMA
+ * 传输会被浅睡眠打断，面板/控制器状态不可知（实测缺陷：epd_sleep 返回后
+ * LVGL 定时器仍可在窗口内排入新帧并在睡眠入口处执行）。由 power 组件在
+ * 睡眠前置位、唤醒后清除。读写均持 s_lock。 */
+static bool s_frozen = false;
+
 /* 脏区（8 对齐包围盒，一帧内合并；由渲染任务在锁内读写） */
 static bool s_dirty = false;
 static uint16_t s_dirty_x = 0;
@@ -380,7 +387,15 @@ static void gui_worker_task(void *arg) {
         }
         gui_op_t op;
         gui_op_t *slot = NULL;
-        if (s_op_a.state == GUI_SLOT_READY) {
+        if (s_frozen) {
+            /* 冻结期：丢弃全部待执行帧（含另一槽），保证睡眠前零在途刷新。 */
+            if (s_op_a.state == GUI_SLOT_READY) {
+                s_op_a.state = GUI_SLOT_IDLE;
+            }
+            if (s_op_b.state == GUI_SLOT_READY) {
+                s_op_b.state = GUI_SLOT_IDLE;
+            }
+        } else if (s_op_a.state == GUI_SLOT_READY) {
             slot = &s_op_a;
         } else if (s_op_b.state == GUI_SLOT_READY) {
             slot = &s_op_b;
@@ -854,6 +869,11 @@ esp_err_t espaperplay_gui_flush(void) {
         xSemaphoreGive(s_lock);
         return ESP_OK;
     }
+    if (s_frozen) {
+        /* 冻结期丢帧：保留脏区，解冻后的下一帧自动重试。 */
+        xSemaphoreGive(s_lock);
+        return ESP_OK;
+    }
 
     /* 选槽：优先空闲槽（快照）；其次 READY 的 FRAME 槽（并入重快照取最新帧）。
      * BUSY 槽正被 worker 的 SPI 传输读取，严禁触碰——否则会撕裂在途帧。 */
@@ -915,6 +935,22 @@ esp_err_t espaperplay_gui_wait_idle(uint32_t timeout_ms) {
             return ESP_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void espaperplay_gui_set_frozen(bool frozen) {
+    if (!s_initialized) {
+        return;
+    }
+    if (xSemaphoreTake(s_lock, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    s_frozen = frozen;
+    xSemaphoreGive(s_lock);
+    if (frozen && s_worker_task != NULL) {
+        /* 唤醒 worker 立即排空（丢弃）已就绪帧，使冻结即刻生效；
+         * worker 检测到冻结后不会执行任何刷新。 */
+        xTaskNotifyGive(s_worker_task);
     }
 }
 
