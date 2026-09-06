@@ -215,6 +215,10 @@ typedef struct {
     uint64_t ts_ms;
     char loc[16];
     espaperplay_weather_astronomy_t data;
+    /*! 最近一次非空月出（含日期隐含：仅当日月出非空时更新；今日无月出时它
+     * 必为前一日值——月升每 24.8h 一次，日历日最多缺一天）。和风 astronomy
+     * date 参数仅支持今日起未来 60 天（过去日期 400），前一日月出只能靠缓存。 */
+    char last_moonrise[24];
 } weather_astronomy_cache_t;
 
 /* 各接口缓存合计约 30KB、快照约 22KB：均为纯 CPU 访问、不参与 DMA，
@@ -1885,7 +1889,9 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     if (err != ESP_OK) {
         return err;
     }
-    espaperplay_weather_astronomy_t tmp;
+    /* 必须清零：moonrise_prev/moonset_next 无解析路径覆盖，不清零会把栈
+     * 垃圾带进快照（曾渲染出"月出 昨+08:00"）。 */
+    espaperplay_weather_astronomy_t tmp = {0};
     err = weather_parse_astronomy(body, true, &tmp);
     free(body);
     if (err != ESP_OK) {
@@ -1903,14 +1909,17 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     }
 
     /* 今日无月出/月落（月升月落每日推迟约 50 分钟，跨过午夜的那天该事件记入
-     * 前后日，和风当日字段返回空串，每朔望月各约 1-2 天）时，追加相邻日请求
-     * 回填：月出取前一日、月落取次日，供显示与弧线定位。回填失败不影响今日
-     * 数据；正常日子不多花请求。 */
+     * 前后日，和风当日字段返回空串，每朔望月各约 1-2 天）时回填：
+     * 月出取缓存的上一次月出值（date 参数仅支持今日起未来 60 天，过去日期
+     * 400，前一日无接口可查）；月落直接请求次日（未来日期受支持）。
+     * 回填失败不影响今日数据；正常日子不多花请求。 */
     if (tmp.moonrise[0] == '\0') {
-        char prev_date[16];
-        weather_rel_date(-1, prev_date, sizeof(prev_date));
-        weather_fetch_moon_field(loc_id, prev_date, true, tmp.moonrise_prev,
-                                 sizeof(tmp.moonrise_prev));
+        if (s_cache_astronomy != NULL && s_cache_astronomy->last_moonrise[0] != '\0') {
+            strlcpy(tmp.moonrise_prev, s_cache_astronomy->last_moonrise,
+                    sizeof(tmp.moonrise_prev));
+            ESP_LOGI(TAG, "moonrise empty today, backfilled from cache: %s",
+                     tmp.moonrise_prev);
+        }
     }
     if (tmp.moonset[0] == '\0') {
         char next_date[16];
@@ -1924,6 +1933,10 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     }
     if (s_cache_astronomy != NULL) {
         s_cache_astronomy->data = tmp;
+        if (tmp.moonrise[0] != '\0') {
+            strlcpy(s_cache_astronomy->last_moonrise, tmp.moonrise,
+                    sizeof(s_cache_astronomy->last_moonrise));
+        }
         weather_cache_store(&s_cache_astronomy->valid, &s_cache_astronomy->ts_ms,
                             s_cache_astronomy->loc, loc_id);
     }
