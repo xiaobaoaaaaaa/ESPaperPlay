@@ -17,57 +17,9 @@
 static const char *TAG = "ESPaperPlay_WEB_AUTH";
 
 /* POST 表单请求体的最大字节数（超过直接拒绝，防内存放大）。 */
-#define ESPAPERPLAY_WEB_FORM_BUF_SIZE 1024
-
 /* ------------------------------------------------------------------ */
 /* 鉴权域路由处理器                                                     */
 /* ------------------------------------------------------------------ */
-
-/** 读取表单编码的请求体（调用方负责 free）。 */
-static esp_err_t read_form_body(httpd_req_t *req, char **out_body) {
-    int total = req->content_len;
-    if (total <= 0 || total >= ESPAPERPLAY_WEB_FORM_BUF_SIZE) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    char *body = malloc((size_t)total + 1);
-    if (body == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            free(body);
-            return ESP_FAIL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
-    *out_body = body;
-    return ESP_OK;
-}
-
-/** 签发会话并返回 JSON（token + password_configured）。 */
-static esp_err_t issue_session(httpd_req_t *req) {
-    char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
-    esp_err_t cerr = espaperplay_session_create(0, token, sizeof(token), NULL);
-    if (cerr != ESP_OK) {
-        webserver_send_json_err(req, esp_err_to_name(cerr));
-        return ESP_FAIL;
-    }
-
-    cJSON *root = cJSON_CreateObject();
-    if (root != NULL) {
-        cJSON_AddBoolToObject(root, "ok", true);
-        cJSON_AddStringToObject(root, "token", token);
-        cJSON_AddBoolToObject(root, "password_configured", espaperplay_auth_is_configured());
-        webserver_send_json(req, "200 OK", root);
-        cJSON_Delete(root);
-    } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-    }
-    return ESP_OK;
-}
 
 /** POST /api/auth/login —— 密码登录，成功后签发会话 token。 */
 esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
@@ -75,7 +27,7 @@ esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
     if (!espaperplay_auth_is_configured()) {
         ESP_LOGI(TAG, "Login (passwordless, unconfigured)");
         espaperplay_session_login_success();
-        return issue_session(req);
+        return webserver_issue_session_json(req);
     }
 
     /* 登录限速：锁定期间直接 429，不执行密码校验（节省 CPU，防暴力破解与 DoS）。 */
@@ -86,9 +38,8 @@ esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    char *body = NULL;
-    if (read_form_body(req, &body) != ESP_OK) {
-        webserver_send_json_err(req, "请求体过大或为空");
+    char *body = webserver_read_form_body(req);
+    if (body == NULL) {
         return ESP_FAIL;
     }
     char password[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
@@ -117,7 +68,7 @@ esp_err_t webserver_handle_auth_login_post(httpd_req_t *req) {
     /* 登录成功：清零失败计数并签发会话。 */
     espaperplay_session_login_success();
     ESP_LOGI(TAG, "Login success");
-    return issue_session(req);
+    return webserver_issue_session_json(req);
 }
 
 /** POST /api/auth/password —— 首次设置 / 修改密码。 */
@@ -128,9 +79,8 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    char *body = NULL;
-    if (read_form_body(req, &body) != ESP_OK) {
-        webserver_send_json_err(req, "请求体过大或为空");
+    char *body = webserver_read_form_body(req);
+    if (body == NULL) {
         return ESP_FAIL;
     }
     char password[ESPAPERPLAY_AUTH_PASSWORD_MAX_LEN] = {0};
@@ -168,7 +118,7 @@ esp_err_t webserver_handle_auth_password_post(httpd_req_t *req) {
     if (!configured) {
         espaperplay_session_login_success();
         ESP_LOGI(TAG, "Password set (first-time setup)");
-        return issue_session(req);
+        return webserver_issue_session_json(req);
     }
 
     /* 修改成功：吊销全部会话，强制重新登录。 */

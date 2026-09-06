@@ -26,7 +26,6 @@
 static const char *TAG = "ESPaperPlay_WEB_CFG";
 
 /* POST 表单请求体的最大字节数（超过直接拒绝，防内存放大）。 */
-#define ESPAPERPLAY_WEB_FORM_BUF_SIZE 1024
 
 /* ------------------------------------------------------------------ */
 /* BOOT 键长按动作 <-> 字符串                                           */
@@ -114,27 +113,10 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     }
 
     /* 读取表单编码的请求体。 */
-    int total = req->content_len;
-    if (total <= 0 || total >= ESPAPERPLAY_WEB_FORM_BUF_SIZE) {
-        webserver_send_json_err(req, "请求体过大或为空");
-        return ESP_FAIL;
-    }
-    char *body = malloc((size_t)total + 1);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
         return ESP_FAIL;
     }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "读取请求体失败");
-            free(body);
-            return ESP_FAIL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
 
     /* 解析字段。仅应用请求体中*出现*的字段（部分更新）：完整表单 = 全量，
      * 屏幕设置表单只提交其自身字段。webserver_form_get_field 返回该字段是否出现。 */
@@ -440,8 +422,7 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
 
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
+    webserver_restart_after_response();
     return ESP_OK; /* 不会执行到这里 */
 }
 

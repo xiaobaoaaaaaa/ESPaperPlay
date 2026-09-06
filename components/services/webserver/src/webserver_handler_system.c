@@ -51,14 +51,7 @@ esp_err_t webserver_handle_heartbeat_post(httpd_req_t *req) {
     }
     espaperplay_power_note_external_activity();
 
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return ESP_FAIL;
-    }
-    cJSON_AddBoolToObject(root, "ok", true);
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
+    webserver_send_ok(req);
     return ESP_OK;
 }
 
@@ -111,14 +104,8 @@ esp_err_t webserver_handle_reboot_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "ok", true);
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
-
-    /* 稍作延时让响应有机会发出，再触发重启。 */
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
+    webserver_send_ok(req);
+    webserver_restart_after_response();
     return ESP_OK; /* 不会执行到这里 */
 }
 

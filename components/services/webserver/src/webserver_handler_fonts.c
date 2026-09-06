@@ -28,9 +28,7 @@
 static const char *TAG = "ESPaperPlay_WEB_FONT";
 
 /** 上传请求体的流式读写缓冲（分块写入 SD，避免整文件驻留 RAM）。 */
-#define FONT_UPLOAD_CHUNK 4096
 /** 选择 / 枚举请求体上限（表单很小）。 */
-#define FONT_FORM_BUF_SIZE 1024
 
 /** 校验字体文件名：仅允许简单文件名（无路径分隔符 / 目录穿越），且以
  *  .ttf / .otf / .ttc 结尾（大小写不敏感）。 */
@@ -55,17 +53,6 @@ static bool font_name_valid(const char *name) {
 }
 
 /** 以 {"ok":true} 响应。 */
-static void webserver_send_ok(httpd_req_t *req) {
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return;
-    }
-    cJSON_AddBoolToObject(root, "ok", true);
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
-}
-
 /* ------------------------------------------------------------------ */
 /* 字体枚举 / 选择 / 上传                                               */
 /* ------------------------------------------------------------------ */
@@ -148,27 +135,10 @@ esp_err_t webserver_handle_fonts_select_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    const int total = req->content_len;
-    if (total <= 0 || total >= FONT_FORM_BUF_SIZE) {
-        webserver_send_json_err(req, "请求体过大或为空");
-        return ESP_FAIL;
-    }
-    char *body = malloc((size_t)total + 1);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
         return ESP_FAIL;
     }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "读取请求体失败");
-            free(body);
-            return ESP_FAIL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
 
     char name[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN] = {0};
     const bool has_name = webserver_form_get_field(body, "name", name, sizeof(name));
@@ -201,9 +171,7 @@ esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req) {
 
     /* 文件名取自查询参数（避免 multipart 解析开销）。 */
     char name[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN] = {0};
-    char query[128] = {0};
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        !webserver_form_get_field(query, "name", name, sizeof(name)) || name[0] == '\0') {
+    if (!webserver_query_get_field(req, "name", name, sizeof(name)) || name[0] == '\0') {
         webserver_send_json_err(req, "缺少查询参数 name");
         return ESP_FAIL;
     }
@@ -240,30 +208,10 @@ esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 分块读取请求体并写入 SD，避免大字体整文件驻留 RAM。 */
-    char buf[FONT_UPLOAD_CHUNK];
-    int received = 0;
-    while (received < total) {
-        int chunk = total - received;
-        if (chunk > (int)sizeof(buf)) {
-            chunk = (int)sizeof(buf);
-        }
-        int r = httpd_req_recv(req, buf, (size_t)chunk);
-        if (r <= 0) {
-            fclose(f);
-            remove(path);
-            webserver_send_json_err(req, "读取请求体失败");
-            return ESP_FAIL;
-        }
-        received += r;
-        if (fwrite(buf, 1, (size_t)r, f) != (size_t)r) {
-            fclose(f);
-            remove(path);
-            webserver_send_json_err(req, "写入 SD 卡失败");
-            return ESP_FAIL;
-        }
+    const int received = webserver_recv_body_to_file(req, total, f, path);
+    if (received < 0) {
+        return ESP_FAIL; /* 失败时文件已关闭、半成品已清理并响应错误 */
     }
-    fclose(f);
 
     ESP_LOGI(TAG, "font uploaded: %s (%d bytes)", name, received);
     cJSON *ok = cJSON_CreateObject();
@@ -285,27 +233,10 @@ esp_err_t webserver_handle_fonts_delete_post(httpd_req_t *req) {
     }
 
     /* 读取表单编码的请求体（与 select 接口一致，name 经请求体传递）。 */
-    int total = req->content_len;
-    if (total <= 0 || total >= FONT_FORM_BUF_SIZE) {
-        webserver_send_json_err(req, "请求体过大或为空");
-        return ESP_FAIL;
-    }
-    char *body = malloc((size_t)total + 1);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
         return ESP_FAIL;
     }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "读取请求体失败");
-            free(body);
-            return ESP_FAIL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
 
     char name[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN] = {0};
     const bool has_name = webserver_form_get_field(body, "name", name, sizeof(name));

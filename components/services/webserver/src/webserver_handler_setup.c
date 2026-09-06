@@ -18,9 +18,6 @@
 
 static const char *TAG = "ESPaperPlay_WEB_SETUP";
 
-/* POST 表单请求体的最大字节数（超过直接拒绝，防内存放大）。 */
-#define ESPAPERPLAY_WEB_SETUP_FORM_BUF_SIZE 1024
-
 /* ------------------------------------------------------------------ */
 /* 公开性守卫                                                           */
 /* ------------------------------------------------------------------ */
@@ -35,51 +32,6 @@ static const char *TAG = "ESPaperPlay_WEB_SETUP";
  * @return true=允许（引导未完成）；false=拒绝（应返回 403）。
  */
 static bool setup_write_allowed(void) { return !espaperplay_system_is_setup_done(); }
-
-/** 读取表单编码的请求体（调用方负责 free）。 */
-static esp_err_t setup_read_form_body(httpd_req_t *req, char **out_body) {
-    int total = req->content_len;
-    if (total <= 0 || total >= ESPAPERPLAY_WEB_SETUP_FORM_BUF_SIZE) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    char *body = malloc((size_t)total + 1);
-    if (body == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            free(body);
-            return ESP_FAIL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
-    *out_body = body;
-    return ESP_OK;
-}
-
-/** 签发会话并返回 JSON（token + password_configured）。 */
-static esp_err_t setup_issue_session(httpd_req_t *req) {
-    char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
-    esp_err_t cerr = espaperplay_session_create(0, token, sizeof(token), NULL);
-    if (cerr != ESP_OK) {
-        webserver_send_json_err(req, esp_err_to_name(cerr));
-        return ESP_FAIL;
-    }
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return ESP_FAIL;
-    }
-    cJSON_AddBoolToObject(root, "ok", true);
-    cJSON_AddStringToObject(root, "token", token);
-    cJSON_AddBoolToObject(root, "password_configured", espaperplay_auth_is_configured());
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
 
 /* ------------------------------------------------------------------ */
 /* 路由处理器                                                           */
@@ -124,9 +76,8 @@ esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req) {
         return ESP_OK;
     }
 
-    char *body = NULL;
-    if (setup_read_form_body(req, &body) != ESP_OK) {
-        webserver_send_json_err(req, "请求体过大或为空");
+    char *body = webserver_read_form_body(req);
+    if (body == NULL) {
         return ESP_FAIL;
     }
 
@@ -250,12 +201,9 @@ esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req) {
 
     /* 响应：设置了密码则签发会话令牌，否则仅返回 ok。 */
     if (pwd_set) {
-        setup_issue_session(req);
+        webserver_issue_session_json(req);
     } else {
-        cJSON *root = cJSON_CreateObject();
-        cJSON_AddBoolToObject(root, "ok", true);
-        webserver_send_json(req, "200 OK", root);
-        cJSON_Delete(root);
+        webserver_send_ok(req);
     }
 
     /* 先响应再应用网络（切换模式会重建接口并可能改变 IP）。 */

@@ -12,6 +12,30 @@
 #include "espaperplay_session.h"
 #include "webserver_internal.h"
 
+/* ------------------------------------------------------------------ */
+/* 会话签发（登录 / 首次引导共用）                                        */
+/* ------------------------------------------------------------------ */
+
+esp_err_t webserver_issue_session_json(httpd_req_t *req) {
+    char token[ESPAPERPLAY_SESSION_TOKEN_HEX_LEN];
+    esp_err_t cerr = espaperplay_session_create(0, token, sizeof(token), NULL);
+    if (cerr != ESP_OK) {
+        webserver_send_json_err(req, esp_err_to_name(cerr));
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "token", token);
+    cJSON_AddBoolToObject(root, "password_configured", espaperplay_auth_is_configured());
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 /* Authorization 头格式：Bearer <token>。 */
 #define AUTH_HEADER_BUF_SIZE 80
 #define BEARER_PREFIX "Bearer "

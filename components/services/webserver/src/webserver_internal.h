@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "cJSON.h"
 #include "esp_http_server.h"
@@ -78,6 +79,45 @@ bool webserver_form_get_field(const char *body, const char *name, char *out, siz
  * @brief 读取布尔开关字段（值为 1 / true / on 时视为真）。
  */
 bool webserver_form_get_flag(const char *body, const char *name);
+
+/**
+ * @brief 读取表单编码的请求体（小表单；NUL 结尾，调用方负责 free）。
+ *
+ * 失败（过大/为空/读取中断/无内存）时内部已响应对应错误，返回 NULL，
+ * 调用方直接返回 ESP_FAIL 即可。
+ */
+char *webserver_read_form_body(httpd_req_t *req);
+
+/**
+ * @brief 以 {"ok":true} 响应（200）。
+ */
+void webserver_send_ok(httpd_req_t *req);
+
+/**
+ * @brief 把请求体（total 字节）流式分块写入已打开的文件。
+ *
+ * 任何失败都会 fclose 并 remove(rollback_path) 清理半成品，同时内部已响应
+ * 错误。成功时返回写入字节数（=total），失败返回 -1（文件已被关闭）。
+ */
+int webserver_recv_body_to_file(httpd_req_t *req, int total, FILE *f, const char *rollback_path);
+
+/**
+ * @brief 从 URL 查询串提取字段（等价于 query_str + form_get_field 组合）。
+ */
+bool webserver_query_get_field(httpd_req_t *req, const char *name, char *out, size_t out_size);
+
+/**
+ * @brief 延时后重启设备（调用前先完成响应发送）。
+ */
+void webserver_restart_after_response(void);
+
+/**
+ * @brief 签发会话并以 JSON 响应（token + password_configured）。
+ *
+ * 登录成功与首次引导设置完成后共用（webserver_auth_guard.c）。
+ * @return ESP_OK=已响应；ESP_FAIL=签发失败（已响应错误）。
+ */
+esp_err_t webserver_issue_session_json(httpd_req_t *req);
 
 /* ------------------------------------------------------------------ */
 /* 路由处理器                                                           */

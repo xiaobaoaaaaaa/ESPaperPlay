@@ -47,7 +47,6 @@ static const char *TAG = "ESPaperPlay_WEB_FILES";
  */
 
 /** 表单请求体上限（path / name 均为短字段）。 */
-#define FILES_FORM_BUF_SIZE 1024
 /** 相对路径缓冲（规范化后的挂载点内路径，含 NUL）。 */
 #define FILES_REL_MAX 256
 /** 绝对路径缓冲（挂载点 + 相对路径 + 条目名，含 NUL）。 */
@@ -152,44 +151,6 @@ static bool files_abs_join(char *dst, size_t size, const char *dir, const char *
         return false;
     }
     return strlcat(dst, name, size) < size;
-}
-
-/** 以 {"ok":true} 响应。 */
-static void files_send_ok(httpd_req_t *req) {
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return;
-    }
-    cJSON_AddBoolToObject(root, "ok", true);
-    webserver_send_json(req, "200 OK", root);
-    cJSON_Delete(root);
-}
-
-/** 读取表单编码请求体（小表单）；失败时已响应错误并返回 NULL（调用方直接返回）。 */
-static char *files_read_form_body(httpd_req_t *req) {
-    const int total = req->content_len;
-    if (total <= 0 || total >= FILES_FORM_BUF_SIZE) {
-        webserver_send_json_err(req, "请求体过大或为空");
-        return NULL;
-    }
-    char *body = malloc((size_t)total + 1);
-    if (body == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return NULL;
-    }
-    int received = 0;
-    while (received < total) {
-        int r = httpd_req_recv(req, body + received, (size_t)(total - received));
-        if (r <= 0) {
-            free(body);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "读取请求体失败");
-            return NULL;
-        }
-        received += r;
-    }
-    body[received] = '\0';
-    return body;
 }
 
 /** 从表单解析目录 path 字段并转为绝对路径；失败已响应并返回 false。 */
@@ -423,7 +384,7 @@ esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req) {
     if (webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
     }
-    char *body = files_read_form_body(req);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
         return ESP_FAIL;
     }
@@ -455,7 +416,7 @@ esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "mkdir: %s", target);
-    files_send_ok(req);
+    webserver_send_ok(req);
     return ESP_OK;
 }
 
@@ -464,7 +425,7 @@ esp_err_t webserver_handle_files_rename_post(httpd_req_t *req) {
     if (webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
     }
-    char *body = files_read_form_body(req);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
         return ESP_FAIL;
     }
@@ -504,7 +465,7 @@ esp_err_t webserver_handle_files_rename_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "rename: %s -> %s", src, to);
-    files_send_ok(req);
+    webserver_send_ok(req);
     return ESP_OK;
 }
 
@@ -513,7 +474,7 @@ esp_err_t webserver_handle_files_delete_post(httpd_req_t *req) {
     if (webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
     }
-    char *body = files_read_form_body(req);
+    char *body = webserver_read_form_body(req);
     if (body == NULL) {
         return ESP_FAIL;
     }
@@ -548,7 +509,7 @@ esp_err_t webserver_handle_files_delete_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "deleted: %s", target);
-    files_send_ok(req);
+    webserver_send_ok(req);
     return ESP_OK;
 }
 
@@ -681,30 +642,10 @@ esp_err_t webserver_handle_files_upload_post(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    /* 分块读取请求体写入 SD（同字体上传：大文件不驻留 RAM）。 */
-    char buf[FILES_IO_CHUNK];
-    int received = 0;
-    while (received < total) {
-        int chunk = total - received;
-        if (chunk > (int)sizeof(buf)) {
-            chunk = (int)sizeof(buf);
-        }
-        int r = httpd_req_recv(req, buf, (size_t)chunk);
-        if (r <= 0) {
-            fclose(f);
-            remove(target); /* 半途而废的残留一并清理 */
-            webserver_send_json_err(req, "读取请求体失败");
-            return ESP_FAIL;
-        }
-        received += r;
-        if (fwrite(buf, 1, (size_t)r, f) != (size_t)r) {
-            fclose(f);
-            remove(target);
-            webserver_send_json_err(req, "写入 SD 卡失败");
-            return ESP_FAIL;
-        }
+    const int received = webserver_recv_body_to_file(req, total, f, target);
+    if (received < 0) {
+        return ESP_FAIL; /* 失败时文件已关闭、半成品已清理并响应错误 */
     }
-    fclose(f);
 
     ESP_LOGI(TAG, "uploaded: %s (%d bytes)", target, received);
     cJSON *ok = cJSON_CreateObject();
