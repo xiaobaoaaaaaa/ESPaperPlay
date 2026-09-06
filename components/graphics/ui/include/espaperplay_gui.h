@@ -43,6 +43,10 @@ extern "C" {
  *   - 模式切换是页面级操作（espaperplay_gui_show_bw / show_gray4），
  *     切换后主帧内容不变，只是转换路径不同；驱动保证切换刷新干净
  *     （灰阶->黑白旧平面反相，清除中间灰残留）。
+ *   - 灰阶残留自动清理：上一次已执行的刷新是灰阶（GRAY4）时，下一次 BW
+ *     刷新自动升级为"整帧快照 + 全屏窗口局刷"（~0.5s）——驱动对全窗口
+ *     反写旧平面，把中间灰残留清除扩展到整个面板；此后差分局刷恢复干净。
+ *     局部窗口只在窗口内反写，故灰阶后绝不能直接用小窗口局刷。
  *
  * 典型流程：
  *   1. espaperplay_gui_get_framebuffer() 取得 RGB565 渲染目标；
@@ -123,7 +127,7 @@ typedef struct {
  * 置 0 表示禁用周期性全刷清残影（永远只用局部刷新）。
  */
 #ifndef ESPAPERPLAY_GUI_FULL_FORCE_AFTER
-#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 10
+#define ESPAPERPLAY_GUI_FULL_FORCE_AFTER 20
 #endif
 
 /** 连续局刷计数阈值上限（防止不合理配置）。 */

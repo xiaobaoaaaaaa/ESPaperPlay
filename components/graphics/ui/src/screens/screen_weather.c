@@ -15,6 +15,7 @@
 #include "espaperplay_clock.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
+#include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 #include "espaperplay_ui_touch.h"
 #include "espaperplay_weather.h"
@@ -37,7 +38,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *                 曲线上方、最低温在下方，横向滚动）+ 每列日期代称/图标
  *                 + 次要信息卡片（湿度/风/降水/气压/能见度/体感，附图标）；
  *   子页 2「天文 + 指数」：日出日落/月出月落弧线（太阳/月亮图标按当前
- *                 时间定位）+ 天气指数列表（穿衣/洗车等）。
+ *                 时间定位，月亮按 API 返回的真实月相显示）+ 天气指数列表
+ *                 （穿衣/洗车等）。
  *
  * 交互：
  *   - 屏幕左/右边缘向内滑动返回主页（安卓边缘手势）；
@@ -55,31 +57,37 @@ static const char *TAG = "ESPaperPlay_UI";
  * 保持间距）、白底黑字。除图表滚动容器外，所有对象禁用 LVGL 滚动。
  *
  * 数据：weather 服务内存快照（后台任务周期刷新），页面定时器 30s 刷新，
- * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）；快照尚不可用
- * （启动初期 / 刷新失败）时页面切到秒级快速轮询并周期性催促后台任务，
- * 天气数据获取成功后即刻更新页面。
+ * 数据更新时间未变化时跳过标签更新（EPD 避免无谓刷新）；「最近更新」
+ * 提示按 10 分钟 / 小时 / 天档位量化后随时间推进单独刷新。
+ * 快照尚不可用（启动初期 / 刷新失败）时页面切到秒级快速轮询并周期性
+ * 催促后台任务，天气数据获取成功后即刻更新页面。
  */
 
 #define WEATHER_UI_PERIOD_MS 30000 /* 页面定时器刷新周期 */
-#define WEATHER_UI_RETRY_MS  1000  /* 快照还不可用时（启动初期/刷新失败）的快速重试周期 */
-#define WEATHER_BAR_H_PX     30    /* 标题栏高度 */
-#define WEATHER_EDGE_PX      48    /* 边缘滑动触发宽度 */
+#define WEATHER_UI_RETRY_MS 1000   /* 快照还不可用时（启动初期/刷新失败）的快速重试周期 */
+#define WEATHER_BAR_H_PX 30        /* 标题栏高度 */
+#define WEATHER_EDGE_PX 24         /* 边缘滑动触发宽度 */
 #define WEATHER_EDGE_SWIPE_PX 70   /* 边缘向内滑动位移阈值 */
-#define WEATHER_SWIPE_PX     90    /* 子页切换位移阈值 */
-#define WEATHER_MARGIN       24    /* 卡片与屏幕边缘间距 */
+#define WEATHER_SWIPE_PX 90        /* 子页切换位移阈值 */
+#define WEATHER_MARGIN 24          /* 卡片与屏幕边缘间距 */
 
-#define WEATHER_SUBPAGE_CNT  3
-#define WEATHER_HOURLY_CNT   24    /* 未来 24 小时（数据点数） */
-#define WEATHER_HOURLY_CHART_CNT 22 /* 曲线渲染点数（0..21：最后一列 21h 与曲线右端对齐，避免折线超出末列） */
-#define WEATHER_HOURLY_STEP  30    /* 24h 图每点水平间距（px） */
-#define WEATHER_HOURLY_LABEL 3     /* 每 N 小时标注一次温度值 */
-#define WEATHER_DAILY_CNT    7     /* 未来 7 天 */
-#define WEATHER_DAILY_STEP   84    /* 7 天图每列宽度（px） */
+#define WEATHER_SUBPAGE_CNT 3
+#define WEATHER_HOURLY_CNT 24 /* 未来 24 小时（数据点数） */
+#define WEATHER_HOURLY_CHART_CNT                                                                   \
+    22 /* 曲线渲染点数（0..21：最后一列 21h 与曲线右端对齐，避免折线超出末列） */
+#define WEATHER_HOURLY_STEP 30 /* 24h 图每点水平间距（px） */
+#define WEATHER_HOURLY_LABEL 3 /* 每 N 小时标注一次温度值 */
+#define WEATHER_DAILY_CNT 7    /* 未来 7 天 */
+#define WEATHER_DAILY_STEP 84  /* 7 天图每列宽度（px） */
 
-#define WEATHER_FONT_NAME "NotoSansSC_Regular.ttf"
+#define WEATHER_FONT_NAME                                                                          \
+    (espaperplay_system_get_config()                                                               \
+         ->selected_font) /* 当前选用字体（SD 优先，缺则回退 Flash 子集） */
 
 /** 数据是否变化才更新标签（EPD 上避免无谓刷新）。 */
 static char s_last_update[32] = "";
+/** 「最近更新」标签当前文本（档位变化才刷新，避免 EPD 无谓重绘）。 */
+static char s_last_ago_text[32] = "";
 
 /** 快照不可用时的状态（避免秒级轮询重复刷新同一提示文本 / 无谓 EPD 刷新）。 */
 static char s_hint[80] = "";
@@ -88,8 +96,8 @@ static bool s_fast_poll = false;
 /** 快速重试计数：每 30 次（约 30s）催促一次后台刷新任务（任务刷新失败后会长时间休眠）。 */
 static uint32_t s_nudge_cnt = 0;
 
-/* ---- 标题栏 ---- */
-static lv_obj_t *s_loc_label = NULL;
+/* ---- 标题栏（统一状态栏） ---- */
+static espaperplay_ui_status_bar_t *s_bar = NULL; /*!< 统一状态栏 */
 
 /* ---- 子页容器与指示点 ---- */
 static lv_obj_t *s_subpages[WEATHER_SUBPAGE_CNT];
@@ -97,23 +105,24 @@ static lv_obj_t *s_dots[WEATHER_SUBPAGE_CNT];
 static int s_page = 0;
 
 /* ---- 子页 0：实时 ---- */
-static lv_obj_t *s_temp_label = NULL;   /*!< 温度大字（96px，居中） */
-static lv_obj_t *s_unit_label = NULL;   /*!< 单位 °C（右上角） */
-static lv_obj_t *s_feel_label = NULL;   /*!< 体感（右侧两行：标签 + 值） */
-static lv_obj_t *s_cond_label = NULL;   /*!< 天气 + 今日高低温 */
-static lv_obj_t *s_warn_bar = NULL;     /*!< 预警长条（点击弹详情） */
-static lv_obj_t *s_warn_detail = NULL;  /*!< 预警详情卡片（覆盖层） */
+static lv_obj_t *s_temp_label = NULL;  /*!< 温度大字（96px，居中） */
+static lv_obj_t *s_unit_label = NULL;  /*!< 单位 °C（右上角） */
+static lv_obj_t *s_feel_label = NULL;  /*!< 体感（右侧两行：标签 + 值） */
+static lv_obj_t *s_cond_label = NULL;  /*!< 天气 + 今日高低温 */
+static lv_obj_t *s_warn_bar = NULL;    /*!< 预警长条（点击弹详情） */
+static lv_obj_t *s_warn_detail = NULL; /*!< 预警详情卡片（覆盖层） */
 static lv_obj_t *s_warn_title = NULL;
 static lv_obj_t *s_warn_desc = NULL;
-static lv_obj_t *s_hourly_card = NULL;  /*!< 24h 卡片 */
+static lv_obj_t *s_hourly_card = NULL;   /*!< 24h 卡片 */
 static lv_obj_t *s_hourly_scroll = NULL; /*!< 24h 横向滚动容器 */
-static lv_obj_t *s_hourly_chart = NULL; /*!< 24h 温度曲线 */
-static lv_obj_t *s_hourly_vals[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL]; /*!< 温度标注 */
+static lv_obj_t *s_hourly_chart = NULL;  /*!< 24h 温度曲线 */
+static lv_obj_t *s_updated_label = NULL; /*!< 「最近更新：xx前」 */
+static lv_obj_t *s_hourly_vals[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL];  /*!< 温度标注 */
 static lv_obj_t *s_hourly_icons[WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL]; /*!< 图标行 */
 
 /* ---- 子页 1：7 天 + 次要信息 ---- */
 static lv_obj_t *s_daily_card = NULL;   /*!< 7 天卡片 */
-static lv_obj_t *s_daily_scroll = NULL;  /*!< 7 天横向滚动容器 */
+static lv_obj_t *s_daily_scroll = NULL; /*!< 7 天横向滚动容器 */
 static lv_obj_t *s_daily_chart = NULL;  /*!< 高低温双线 */
 static lv_obj_t *s_daily_hi[WEATHER_DAILY_CNT] = {NULL};
 static lv_obj_t *s_daily_lo[WEATHER_DAILY_CNT] = {NULL};
@@ -126,6 +135,8 @@ static lv_obj_t *s_sun_arc = NULL;
 static lv_obj_t *s_moon_arc = NULL;
 static lv_obj_t *s_sun_icon = NULL;
 static lv_obj_t *s_moon_icon = NULL;
+/*!< 月亮图标当前代码（"150" 或月相 800-807；变化才 set_src，避免 EPD 无谓重绘） */
+static char s_moon_icon_code[4] = "150";
 static lv_obj_t *s_index_labels[8] = {NULL};
 /* 弧线几何（page2_create 填充）：x, w, sun_base, moon_base, radius */
 static int s_arc_geom[5];
@@ -158,7 +169,10 @@ static lv_obj_t *weather_label_create(lv_obj_t *parent, const char *text, int fo
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, weather_font(font_px), 0);
+    lv_font_t *font = weather_font(font_px);
+    if (font != NULL) {
+        lv_obj_set_style_text_font(label, font, 0);
+    }
     lv_obj_set_style_text_align(label, align, 0);
     lv_obj_set_width(label, LV_PCT(100));
     lv_obj_remove_flag(label, LV_OBJ_FLAG_SCROLLABLE);
@@ -246,7 +260,8 @@ static int weather_time_to_min(const char *ts) {
     return h * 60 + m;
 }
 
-/** 从完整时间戳截取 "HH:MM"（如 "2026-08-16T05:12+08:00"）；短格式原样返回。 */
+/** 从完整时间戳截取 "HH:MM"（如 "2026-08-16T05:12+08:00"）；短格式原样返回。
+ * 空值（当天无月出/月落现象，和风返回空串）显示 "--" 占位。 */
 static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
     if (ts != NULL && ts[0] != '\0') {
         const char *t = strchr(ts, 'T');
@@ -254,8 +269,62 @@ static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
             snprintf(buf, buf_size, "%.5s", t + 1);
             return buf;
         }
+        return ts;
     }
-    return ts != NULL ? ts : "--";
+    return "--";
+}
+
+/** 解析快照 update_time（"YYYY-MM-DD HH:MM" 或 ISO "YYYY-MM-DDTHH:MM…"），
+ * 返回距今的分钟数；解析失败返回 -1，未来时间按 0 处理。 */
+static int weather_update_time_to_min(const char *ts) {
+    struct tm tm = {0};
+    if (ts == NULL || sscanf(ts, "%d-%d-%d%*c%d:%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                             &tm.tm_hour, &tm.tm_min) < 5) {
+        return -1;
+    }
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    tm.tm_isdst = -1;
+    time_t t = mktime(&tm);
+    if (t == (time_t)-1) {
+        return -1;
+    }
+    time_t now;
+    time(&now);
+    const long diff_min = (long)difftime(now, t) / 60;
+    return diff_min >= 0 ? (int)diff_min : 0;
+}
+
+/** 更新距今描述：按 10 分钟 / 小时 / 天档位量化（档位变化才触发 EPD 刷新）。 */
+static void weather_ago_text(int diff_min, char *buf, size_t buf_size) {
+    if (diff_min < 10) {
+        snprintf(buf, buf_size, "刚刚");
+    } else if (diff_min < 60) {
+        snprintf(buf, buf_size, "%d 分钟前", diff_min / 10 * 10);
+    } else if (diff_min < 24 * 60) {
+        snprintf(buf, buf_size, "%d 小时前", diff_min / 60);
+    } else {
+        snprintf(buf, buf_size, "%d 天前", diff_min / (24 * 60));
+    }
+}
+
+/** 刷新「最近更新：xx前」标签：文本变化才写标签（EPD 避免无谓刷新）。 */
+static void weather_updated_refresh(void) {
+    if (s_last_update[0] == '\0' || s_updated_label == NULL) {
+        return;
+    }
+    const int diff = weather_update_time_to_min(s_last_update);
+    if (diff < 0) {
+        return;
+    }
+    char ago[32];
+    weather_ago_text(diff, ago, sizeof(ago));
+    char text[sizeof(ago) + 16];
+    snprintf(text, sizeof(text), "最近更新：%s", ago);
+    if (strcmp(s_last_ago_text, text) != 0) {
+        strlcpy(s_last_ago_text, text, sizeof(s_last_ago_text));
+        lv_label_set_text(s_updated_label, text);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -263,8 +332,8 @@ static const char *weather_time_hm(const char *ts, char *buf, size_t buf_size) {
 /* ------------------------------------------------------------------ */
 
 /** 创建折线图（仅曲线：无网格刻度、不画数据点）。 */
-static lv_obj_t *weather_chart_create(lv_obj_t *parent, int w, int h, int point_cnt,
-                                      int32_t ymin, int32_t ymax, int series_cnt) {
+static lv_obj_t *weather_chart_create(lv_obj_t *parent, int w, int h, int point_cnt, int32_t ymin,
+                                      int32_t ymax, int series_cnt) {
     lv_obj_t *chart = lv_chart_create(parent);
     lv_obj_set_size(chart, w, h);
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
@@ -312,16 +381,24 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     const int temp_y = portrait ? 40 : 24;
     const int cond_y = portrait ? 200 : 130;
     const int warn_y = portrait ? 252 : 168;
+    /* 卡片设计值封顶 + 余量不足贴底收缩（底部 24px 留给指示点区），
+     * 矮竖屏（如 480x640）不再越出子页容器 */
     const int card_y = portrait ? 300 : 206;
-    const int card_h = portrait ? 350 : 210;
+    int card_h = portrait ? 350 : 210;
+    if (card_y + card_h > h - 24) {
+        card_h = h - 24 - card_y;
+        if (card_h < 96) {
+            card_h = 96;
+        }
+    }
 
     /* 温度大字（96px）：文本右对齐；°C 与体感（两行）文本左对齐，
      * 三者组成一个块并整体居中于屏宽（temp_w + 间隔 + side_w），
      * 适配任意分辨率；体感第二行（温度值）底部与温度大字底部对齐 */
-    const int temp_w = 170;
-    const int side_w = 120;
-    const int temp_h = 120;                      /* 96px 行高估算 */
-    const int feel_h = 58;                       /* 两行 20px 高 */
+    const int temp_w = w >= 400 ? 170 : (w * 42 / 100);
+    const int side_w = w >= 400 ? 120 : (w - temp_w - 8);
+    const int temp_h = 120; /* 96px 行高估算 */
+    const int feel_h = 58;  /* 两行 20px 高 */
     const int block_w = temp_w + 8 + side_w;
     const int x0 = (w - block_w) / 2;
     const int side_x = x0 + temp_w + 8;
@@ -359,28 +436,30 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
     lv_obj_set_user_data(s_warn_bar, warn_text);
 
     /* 24h 卡片：标题 + 滚动区（温度标注行 + 曲线 + 图标行） */
-    s_hourly_card = weather_card_create(parent, WEATHER_MARGIN, card_y,
-                                        w - 2 * WEATHER_MARGIN, card_h);
+    s_hourly_card =
+        weather_card_create(parent, WEATHER_MARGIN, card_y, w - 2 * WEATHER_MARGIN, card_h);
 
-    lv_obj_t *title = weather_label_create(s_hourly_card, "未来 24 小时气温", 16,
-                                           LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *title =
+        weather_label_create(s_hourly_card, "未来 24 小时气温", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 4, 2);
 
-    const int scroll_y = 30;                     /* 标题与内容间隔 */
+    const int scroll_y = 30; /* 标题与内容间隔 */
     const int scroll_w = w - 2 * WEATHER_MARGIN - 16;
-    lv_obj_t *scroll = weather_scroll_create(s_hourly_card, 0, scroll_y, scroll_w,
-                                             card_h - scroll_y - 8);
+    lv_obj_t *scroll =
+        weather_scroll_create(s_hourly_card, 0, scroll_y, scroll_w, card_h - scroll_y - 8);
     s_hourly_scroll = scroll;
     /* 容器左内边距：仅防第一个标注被裁剪，图表起点尽量靠左 */
     lv_obj_set_style_pad_left(scroll, 18, 0);
     /* 图表宽 = 曲线渲染点数步进 + 两侧 pad：点间距严格等于 WEATHER_HOURLY_STEP，
      * 曲线渲染到 21h（= 最后一列标注），右端与末列对齐 */
     const int chart_w = (WEATHER_HOURLY_CHART_CNT - 1) * WEATHER_HOURLY_STEP + 12;
-    const int val_h = 22;                      /* 标注行高 */
+    const int val_h = 22; /* 标注行高 */
     const int scroll_h = card_h - scroll_y - 8;
-    const int icon_y = scroll_h - 52;          /* 图标行固定，距滚动区底 20px（防贴框） */
-    const int chart_h = icon_y - val_h - 8;    /* 曲线高 */
+    /* 卡片贴底收缩后滚动区变矮：图标行贴底、曲线高钳制非负（极端矮屏下
+     * 图标与曲线轻微重叠，优先保证不越屏不裁切） */
+    const int icon_y = (scroll_h > 52) ? scroll_h - 52 : 0;
+    const int chart_h = (icon_y > val_h + 8) ? icon_y - val_h - 8 : 24;
 
     /* 温度标注行（每 3 小时一个值，中心对齐曲线点；点 0 内容 x = 12） */
     for (int i = 0; i < WEATHER_HOURLY_CNT / WEATHER_HOURLY_LABEL; i++) {
@@ -395,8 +474,8 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
         s_hourly_icons[i] = img;
     }
 
-    s_hourly_chart = weather_chart_create(scroll, chart_w, chart_h,
-                                          WEATHER_HOURLY_CHART_CNT, 0, 40, 1);
+    s_hourly_chart =
+        weather_chart_create(scroll, chart_w, chart_h, WEATHER_HOURLY_CHART_CNT, 0, 40, 1);
     lv_obj_set_pos(s_hourly_chart, 6, val_h);
 }
 
@@ -405,35 +484,44 @@ static void weather_page0_create(lv_obj_t *parent, int w, int h, bool portrait) 
 /* ------------------------------------------------------------------ */
 
 static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) {
-    const int card_h = portrait ? 320 : 240;
+    /* 信息卡区先预留完整网格（竖屏 2 列 x3 行 / 横屏 3 列 x2 行）：
+     * 余量不足先收缩 7 天卡高度（下限 200 保住曲线内容），避免信息卡
+     * 退化为单行 6 列窄条或越出子页容器。 */
+    const int gap = 12;
+    const int need_info_h = portrait ? (3 * 66 + 2 * gap) : (2 * 66 + gap);
+    int card_h = portrait ? 320 : 240;
     const int card_y = portrait ? 40 : 30;
-    s_daily_card = weather_card_create(parent, WEATHER_MARGIN, card_y,
-                                       w - 2 * WEATHER_MARGIN, card_h);
+    if (card_y + card_h + 14 + need_info_h > h - 8) {
+        card_h = h - 8 - card_y - 14 - need_info_h;
+        if (card_h < 200) {
+            card_h = 200;
+        }
+    }
+    s_daily_card =
+        weather_card_create(parent, WEATHER_MARGIN, card_y, w - 2 * WEATHER_MARGIN, card_h);
 
-    lv_obj_t *title = weather_label_create(s_daily_card, "未来 7 天预报", 16,
-                                           LV_TEXT_ALIGN_LEFT);
+    lv_obj_t *title = weather_label_create(s_daily_card, "未来 7 天预报", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(title, LV_PCT(100));
     lv_obj_set_pos(title, 4, 2);
 
-    const int scroll_y = 30;                     /* 标题与内容间隔 */
+    const int scroll_y = 30; /* 标题与内容间隔 */
     const int scroll_w = w - 2 * WEATHER_MARGIN - 16;
-    lv_obj_t *scroll = weather_scroll_create(s_daily_card, 0, scroll_y, scroll_w,
-                                             card_h - scroll_y - 8);
+    lv_obj_t *scroll =
+        weather_scroll_create(s_daily_card, 0, scroll_y, scroll_w, card_h - scroll_y - 8);
     s_daily_scroll = scroll;
     /* 容器左内边距：仅防第一列被裁剪，图表起点尽量靠左 */
     lv_obj_set_style_pad_left(scroll, 18, 0);
     /* 图表宽 = 列距 * (n-1) + 两侧 pad：点间距严格等于 WEATHER_DAILY_STEP */
     const int chart_w = (WEATHER_DAILY_CNT - 1) * WEATHER_DAILY_STEP + 12;
-    const int col_w = 60;                      /* 列文字宽度（文本居中于列） */
-    const int hi_y = 0;                       /* 最高温标注行 */
-    const int week_y = 24;                    /* 代称行 */
-    const int icon_y = 48;                    /* 图标行（32px） */
-    const int chart_y = 84;                   /* 曲线 y */
+    const int col_w = 60;                                /* 列文字宽度（文本居中于列） */
+    const int hi_y = 0;                                  /* 最高温标注行 */
+    const int week_y = 24;                               /* 代称行 */
+    const int icon_y = 48;                               /* 图标行（32px） */
+    const int chart_y = 84;                              /* 曲线 y */
     const int chart_h = card_h - scroll_y - 8 - 84 - 38; /* 曲线高（下方留最低温行） */
-    const int lo_y = chart_y + chart_h + 6;   /* 最低温标注行 */
+    const int lo_y = chart_y + chart_h + 6;              /* 最低温标注行 */
 
-    s_daily_chart = weather_chart_create(scroll, chart_w, chart_h,
-                                         WEATHER_DAILY_CNT, -10, 40, 2);
+    s_daily_chart = weather_chart_create(scroll, chart_w, chart_h, WEATHER_DAILY_CNT, -10, 40, 2);
     lv_obj_set_pos(s_daily_chart, 6, chart_y);
 
     for (int i = 0; i < WEATHER_DAILY_CNT; i++) {
@@ -456,26 +544,27 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
         s_daily_lo[i] = lo;
     }
 
-    /* 次要信息：湿度 / 风 / 降水 / 气压 / 能见度 / 体感（卡片网格） */
+    /* 次要信息：湿度 / 风 / 降水 / 气压 / 能见度 / 体感（卡片网格）。
+     * 列数按剩余高度约束（避免横屏两行超出容器底部）：
+     * 网格需求 need_info_h 已在函数开头预留；仍放不下则单行 6 列。 */
     const int margin = WEATHER_MARGIN;
-    const int gap = 12;
     const int info_y = card_y + card_h + 14;
-    const int cols = portrait ? 2 : 3;
-    const int cw = portrait ? (w - 2 * margin - gap) / 2 : (w - 2 * margin - 2 * gap) / 3;
+    const int avail_info_h = h - info_y; /* 子页容器内剩余高度 */
+    int cols = (avail_info_h >= need_info_h) ? (portrait ? 2 : 3) : 6;
+    const int cw = (w - 2 * margin - (cols - 1) * gap) / cols;
     const int ch = 66;
     static const struct {
         const lv_image_dsc_t *icon;
         const char *name;
     } infos[6] = {
-        {&icon_humidity_16, "湿度"},  {&icon_wind_16, "风"},
-        {&icon_rain_16, "降水"},      {&icon_pressure_16, "气压"},
-        {&icon_visibility_16, "能见度"}, {&icon_thermo_16, "体感"},
+        {&icon_humidity_16, "湿度"}, {&icon_wind_16, "风"},           {&icon_rain_16, "降水"},
+        {&icon_pressure_16, "气压"}, {&icon_visibility_16, "能见度"}, {&icon_thermo_16, "体感"},
     };
     for (int i = 0; i < 6; i++) {
         const int r = i / cols;
         const int c = i % cols;
-        lv_obj_t *card = weather_card_create(parent, margin + c * (cw + gap),
-                                             info_y + r * (ch + gap), cw, ch);
+        lv_obj_t *card =
+            weather_card_create(parent, margin + c * (cw + gap), info_y + r * (ch + gap), cw, ch);
         lv_obj_set_style_pad_all(card, 6, 0);
         lv_obj_t *ic = lv_image_create(card);
         lv_image_set_src(ic, infos[i].icon);
@@ -496,8 +585,17 @@ static void weather_page1_create(lv_obj_t *parent, int w, int h, bool portrait) 
 
 static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) {
     const int margin = WEATHER_MARGIN;
-    const int arc_h = portrait ? 300 : 210;
+    /* 指数区保 2 行（4 列网格）优先：余量不足先收缩弧线卡高度（下限 120
+     * 保住双弧+标注），避免矮屏上指数卡退化成 8 列窄条。 */
     const int arc_y = portrait ? 40 : 30;
+    int arc_h = portrait ? 300 : 210;
+    const int idx_need_h = 2 * (56 + 12); /* rows_fit>=2 需 2 整行（含尾行距） */
+    if (arc_y + arc_h + 14 + idx_need_h > h - 8) {
+        arc_h = h - 8 - arc_y - 14 - idx_need_h;
+        if (arc_h < 120) {
+            arc_h = 120;
+        }
+    }
 
     lv_obj_t *card = weather_card_create(parent, margin, arc_y, w - 2 * margin, arc_h);
 
@@ -509,10 +607,14 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
     lv_obj_align(sun_r, LV_ALIGN_TOP_RIGHT, -6, 4);
 
     lv_obj_t *moon_l = weather_label_create(card, "月出 --", 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_width(moon_l, 90);
+    /* 120px：容纳"月出 昨23:33"（今日无月出回退前一日月出时的标注），
+     * 文字实际约 94px，不触及弧线左端点（x=100）。 */
+    lv_obj_set_width(moon_l, 120);
     lv_obj_set_pos(moon_l, 6, 8 + arc_h / 2);
     lv_obj_t *moon_r = weather_label_create(card, "月落 --", 16, LV_TEXT_ALIGN_RIGHT);
-    lv_obj_set_width(moon_r, 90);
+    /* 120px：容纳"月落 明00:20"（今日无月落回填次日月落时的标注），
+     * 右对齐文字实际约 94px，不触及弧线右端点。 */
+    lv_obj_set_width(moon_r, 120);
     lv_obj_align(moon_r, LV_ALIGN_TOP_RIGHT, -6, 8 + arc_h / 2);
 
     /* 太阳弧（上）与月亮弧（下） */
@@ -558,17 +660,21 @@ static void weather_page2_create(lv_obj_t *parent, int w, int h, bool portrait) 
     s_arc_geom[3] = moon_base;
     s_arc_geom[4] = radius;
 
-    /* 指数：洗车等（卡片网格） */
+    /* 指数：洗车等（卡片网格）。列数按剩余高度约束（同次要信息网格）：
+     * 横屏 3 列需 3 行会超出容器底部，放不下两行时压缩为 4 列两行。 */
     const int gap = 12;
     const int idx_y = arc_y + arc_h + 14;
-    const int cols = portrait ? 2 : 3;
-    const int cw = portrait ? (w - 2 * margin - gap) / 2 : (w - 2 * margin - 2 * gap) / 3;
+    const int avail_idx_h = h - idx_y;
+    const int rows_fit = avail_idx_h / (56 + gap); /* 可完整容纳的行数 */
+    /* 2 列恒需 4 行（竖/横皆同）；放得下 2 行则 4 列，否则 8 列单行。 */
+    const int cols = (rows_fit >= 4) ? 2 : ((rows_fit >= 2) ? 4 : 8);
+    const int cw = (w - 2 * margin - (cols - 1) * gap) / cols;
     const int ch = 56;
     for (int i = 0; i < 8; i++) {
         const int r = i / cols;
         const int c = i % cols;
-        lv_obj_t *icard = weather_card_create(parent, margin + c * (cw + gap),
-                                              idx_y + r * (ch + gap), cw, ch);
+        lv_obj_t *icard =
+            weather_card_create(parent, margin + c * (cw + gap), idx_y + r * (ch + gap), cw, ch);
         lv_obj_t *label = weather_label_create(icard, "--", 16, LV_TEXT_ALIGN_CENTER);
         lv_obj_set_width(label, LV_PCT(100));
         lv_obj_center(label);
@@ -606,23 +712,8 @@ static void weather_enter(void) {
     weather_screen_size(&scr_w, &scr_h);
     const bool portrait = scr_w < scr_h;
 
-    /* 标题栏：位置名居中 */
-    lv_obj_t *bar = lv_obj_create(scr);
-    lv_obj_set_size(bar, LV_PCT(100), WEATHER_BAR_H_PX);
-    lv_obj_set_pos(bar, 0, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_white(), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, WEATHER_BAR_H_PX - 2);
-    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    s_loc_label = weather_label_create(bar, "--", 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_loc_label, 0, 3);
+    /* 统一状态栏：左侧时间、居中位置名（动态）、右侧 WiFi/睡眠图标 */
+    s_bar = espaperplay_ui_status_bar_create(scr, WEATHER_BAR_H_PX, NULL, false);
 
     /* 子页容器 */
     const int area_y = WEATHER_BAR_H_PX;
@@ -640,6 +731,11 @@ static void weather_enter(void) {
     weather_page0_create(s_subpages[0], scr_w, area_h, portrait);
     weather_page1_create(s_subpages[1], scr_w, area_h, portrait);
     weather_page2_create(s_subpages[2], scr_w, area_h, portrait);
+
+    /* 「最近更新：xx前」（状态栏下方左上角，三个子页共用、全程可见；
+     * 在子页之后创建保证不被白底子页容器遮挡） */
+    s_updated_label = weather_label_create(scr, "", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(s_updated_label, 12, WEATHER_BAR_H_PX + 4);
 
     /* 指示点 */
     for (int i = 0; i < WEATHER_SUBPAGE_CNT; i++) {
@@ -660,9 +756,13 @@ static void weather_enter(void) {
         lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
 
-    /* 预警详情覆盖卡（初始隐藏） */
-    s_warn_detail = weather_card_create(scr, WEATHER_MARGIN, area_y + 60,
-                                        scr_w - 2 * WEATHER_MARGIN, 340);
+    /* 预警详情覆盖卡（初始隐藏；高度封顶 340，矮屏贴底收缩防越屏） */
+    int detail_h = area_h - 90 < 340 ? area_h - 90 : 340;
+    if (detail_h < 120) {
+        detail_h = 120;
+    }
+    s_warn_detail =
+        weather_card_create(scr, WEATHER_MARGIN, area_y + 60, scr_w - 2 * WEATHER_MARGIN, detail_h);
     lv_obj_add_flag(s_warn_detail, LV_OBJ_FLAG_HIDDEN);
     s_warn_title = weather_label_create(s_warn_detail, "", 16, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_width(s_warn_title, LV_PCT(100));
@@ -672,11 +772,14 @@ static void weather_enter(void) {
     lv_obj_set_pos(s_warn_desc, 4, 40);
 
     s_last_update[0] = '\0';
+    s_last_ago_text[0] = '\0';
     s_hint[0] = '\0';
     s_fast_poll = false;
     s_nudge_cnt = 0;
     s_touch_down = false;
     s_touch_zone = 3;
+    /* 页面重建后月亮图标回到创建时的占位图标，缓存码同步复位。 */
+    strlcpy(s_moon_icon_code, "150", sizeof(s_moon_icon_code));
 
     s_weather_timer = lv_timer_create(weather_timer_cb, WEATHER_UI_PERIOD_MS, NULL);
     if (s_weather_timer == NULL) {
@@ -716,11 +819,10 @@ static void weather_refresh(void) {
         espaperplay_weather_status_t st;
         const bool configured =
             (espaperplay_weather_get_status(&st) == ESP_OK) ? st.configured : false;
-        const char *hint = configured ? "正在获取天气数据…"
-                                      : "未配置 API Key，请在 Web 管理页设置";
+        const char *hint = configured ? "正在获取天气数据…" : "未配置 API Key，请在 Web 管理页设置";
         if (strcmp(s_hint, hint) != 0) {
             strlcpy(s_hint, hint, sizeof(s_hint));
-            lv_label_set_text(s_loc_label, "--");
+            espaperplay_ui_status_bar_set_title(s_bar, "--");
             lv_label_set_text(s_temp_label, "--");
             lv_label_set_text(s_cond_label, hint);
         }
@@ -744,18 +846,29 @@ static void weather_refresh(void) {
     s_nudge_cnt = 0;
     s_hint[0] = '\0';
 
+    /* 数据已过期（刷新周期到期）：催促后台任务立即拉取。兜底覆盖非主界面
+     * 睡眠场景——用户唤醒路径不做天气强刷，后台任务倒计时在浅睡眠期间
+     * 冻结，仅靠其自身周期可能长时间等不到刷新。到期判定自带失败退避
+     * （距上次真实尝试不足一周期时返回 false），不会造成重复请求。 */
+    if (espaperplay_weather_is_refresh_due()) {
+        espaperplay_weather_request_refresh();
+    }
+
     /* 更新时变化才刷新标签（EPD 局部刷新省电）。 */
     if (strcmp(s_last_update, snap->update_time) == 0) {
+        /* 数据没变，但「最近更新」随时间推进仍需更新（档位变化才真正写标签）。 */
+        weather_updated_refresh();
         free(snap);
         return;
     }
     strlcpy(s_last_update, snap->update_time, sizeof(s_last_update));
+    weather_updated_refresh();
 
     const espaperplay_weather_now_t *now = &snap->now;
     char buf[256];
 
-    /* 标题栏：位置名。 */
-    lv_label_set_text(s_loc_label, snap->location_name);
+    /* 标题栏：位置名（动态，经统一状态栏标题更新）。 */
+    espaperplay_ui_status_bar_set_title(s_bar, snap->location_name);
 
     /* 温度大字 + 体感（两行） */
     lv_label_set_text(s_temp_label, now->temp[0] ? now->temp : "--");
@@ -797,8 +910,10 @@ static void weather_refresh(void) {
         int32_t ymin = 100, ymax = -100;
         for (int i = 0; i < n; i++) {
             raw[i] = atoi(snap->hourly[i].temp);
-            if (raw[i] < ymin) ymin = raw[i];
-            if (raw[i] > ymax) ymax = raw[i];
+            if (raw[i] < ymin)
+                ymin = raw[i];
+            if (raw[i] > ymax)
+                ymax = raw[i];
         }
         lv_chart_set_point_count(s_hourly_chart, n);
         /* 范围以最高/最低温度为准 */
@@ -823,14 +938,15 @@ static void weather_refresh(void) {
     /* 7 天双曲线 + 高/低温标注 + 代称/图标 */
     if (snap->daily_count > 0) {
         static int32_t raw_hi[WEATHER_DAILY_CNT], raw_lo[WEATHER_DAILY_CNT];
-        int n = snap->daily_count > WEATHER_DAILY_CNT ? WEATHER_DAILY_CNT
-                                                      : snap->daily_count;
+        int n = snap->daily_count > WEATHER_DAILY_CNT ? WEATHER_DAILY_CNT : snap->daily_count;
         int32_t ymin = 100, ymax = -100;
         for (int i = 0; i < n; i++) {
             raw_hi[i] = atoi(snap->daily[i].temp_max);
             raw_lo[i] = atoi(snap->daily[i].temp_min);
-            if (raw_hi[i] > ymax) ymax = raw_hi[i];
-            if (raw_lo[i] < ymin) ymin = raw_lo[i];
+            if (raw_hi[i] > ymax)
+                ymax = raw_hi[i];
+            if (raw_lo[i] < ymin)
+                ymin = raw_lo[i];
         }
         lv_chart_set_point_count(s_daily_chart, n);
         /* 范围以最高的最高气温 / 最低的最低气温为准 */
@@ -883,12 +999,22 @@ static void weather_refresh(void) {
         }
     }
 
-    /* 日出日落 / 月出月落：时间 + 弧线图标定位 */
+    /* 日出日落 / 月出月落：时间 + 弧线图标定位。
+     * 今日无月出/月落时回退相邻日数据（月出取前一日、月落取次日），
+     * 显示加"昨/明"标注；弧线定位用它覆盖跨午夜的"邻日弧段"。 */
     {
+        const char *mr_src = snap->astronomy.moonrise[0] ? snap->astronomy.moonrise
+                                                         : snap->astronomy.moonrise_prev;
+        const bool mr_is_prev =
+            snap->astronomy.moonrise[0] == '\0' && mr_src[0] != '\0';
+        const char *ms_src = snap->astronomy.moonset[0] ? snap->astronomy.moonset
+                                                        : snap->astronomy.moonset_next;
+        const bool ms_is_next =
+            snap->astronomy.moonset[0] == '\0' && ms_src[0] != '\0';
         const int sr = weather_time_to_min(snap->astronomy.sunrise);
         const int ss = weather_time_to_min(snap->astronomy.sunset);
-        const int mr = weather_time_to_min(snap->astronomy.moonrise);
-        const int ms = weather_time_to_min(snap->astronomy.moonset);
+        const int mr = weather_time_to_min(mr_src);
+        const int ms = weather_time_to_min(ms_src);
 
         lv_obj_t *card = lv_obj_get_parent(s_sun_arc);
         lv_obj_t *sun_l = lv_obj_get_child(card, 0);
@@ -902,14 +1028,39 @@ static void weather_refresh(void) {
                      weather_time_hm(snap->astronomy.sunrise, t1, sizeof(t1)));
             snprintf(b2, sizeof(b2), "日落 %s",
                      weather_time_hm(snap->astronomy.sunset, t2, sizeof(t2)));
-            snprintf(b3, sizeof(b3), "月出 %s",
-                     weather_time_hm(snap->astronomy.moonrise, t3, sizeof(t3)));
-            snprintf(b4, sizeof(b4), "月落 %s",
-                     weather_time_hm(snap->astronomy.moonset, t4, sizeof(t4)));
+            if (mr_is_prev) {
+                snprintf(b3, sizeof(b3), "月出 昨%s",
+                         weather_time_hm(mr_src, t3, sizeof(t3)));
+            } else {
+                snprintf(b3, sizeof(b3), "月出 %s",
+                         weather_time_hm(mr_src, t3, sizeof(t3)));
+            }
+            if (ms_is_next) {
+                snprintf(b4, sizeof(b4), "月落 明%s",
+                         weather_time_hm(ms_src, t4, sizeof(t4)));
+            } else {
+                snprintf(b4, sizeof(b4), "月落 %s",
+                         weather_time_hm(ms_src, t4, sizeof(t4)));
+            }
             lv_label_set_text(sun_l, b1);
             lv_label_set_text(sun_r, b2);
             lv_label_set_text(moon_l, b3);
             lv_label_set_text(moon_r, b4);
+        }
+
+        /* 月亮图标显示真实月相（moonPhase.icon，800-807）；空/未知代码回退 150。
+         * 代码变化才 set_src（EPD 避免无谓重绘）。 */
+        {
+            const char *code = snap->astronomy.moon_phase_icon;
+            const lv_image_dsc_t *ic = qweather_icon_get_small(code);
+            if (ic == NULL) {
+                code = "150";
+                ic = qweather_icon_get_small(code);
+            }
+            if (ic != NULL && strcmp(code, s_moon_icon_code) != 0) {
+                strlcpy(s_moon_icon_code, code, sizeof(s_moon_icon_code));
+                lv_image_set_src(s_moon_icon, ic);
+            }
         }
 
         /* 当前时间定位太阳/月亮在弧上的位置：
@@ -922,8 +1073,8 @@ static void weather_refresh(void) {
             float t = (float)(now_min - sr) / (float)(ss - sr);
             if (t >= 0.0f && t <= 1.0f) {
                 const int x = s_arc_geom[0] + (int)lroundf((float)s_arc_geom[1] * t);
-                const int y = s_arc_geom[2] -
-                              (int)lroundf((float)s_arc_geom[4] * sinf((float)M_PI * t));
+                const int y =
+                    s_arc_geom[2] - (int)lroundf((float)s_arc_geom[4] * sinf((float)M_PI * t));
                 /* 图标 32x32：中心对齐曲线点 */
                 lv_obj_set_pos(s_sun_icon, x - 16, y - 16);
                 lv_obj_remove_flag(s_sun_icon, LV_OBJ_FLAG_HIDDEN);
@@ -934,7 +1085,9 @@ static void weather_refresh(void) {
             lv_obj_add_flag(s_sun_icon, LV_OBJ_FLAG_HIDDEN);
         }
         if (have_time && mr >= 0) {
-            /* 跨午夜：月落早于月出时按次日处理 */
+            /* 跨午夜：月落早于月出时按次日处理（含取邻日数据的情形：
+             * 昨 23:33 月出 + 今 12:10 月落，或今 17:00 月出 + 明 00:20 月落，
+             * 跨午夜时段 now+1440 恰入弧段） */
             int ms_adj = ms;
             if (ms_adj < mr) {
                 ms_adj += 1440;
@@ -946,8 +1099,8 @@ static void weather_refresh(void) {
             const float t = (float)(now_min - mr) / (float)(ms_adj - mr);
             if (t >= 0.0f && t <= 1.0f) {
                 const int x = s_arc_geom[0] + (int)lroundf((float)s_arc_geom[1] * t);
-                const int y = s_arc_geom[3] -
-                              (int)lroundf((float)s_arc_geom[4] * sinf((float)M_PI * t));
+                const int y =
+                    s_arc_geom[3] - (int)lroundf((float)s_arc_geom[4] * sinf((float)M_PI * t));
                 lv_obj_set_pos(s_moon_icon, x - 16, y - 16);
                 lv_obj_remove_flag(s_moon_icon, LV_OBJ_FLAG_HIDDEN);
             } else {
@@ -970,8 +1123,8 @@ static void weather_refresh(void) {
         }
     }
 
-    ESP_LOGI(TAG, "weather screen refreshed: %s %s°C, alerts %d",
-             snap->location_name, now->temp, snap->warning_count);
+    ESP_LOGI(TAG, "weather screen refreshed: %s %s°C, alerts %d", snap->location_name, now->temp,
+             snap->warning_count);
     free(snap);
 }
 
@@ -999,8 +1152,7 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
             int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
 
             /* 预警详情卡打开时：点击任意处关闭 */
-            if (s_warn_detail != NULL &&
-                !lv_obj_has_flag(s_warn_detail, LV_OBJ_FLAG_HIDDEN)) {
+            if (s_warn_detail != NULL && !lv_obj_has_flag(s_warn_detail, LV_OBJ_FLAG_HIDDEN)) {
                 s_touch_zone = 4;
                 return;
             }
@@ -1020,10 +1172,9 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
                                         lv_obj_get_height(s_daily_scroll))) {
                 s_touch_zone = 1; /* 7 天图表滚动区（仅子页 1） */
             } else if (s_page == 0 && !lv_obj_has_flag(s_warn_bar, LV_OBJ_FLAG_HIDDEN) &&
-                       weather_point_in(&p, weather_obj_screen_x(s_warn_bar),
-                                        weather_obj_screen_y(s_warn_bar),
-                                        lv_obj_get_width(s_warn_bar),
-                                        lv_obj_get_height(s_warn_bar))) {
+                       weather_point_in(
+                           &p, weather_obj_screen_x(s_warn_bar), weather_obj_screen_y(s_warn_bar),
+                           lv_obj_get_width(s_warn_bar), lv_obj_get_height(s_warn_bar))) {
                 s_touch_zone = 2; /* 预警条（仅子页 0） */
             } else if (p.x < WEATHER_EDGE_PX || p.x > scr_w - WEATHER_EDGE_PX) {
                 s_touch_zone = 0; /* 边缘返回 */

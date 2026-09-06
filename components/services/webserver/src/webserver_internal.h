@@ -88,16 +88,39 @@ esp_err_t webserver_handle_root_get(httpd_req_t *req);
 esp_err_t webserver_handle_favicon_get(httpd_req_t *req);
 esp_err_t webserver_handle_status_get(httpd_req_t *req);
 esp_err_t webserver_handle_reboot_post(httpd_req_t *req);
+esp_err_t webserver_handle_heartbeat_post(httpd_req_t *req);
+esp_err_t webserver_handle_touch_diag_post(httpd_req_t *req);
 
 /* 配置域（webserver_handler_config.c）。 */
 esp_err_t webserver_handle_config_get(httpd_req_t *req);
 esp_err_t webserver_handle_config_post(httpd_req_t *req);
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req);
 esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req);
+esp_err_t webserver_handle_wifi_scan_get(httpd_req_t *req);
+
+/* 引导域（webserver_handler_setup.c）：首次开机分步向导（公开免鉴权，
+ * 仅引导未完成时开放写接口）。 */
+esp_err_t webserver_handle_setup_status_get(httpd_req_t *req);
+esp_err_t webserver_handle_setup_apply_post(httpd_req_t *req);
 
 /* 天气域（webserver_handler_weather.c）。 */
 esp_err_t webserver_handle_weather_get(httpd_req_t *req);
 esp_err_t webserver_handle_weather_refresh_post(httpd_req_t *req);
+
+/* 字体域（webserver_handler_fonts.c）：SD 卡字体枚举 / 选择 / 上传 / 删除。 */
+esp_err_t webserver_handle_fonts_get(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_select_post(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_upload_post(httpd_req_t *req);
+esp_err_t webserver_handle_fonts_delete_post(httpd_req_t *req);
+
+/* 文件域（webserver_handler_files.c）：SD 卡文件浏览 / 上传 / 下载 /
+ * 新建文件夹 / 重命名 / 删除。 */
+esp_err_t webserver_handle_files_get(httpd_req_t *req);
+esp_err_t webserver_handle_files_download_get(httpd_req_t *req);
+esp_err_t webserver_handle_files_upload_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_rename_post(httpd_req_t *req);
+esp_err_t webserver_handle_files_delete_post(httpd_req_t *req);
 
 /* 鉴权守卫（webserver_auth_guard.c）。 */
 esp_err_t webserver_require_auth(httpd_req_t *req);

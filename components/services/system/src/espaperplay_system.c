@@ -10,6 +10,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "espaperplay_nvs.h"
 #include "espaperplay_system.h"
 
 static const char *TAG = "ESPaperPlay_SYSTEM";
@@ -21,12 +22,16 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_AP_SSID "ap_ssid"
 #define NVS_KEY_AP_PASS "ap_pass"
 #define NVS_KEY_EPD_IDLE_MS "epd_idle_ms"
+#define NVS_KEY_AUTO_SLEEP_MS "auto_sleep_ms"
 #define NVS_KEY_GUI_FORCE_AFTER "gui_force_after"
 #define NVS_KEY_WEATHER_KEY "weather_key"
 #define NVS_KEY_WEATHER_LOC "weather_loc"
 #define NVS_KEY_WEATHER_HOST "weather_host"
+#define NVS_KEY_FONT_NAME "font_name"
 #define NVS_KEY_BOOT_LP_ACTION "boot_lp_action"
 #define NVS_KEY_BOOT_LP_TIME_MS "boot_lp_time_ms"
+#define NVS_KEY_SETUP_DONE "setup_done"
+#define NVS_KEY_READER_IMG_GRAY4 "rd_img_gray4"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -42,12 +47,16 @@ static espaperplay_system_config_t s_config = {
     .ap_ssid = ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID,
     .ap_password = ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS,
     .epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS,
+    .auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS,
     .gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER,
     .boot_long_press_action = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION,
     .boot_long_press_time_ms = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS,
     .weather_api_key = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
     .weather_location = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
     .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
+    .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
+    .reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4,
+    .setup_done = false, /* 出厂状态：首次开机进入引导页 */
 };
 
 static bool s_initialized = false;
@@ -143,6 +152,9 @@ static esp_err_t system_save_all(void) {
         err = nvs_set_u32(handle, NVS_KEY_EPD_IDLE_MS, s_config.epd_idle_sleep_timeout_ms);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u32(handle, NVS_KEY_AUTO_SLEEP_MS, s_config.auto_sleep_timeout_ms);
+    }
+    if (err == ESP_OK) {
         err = nvs_set_u32(handle, NVS_KEY_GUI_FORCE_AFTER, s_config.gui_full_force_after);
     }
     if (err == ESP_OK) {
@@ -159,6 +171,16 @@ static esp_err_t system_save_all(void) {
     }
     if (err == ESP_OK) {
         err = nvs_set_str(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_FONT_NAME, s_config.selected_font);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_SETUP_DONE, s_config.setup_done ? 1 : 0);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_READER_IMG_GRAY4,
+                         s_config.reader_img_gray4 ? 1 : 0);
     }
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -213,6 +235,18 @@ static esp_err_t system_load(void) {
         missing = true;
     }
 
+    uint32_t auto_sleep_ms = 0;
+    err = nvs_get_u32(handle, NVS_KEY_AUTO_SLEEP_MS, &auto_sleep_ms);
+    if (err == ESP_OK && auto_sleep_ms <= ESPAPERPLAY_SYSTEM_AUTO_SLEEP_TIMEOUT_MAX_MS) {
+        s_config.auto_sleep_timeout_ms = auto_sleep_ms;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_AUTO_SLEEP_MS, esp_err_to_name(err));
+        }
+        s_config.auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS;
+        missing = true;
+    }
+
     uint32_t force_after = 0;
     err = nvs_get_u32(handle, NVS_KEY_GUI_FORCE_AFTER, &force_after);
     if (err == ESP_OK && force_after <= ESPAPERPLAY_SYSTEM_GUI_FULL_FORCE_AFTER_MAX) {
@@ -256,9 +290,36 @@ static esp_err_t system_load(void) {
     load_str_field(handle, NVS_KEY_WEATHER_LOC, s_config.weather_location,
                    sizeof(s_config.weather_location), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,
                    &missing);
+    load_str_field(handle, NVS_KEY_FONT_NAME, s_config.selected_font,
+                   sizeof(s_config.selected_font), ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME, &missing);
     load_str_field(handle, NVS_KEY_WEATHER_HOST, s_config.weather_api_host,
                    sizeof(s_config.weather_api_host), ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
                    &missing);
+
+    uint8_t img_gray4 = 0;
+    err = nvs_get_u8(handle, NVS_KEY_READER_IMG_GRAY4, &img_gray4);
+    if (err == ESP_OK) {
+        s_config.reader_img_gray4 = img_gray4 != 0;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_READER_IMG_GRAY4,
+                     esp_err_to_name(err));
+        }
+        s_config.reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4;
+        missing = true;
+    }
+
+    uint8_t setup_done = 0;
+    err = nvs_get_u8(handle, NVS_KEY_SETUP_DONE, &setup_done);
+    if (err == ESP_OK) {
+        s_config.setup_done = setup_done != 0;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_SETUP_DONE, esp_err_to_name(err));
+        }
+        s_config.setup_done = false;
+        missing = true;
+    }
 
     nvs_close(handle);
 
@@ -357,6 +418,14 @@ esp_err_t espaperplay_system_set_epd_idle_sleep_timeout_ms(uint32_t timeout_ms) 
     return save_u32_field(NVS_KEY_EPD_IDLE_MS, timeout_ms);
 }
 
+esp_err_t espaperplay_system_set_auto_sleep_timeout_ms(uint32_t timeout_ms) {
+    if (timeout_ms > ESPAPERPLAY_SYSTEM_AUTO_SLEEP_TIMEOUT_MAX_MS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config.auto_sleep_timeout_ms = timeout_ms;
+    return save_u32_field(NVS_KEY_AUTO_SLEEP_MS, timeout_ms);
+}
+
 esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count) {
     if (count > ESPAPERPLAY_SYSTEM_GUI_FULL_FORCE_AFTER_MAX) {
         return ESP_ERR_INVALID_ARG;
@@ -365,7 +434,8 @@ esp_err_t espaperplay_system_set_gui_full_force_after(uint32_t count) {
     return save_u32_field(NVS_KEY_GUI_FORCE_AFTER, count);
 }
 
-esp_err_t espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action) {
+esp_err_t
+espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_press_action_t action) {
     if (action >= ESPAPERPLAY_BOOT_LONG_PRESS_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -381,6 +451,32 @@ esp_err_t espaperplay_system_set_boot_long_press_action(espaperplay_boot_long_pr
 
 espaperplay_boot_long_press_action_t espaperplay_system_get_boot_long_press_action(void) {
     return s_config.boot_long_press_action;
+}
+
+esp_err_t espaperplay_system_set_reader_img_gray4(bool enable) {
+    if (s_config.reader_img_gray4 == enable) {
+        return ESP_OK;
+    }
+    s_config.reader_img_gray4 = enable;
+    const esp_err_t err = save_u8_field(NVS_KEY_READER_IMG_GRAY4, enable ? 1 : 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save reader img gray4: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "reader img gray4: %s", enable ? "on" : "off");
+    return ESP_OK;
+}
+
+bool espaperplay_system_get_reader_img_gray4(void) { return s_config.reader_img_gray4; }
+
+bool espaperplay_system_is_setup_done(void) { return s_config.setup_done; }
+
+esp_err_t espaperplay_system_mark_setup_done(void) {
+    if (!s_config.setup_done) {
+        ESP_LOGI(TAG, "First-boot setup marked done");
+        s_config.setup_done = true;
+    }
+    return save_u8_field(NVS_KEY_SETUP_DONE, 1);
 }
 
 esp_err_t espaperplay_system_set_boot_long_press_time_ms(uint32_t time_ms) {
@@ -432,14 +528,28 @@ esp_err_t espaperplay_system_set_weather_api_host(const char *host) {
     return save_str_field(NVS_KEY_WEATHER_HOST, s_config.weather_api_host);
 }
 
+esp_err_t espaperplay_system_set_selected_font(const char *name) {
+    if (name == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlen(name) >= ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    strlcpy(s_config.selected_font, name, sizeof(s_config.selected_font));
+    return save_str_field(NVS_KEY_FONT_NAME, s_config.selected_font);
+}
+
 esp_err_t espaperplay_system_reset_defaults(void) {
     s_config.wifi_mode = ESPAPERPLAY_SYSTEM_DEFAULT_WIFI_MODE;
     strlcpy(s_config.sta_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_STA_SSID, sizeof(s_config.sta_ssid));
     strlcpy(s_config.sta_password, ESPAPERPLAY_SYSTEM_DEFAULT_STA_PASS,
             sizeof(s_config.sta_password));
     strlcpy(s_config.ap_ssid, ESPAPERPLAY_SYSTEM_DEFAULT_AP_SSID, sizeof(s_config.ap_ssid));
+    strlcpy(s_config.selected_font, ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
+            sizeof(s_config.selected_font));
     strlcpy(s_config.ap_password, ESPAPERPLAY_SYSTEM_DEFAULT_AP_PASS, sizeof(s_config.ap_password));
     s_config.epd_idle_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_EPD_IDLE_SLEEP_TIMEOUT_MS;
+    s_config.auto_sleep_timeout_ms = ESPAPERPLAY_SYSTEM_DEFAULT_AUTO_SLEEP_TIMEOUT_MS;
     s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
     s_config.boot_long_press_action = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION;
     s_config.boot_long_press_time_ms = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS;
@@ -449,5 +559,14 @@ esp_err_t espaperplay_system_reset_defaults(void) {
             sizeof(s_config.weather_location));
     strlcpy(s_config.weather_api_host, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
             sizeof(s_config.weather_api_host));
+    /* 恢复出厂后重新进入首次开机引导。 */
+    s_config.setup_done = false;
+
+    /* 擦除其余应用层命名空间（auth/clock/tls；system 随后由 system_save_all 重写默认）。 */
+    esp_err_t err = espaperplay_nvs_factory_reset();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "factory reset: some nvs namespaces not erased: %s", esp_err_to_name(err));
+    }
+    /* 持久化 system 默认（含 setup_done=false），其余命名空间保持擦除。 */
     return system_save_all();
 }

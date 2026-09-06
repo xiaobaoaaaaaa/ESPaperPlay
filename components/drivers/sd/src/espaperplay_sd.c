@@ -23,9 +23,6 @@
 
 static const char *TAG = "ESPaperPlay_SD";
 
-/** 电源轨上电后的稳定等待时间（毫秒）。 */
-#define SD_POWER_ON_DELAY_MS 10
-
 /* ====================================================================
  * 内部状态
  * ==================================================================== */
@@ -35,43 +32,6 @@ static sdmmc_card_t s_card;        /*!< 卡片信息（sdmmc_card_init 填充，
 static bool s_host_ready = false;  /*!< 主机已初始化（sdmmc_host_init） */
 static bool s_slot_ready = false;  /*!< 槽位已初始化（sdmmc_host_init_slot） */
 static bool s_card_ready = false;  /*!< 卡片已探测成功（sdmmc_card_init） */
-
-/* ====================================================================
- * 电源轨
- * ==================================================================== */
-
-static esp_err_t sd_power_rail_enable(void) {
-#if ESPAPERPLAY_SD_ENABLE_POWER_PIN
-    if (ESPAPERPLAY_PIN_SD_PWR < 0) {
-        ESP_LOGD(TAG, "SD power pin not configured, skipping");
-        return ESP_OK;
-    }
-    const gpio_config_t io = {
-        .pin_bit_mask = (1ULL << ESPAPERPLAY_PIN_SD_PWR),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "SD power GPIO config failed");
-    ESP_RETURN_ON_ERROR(gpio_set_level(ESPAPERPLAY_PIN_SD_PWR, 1), TAG,
-                        "SD power rail enable failed");
-    vTaskDelay(pdMS_TO_TICKS(SD_POWER_ON_DELAY_MS));
-    ESP_LOGI(TAG, "SD power rail enabled (GPIO%d)", ESPAPERPLAY_PIN_SD_PWR);
-#endif
-    return ESP_OK;
-}
-
-static esp_err_t sd_power_rail_disable(void) {
-#if ESPAPERPLAY_SD_ENABLE_POWER_PIN
-    if (ESPAPERPLAY_PIN_SD_PWR < 0) {
-        return ESP_OK;
-    }
-    gpio_set_level(ESPAPERPLAY_PIN_SD_PWR, 0);
-    ESP_LOGI(TAG, "SD power rail disabled (GPIO%d)", ESPAPERPLAY_PIN_SD_PWR);
-#endif
-    return ESP_OK;
-}
 
 /* ====================================================================
  * 驱动级自检（仅 ESPAPERPLAY_SD_ENABLE_SELFTEST=1 时启用）
@@ -150,14 +110,7 @@ esp_err_t espaperplay_sd_init(void) {
     esp_err_t ret;
     bool host_inited = false;
 
-    /* 1. 电源轨上电 */
-    ret = sd_power_rail_enable();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SD power rail enable failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    /* 2. SDMMC 主机初始化 */
+    /* 1. SDMMC 主机初始化 */
     s_host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
     s_host.slot = ESPAPERPLAY_SDMMC_HOST_SLOT;
     s_host.max_freq_khz = ESPAPERPLAY_SD_CLK_HZ / 1000;
@@ -169,7 +122,7 @@ esp_err_t espaperplay_sd_init(void) {
     s_host_ready = true;
     host_inited = true;
 
-    /* 3. 槽位配置：引脚 / 总线宽度 / 内部上拉（SDIO 协议要求 CMD+D0-D3 上拉） */
+    /* 2. 槽位配置：引脚 / 总线宽度 / 内部上拉（SDIO 协议要求 CMD+D0-D3 上拉） */
     if (ESPAPERPLAY_SD_BUS_WIDTH != 1 && ESPAPERPLAY_SD_BUS_WIDTH != 4) {
         ESP_LOGE(TAG, "invalid bus width %d (only 1 or 4 supported)", ESPAPERPLAY_SD_BUS_WIDTH);
         ret = ESP_ERR_INVALID_ARG;
@@ -193,7 +146,7 @@ esp_err_t espaperplay_sd_init(void) {
     }
     s_slot_ready = true;
 
-    /* 4. SDIO 卡片初始化（CMD0/CMD8/ACMD41/CMD2/CMD3/CMD9/CMD7 探测序列） */
+    /* 3. SDIO 卡片初始化（CMD0/CMD8/ACMD41/CMD2/CMD3/CMD9/CMD7 探测序列） */
     ret = sdmmc_card_init(&s_host, &s_card);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "sdmmc_card_init failed: %s (card absent or unresponsive?)",
@@ -228,7 +181,6 @@ fail:
     s_host_ready = false;
     s_slot_ready = false;
     s_card_ready = false;
-    sd_power_rail_disable();
     return ret;
 }
 
@@ -246,8 +198,6 @@ esp_err_t espaperplay_sd_deinit(void) {
     s_host_ready = false;
     s_slot_ready = false;
     s_card_ready = false;
-
-    sd_power_rail_disable();
 
     ESP_LOGI(TAG, "MicroSD deinitialized (SDIO)");
     return ESP_OK;

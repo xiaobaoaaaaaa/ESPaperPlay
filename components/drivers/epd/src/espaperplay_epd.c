@@ -17,6 +17,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 
 #include "espaperplay_config.h"
@@ -90,7 +91,7 @@ static const char *TAG = "ESPaperPlay_EPD";
  *  PWR：VGH/VGL=20V，VDH/VDL=0x3F；TRES：800x480。 */
 static const uint8_t UC8179_PWR_GRAY4[4] = {0x07, 0x07, 0x3F, 0x3F};
 /** 面板分辨率（TRES 命令参数，灰阶/快刷初始化使用；epd_init 时按运行时分辨率填充）。 */
-static uint8_t UC8179_TRES_VALUE[4];
+static uint8_t UC8179_TRES_VALUE[4] __attribute__((aligned(16)));
 
 /** DSLP 校验码：命令仅在数据 == 0xA5 时执行。 */
 #define UC8179_DSLP_CHECK 0xA5
@@ -109,8 +110,8 @@ static uint8_t UC8179_TRES_VALUE[4];
  * ==================================================================== */
 
 /* 显示分辨率（运行时，来自 espaperplay_display；epd_init 时读取） */
-static uint16_t s_disp_w = 0; /*!< 有效显示区宽度（像素） */
-static uint16_t s_disp_h = 0; /*!< 有效显示区高度（像素） */
+static uint16_t s_disp_w = 0;          /*!< 有效显示区宽度（像素） */
+static uint16_t s_disp_h = 0;          /*!< 有效显示区高度（像素） */
 static size_t s_frame_bytes = 0;       /*!< 全屏 1bpp 帧字节数（w*h/8） */
 static size_t s_gray4_frame_bytes = 0; /*!< 4 灰阶整帧字节数（2bpp：w*h/4） */
 static size_t s_snapshot_bytes = 0;    /*!< 私有快照缓冲字节数（取各模式最大值：灰阶整帧） */
@@ -122,6 +123,17 @@ static bool s_asleep = true;                 /*!< 面板是否处于深度睡眠
 static bool s_needs_full_after_wake = false; /*!< 从深度睡眠唤醒后首次局刷需强制 DTM1 反写新帧 */
 static uint8_t *s_snapshot =
     NULL; /*!< 私有帧快照：SPI 传输只读此缓冲，杜绝并发改写源缓冲导致错位 */
+static uint8_t *s_last_frame =
+    NULL; /*!< 整屏当前显示帧（1bpp 整帧）：deep sleep 唤醒后初次局刷写入 DTM1
+              作为旧平面，避免强制反相翻转伤屏；每次成功刷新后维护为整屏显示 */
+/*!< PSRAM 帧分块搬运暂存（init 一次性预留 4KB 内部 DMA 块；NULL=预留失败，
+ *  epd_write_data 退化为 SPI_TRANS_DMA_USE_PSRAM 直读 + worker 重试兜底）。
+ *  不直读的原因：EDMA 取 PSRAM 的建立延迟是按空闲系统给的经验值（IDF
+ *  spi_master.c SPI_EDMA_SETUP_TIME_US，本配置下仅 2µs），LVGL/FreeType
+ *  并发压 PSRAM 时 EDMA 供数会断流——实测 DMA TX underflow，且该传输
+ *  中途数据已损坏，只有重初始化才能恢复。走内部 SRAM 则物理上无此风险，
+ *  且运行期零分配，不会复发旧「每事务现场分配 bounce→NO_MEM」问题。 */
+static uint8_t *s_spi_staging = NULL;
 static espaperplay_epd_mode_t s_last_mode =
     ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode =
@@ -166,25 +178,6 @@ static esp_err_t epd_gpio_init(void) {
     return ESP_OK;
 }
 
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-/**
- * @brief 使能 EPD 电源轨（ESPAPERPLAY_PIN_EPD_PWR 拉高）。
- */
-static esp_err_t epd_enable_power(void) {
-    gpio_config_t io = {
-        .pin_bit_mask = 1ULL << ESPAPERPLAY_PIN_EPD_PWR,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "EPD power pin config failed");
-    gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_PWR, 1);
-    ESP_LOGI(TAG, "EPD power rail enabled (GPIO%d)", ESPAPERPLAY_PIN_EPD_PWR);
-    return ESP_OK;
-}
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
 /**
  * @brief 写一个 UC8179 命令字节（DC=0）。
  */
@@ -204,6 +197,13 @@ static esp_err_t epd_write_cmd(uint8_t cmd) {
  *
  * @note CS 在每个事务间自动拉高再拉低，符合规格书"每 8 位拉高 CSB 防误码"
  *       的建议；DC 在整组数据期间保持高电平。
+ *
+ * @note 帧快照在 PSRAM：先分块拷入内部 DMA 暂存（s_spi_staging，init 一次
+ *       性预留）再传输——DMA 读内部 SRAM 无断流风险，且运行期零分配，内部
+ *       堆峰值固定 4KB。仅在暂存预留失败时退化置 SPI_TRANS_DMA_USE_PSRAM
+ *       直读 PSRAM（见 s_spi_staging 注释的竞争风险），由 worker 有界重试
+ *       兜底。内部源（s_fill/s_tmp/s_plane/TRES，均 aligned(16)）对齐且
+ *       DMA-capable，直接传输不经暂存。
  */
 static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     esp_err_t ret;
@@ -211,8 +211,20 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     while (len > 0) {
         size_t chunk =
             len > ESPAPERPLAY_EPD_SPI_MAX_TRANSFER ? ESPAPERPLAY_EPD_SPI_MAX_TRANSFER : len;
+        /* PSRAM 源（或未对齐的内部源）先拷入内部暂存；无暂存则退化直读。 */
+        const uint8_t *dma_src = data;
+        bool direct_psram = false;
+        if ((((uint32_t)(uintptr_t)data | chunk) & 3) != 0 || esp_ptr_external_ram(data)) {
+            if (s_spi_staging != NULL) {
+                memcpy(s_spi_staging, data, chunk);
+                dma_src = s_spi_staging;
+            } else {
+                direct_psram = true;
+            }
+        }
         spi_transaction_t t = {
-            .tx_buffer = data,
+            .flags = direct_psram ? SPI_TRANS_DMA_USE_PSRAM : 0,
+            .tx_buffer = dma_src,
             .length = (uint32_t)chunk * 8,
         };
         ret = spi_device_transmit(s_spi_dev, &t);
@@ -231,7 +243,8 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
  * @brief 写 len 个相同字节（用于清屏/平面填充，避免分配大缓冲）。
  */
 static esp_err_t epd_write_fill(uint8_t value, size_t len) {
-    static uint8_t s_fill[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
+    /* aligned(16)：内部 RAM 源满足 GDMA 对齐，SPI 传输不做现场 bounce。 */
+    static uint8_t s_fill[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER] __attribute__((aligned(16)));
     esp_err_t ret;
 
     memset(s_fill, value, sizeof(s_fill));
@@ -252,7 +265,7 @@ static esp_err_t epd_write_fill(uint8_t value, size_t len) {
  * 复用填充暂存做分块取反，避免分配大缓冲；DC 由 epd_write_data 置位。
  */
 static esp_err_t epd_write_inverted(const uint8_t *data, size_t len) {
-    static uint8_t s_tmp[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER];
+    static uint8_t s_tmp[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER] __attribute__((aligned(16)));
     esp_err_t ret;
 
     while (len > 0) {
@@ -645,17 +658,31 @@ static esp_err_t epd_refresh_partial(const void *image_buf, uint16_t x, uint16_t
         return ret;
     }
 
-    /* 从深度睡眠唤醒后首次局刷：DTM1 = ~新窗口数据（强制窗口内全像素翻转，
-     * 走 K2W/W2K 深波形建立干净基线；N2OCP 拷贝后后续差分照常工作）。
-     * 从灰阶切回黑白同理：窗口内灰阶残留须通过翻转清除。 */
+    /* 从深度睡眠唤醒后首次局刷：DTM1 = 整屏当前显示帧（s_last_frame，非反相）
+     * 作为旧平面，再写新窗口数据到 DTM2，走正常 {旧,新} 差分波形（不强制
+     * 翻转），避免频繁浅睡唤醒反复触发全像素深波形伤屏。N2OCP 拷贝后后续
+     * 差分照常工作。从灰阶切回黑白同理：窗口内灰阶残留须通过翻转清除，
+     * 故灰阶分支仍用反相写入。 */
     if (s_needs_full_after_wake || s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
         s_needs_full_after_wake = false;
         ret = epd_write_cmd(UC8179_CMD_DTM1);
         ESP_RETURN_ON_ERROR(ret, TAG, "DTM1 cmd failed");
-        if (image_buf == NULL) {
-            ret = epd_write_fill(0x00, window_bytes);
+        if (s_last_mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+            /* 灰阶残留：DTM1 = ~新窗口数据，强制翻转清除中间灰。 */
+            if (image_buf == NULL) {
+                ret = epd_write_fill(0x00, window_bytes);
+            } else {
+                ret = epd_write_inverted(image_buf, window_bytes);
+            }
         } else {
-            ret = epd_write_inverted(image_buf, window_bytes);
+            /* 唤醒：DTM1 = 整屏当前显示帧（旧平面），正常差分。 */
+            if (image_buf == NULL) {
+                ret = epd_write_fill(0xFF, s_frame_bytes);
+            } else if (s_last_frame != NULL) {
+                ret = epd_write_data(s_last_frame, s_frame_bytes);
+            } else {
+                ret = epd_write_fill(0xFF, s_frame_bytes);
+            }
         }
         if (ret != ESP_OK) {
             return ret;
@@ -730,7 +757,8 @@ static esp_err_t epd_refresh_fast(const void *image_buf) {
  * 处理旧平面。
  */
 static esp_err_t epd_refresh_gray4(const void *image_buf) {
-    static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2]; /* 位平面暂存 */
+    static uint8_t s_plane[ESPAPERPLAY_EPD_SPI_MAX_TRANSFER / 2] __attribute__((
+        aligned(16))); /* 位平面暂存；aligned(16) 同 s_fill，免 SPI 现场 bounce */
     const size_t chunk_bytes = sizeof(s_plane) * 2;               /* 每块输入帧字节数 */
     esp_err_t ret;
 
@@ -823,8 +851,7 @@ static void epd_selftest_task(void *arg) {
 
     /* 1. 全屏清白（FULL 模式，清屏样本）。 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: FULL clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -838,8 +865,7 @@ static void epd_selftest_task(void *arg) {
         goto out;
     }
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(pattern, 0, 0, s_disp_w,
-                                  s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(pattern, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: FULL pattern -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -882,8 +908,7 @@ static void epd_selftest_task(void *arg) {
     /* 5. 4 灰阶：四条纵向色带（白/浅灰/深灰/黑，各 200px 宽）。 */
     gray = malloc(s_frame_bytes * 2); /* 2bpp 整帧 */
     if (gray == NULL) {
-        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)",
-                 (unsigned)(s_frame_bytes * 2));
+        ESP_LOGE(TAG, "selftest gray frame alloc failed (%u bytes)", (unsigned)(s_frame_bytes * 2));
         goto out;
     }
     memset(gray, 0x00, s_frame_bytes * 2); /* 默认全白（灰阶值 0） */
@@ -893,8 +918,7 @@ static void epd_selftest_task(void *arg) {
         memset(row + 400 / 4, 0xAA, 200 / 4); /* 深灰带（灰阶值 2） */
         memset(row + 600 / 4, 0xFF, 200 / 4); /* 黑带（灰阶值 3） */
     }
-    ret = espaperplay_epd_refresh(gray, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_GRAY4);
+    ret = espaperplay_epd_refresh(gray, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_GRAY4);
     ESP_LOGI(TAG, "selftest: gray4 bands -> %s", esp_err_to_name(ret));
     if (ret != ESP_OK) {
         goto out;
@@ -945,8 +969,7 @@ out:
 
     /* 性能测试完成：刷成全白（FULL 清屏，黑像素深擦除）。 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: final white clear -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
     if (ret != ESP_OK) {
@@ -962,8 +985,7 @@ out:
     vTaskDelay(pdMS_TO_TICKS(8000));
     espaperplay_epd_set_idle_sleep_timeout_ms(ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS); /* 恢复默认 */
     t0 = esp_timer_get_time();
-    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h,
-                                  ESPAPERPLAY_EPD_MODE_FULL);
+    ret = espaperplay_epd_refresh(NULL, 0, 0, s_disp_w, s_disp_h, ESPAPERPLAY_EPD_MODE_FULL);
     ESP_LOGI(TAG, "selftest: wake refresh after idle sleep -> %s (%lld ms)", esp_err_to_name(ret),
              (esp_timer_get_time() - t0) / 1000);
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
@@ -1083,14 +1105,6 @@ esp_err_t espaperplay_epd_init(void) {
         return ESP_ERR_TIMEOUT;
     }
 
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-    ret = epd_enable_power();
-    if (ret != ESP_OK) {
-        xSemaphoreGive(s_lock);
-        return ret;
-    }
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
     ret = epd_gpio_init();
     if (ret != ESP_OK) {
         xSemaphoreGive(s_lock);
@@ -1125,6 +1139,32 @@ esp_err_t espaperplay_epd_init(void) {
             ESP_LOGE(TAG, "snapshot buffer alloc failed (%u bytes)", (unsigned)s_snapshot_bytes);
             xSemaphoreGive(s_lock);
             return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* 整屏当前显示帧（1bpp 整帧）：deep sleep 唤醒后初次局刷作为旧平面写入
+     * DTM1，避免强制反相翻转伤屏。初始全白（与初始化清白基线一致）。 */
+    if (s_last_frame == NULL) {
+        s_last_frame = heap_caps_malloc(s_frame_bytes, MALLOC_CAP_SPIRAM);
+        if (s_last_frame == NULL) {
+            s_last_frame = heap_caps_malloc(s_frame_bytes, MALLOC_CAP_8BIT);
+        }
+        if (s_last_frame == NULL) {
+            ESP_LOGE(TAG, "last frame buffer alloc failed (%u bytes)", (unsigned)s_frame_bytes);
+            xSemaphoreGive(s_lock);
+            return ESP_ERR_NO_MEM;
+        }
+        memset(s_last_frame, 0xFF, s_frame_bytes); /* 全白 */
+    }
+
+    /* PSRAM 帧搬运暂存：一次性预留（见 s_spi_staging 注释）。失败仅告警：
+     * epd_write_data 退化为直读 PSRAM，由 worker 有界重试兜底。 */
+    if (s_spi_staging == NULL) {
+        s_spi_staging = heap_caps_aligned_alloc(16, ESPAPERPLAY_EPD_SPI_MAX_TRANSFER,
+                                                MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (s_spi_staging == NULL) {
+            ESP_LOGW(TAG, "SPI staging alloc failed (%u bytes), fallback to PSRAM EDMA",
+                     (unsigned)ESPAPERPLAY_EPD_SPI_MAX_TRANSFER);
         }
     }
 
@@ -1233,8 +1273,8 @@ esp_err_t espaperplay_epd_init(void) {
         ret = ESP_OK;
     }
 
-    ESP_LOGI(TAG, "EPD %ux%u initialized (SPI%d, %u Hz)", s_disp_w,
-             s_disp_h, (int)ESPAPERPLAY_SPI_HOST_ID, ESPAPERPLAY_EPD_SPI_CLK_HZ);
+    ESP_LOGI(TAG, "EPD %ux%u initialized (SPI%d, %u Hz)", s_disp_w, s_disp_h,
+             (int)ESPAPERPLAY_SPI_HOST_ID, ESPAPERPLAY_EPD_SPI_CLK_HZ);
 
 #if ESPAPERPLAY_EPD_ENABLE_SELFTEST
     xTaskCreate(epd_selftest_task, "epd_selftest", 4096, NULL, 5, NULL);
@@ -1261,8 +1301,7 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
     if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
         /* 局部窗口参数校验：x/width 8 对齐，窗口在屏内。 */
         if ((x & 7) != 0 || (width & 7) != 0 || width == 0 || height == 0 ||
-            (uint32_t)x + width > s_disp_w ||
-            (uint32_t)y + height > s_disp_h) {
+            (uint32_t)x + width > s_disp_w || (uint32_t)y + height > s_disp_h) {
             ESP_LOGE(TAG, "invalid partial window: x=%u y=%u w=%u h=%u", x, y, width, height);
             return ESP_ERR_INVALID_ARG;
         }
@@ -1312,6 +1351,32 @@ esp_err_t espaperplay_epd_refresh(const void *image_buf, uint16_t x, uint16_t y,
         s_last_mode = (mode == ESPAPERPLAY_EPD_MODE_FULL_FORCE) ? ESPAPERPLAY_EPD_MODE_FULL : mode;
         s_controller_mode = s_last_mode;
         s_asleep = false; /* 刷新完成后面板保持上电 */
+
+        /* 维护整屏当前显示帧（供 deep sleep 唤醒后初次局刷作为旧平面）。
+         * FULL/FAST：整帧即显示内容（清屏=全白）；PARTIAL：仅窗口更新，
+         * 把窗口数据合并进整屏；GRAY4：2bpp 无法以 1bpp 表示，跳过维护
+         * （灰阶切回黑白走反相清除，不依赖本帧）。 */
+        if (mode == ESPAPERPLAY_EPD_MODE_PARTIAL) {
+            if (image_buf == NULL) {
+                memset(s_last_frame + (size_t)y * (s_disp_w / 8) + x / 8, 0xFF,
+                       (size_t)width * height / 8);
+            } else if (s_snapshot != NULL) {
+                const uint8_t *src = (const uint8_t *)s_snapshot;
+                uint8_t *dst = s_last_frame + (size_t)y * (s_disp_w / 8) + x / 8;
+                const size_t row_bytes = (size_t)width / 8;
+                for (size_t r = 0; r < height; r++) {
+                    memcpy(dst + r * (s_disp_w / 8), src + r * row_bytes, row_bytes);
+                }
+            }
+        } else if (mode == ESPAPERPLAY_EPD_MODE_GRAY4) {
+            /* 不维护（见上）；保持上次黑白帧，灰阶切回时由反相清除。 */
+        } else { /* FULL / FULL_FORCE / FAST：整帧 */
+            if (image_buf == NULL) {
+                memset(s_last_frame, 0xFF, s_frame_bytes);
+            } else if (s_snapshot != NULL) {
+                memcpy(s_last_frame, s_snapshot, s_frame_bytes);
+            }
+        }
     } else {
         s_controller_mode = ESPAPERPLAY_EPD_MODE_MAX; /* 状态未知，下次强制重新初始化 */
     }
@@ -1387,23 +1452,3 @@ esp_err_t espaperplay_epd_set_idle_sleep_timeout_ms(uint32_t timeout_ms) {
 
 uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void) { return s_idle_sleep_timeout_ms; }
 #endif /* ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0 */
-
-esp_err_t espaperplay_epd_power_off(void) {
-    esp_err_t ret = ESP_OK;
-
-    if (s_initialized && !s_asleep) {
-        ret = espaperplay_epd_sleep();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "sleep before power-off failed: %s", esp_err_to_name(ret));
-        }
-    }
-
-#if ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-    gpio_set_level((gpio_num_t)ESPAPERPLAY_PIN_EPD_PWR, 0);
-    ESP_LOGI(TAG, "EPD power rail disabled (GPIO%d)", ESPAPERPLAY_PIN_EPD_PWR);
-#endif /* ESPAPERPLAY_EPD_ENABLE_POWER_PIN */
-
-    s_initialized = false;
-    s_asleep = true;
-    return ret;
-}

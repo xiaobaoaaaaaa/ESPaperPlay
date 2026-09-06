@@ -9,9 +9,9 @@ set(INCLUDE_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/include")
 file(MAKE_DIRECTORY "${INCLUDE_GEN_DIR}")
 
 idf_component_register(
-    SRCS "src/espaperplay_fonts.c"
+    SRCS "src/espaperplay_fonts.c" "src/espaperplay_sd_fonts.c"
     INCLUDE_DIRS "include" "${INCLUDE_GEN_DIR}"
-    REQUIRES esp_mmap_assets esp_lv_fs lvgl
+    REQUIRES esp_mmap_assets esp_lv_fs lvgl board storage
 )
 
 # 打包 assets/fonts 目录为 fonts 分区 SPIFFS 镜像，并生成资源索引头文件。

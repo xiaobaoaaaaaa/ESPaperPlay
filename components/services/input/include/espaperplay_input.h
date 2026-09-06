@@ -21,16 +21,16 @@ extern "C" {
  * @brief 输入事件管理。
  *
  * 将所有人机输入源（触摸控制器、物理按键）聚合为统一的事件流。
- * 应用程序通过 espaperplay_input_get_event() 消费事件，不直接与触摸或
- * GPIO 驱动交互。
+ * 消费方（LVGL 线程）通过 espaperplay_input_try_get_key() /
+ * espaperplay_input_try_get_touch() 分别非阻塞读取两类事件，不直接与
+ * 触摸或 GPIO 驱动交互。
  *
- * 内部为双队列设计（按键 / 触摸物理隔离，经 FreeRTOS Queue Set 合并
- * 消费）：
+ * 内部为双队列设计（按键 / 触摸物理隔离，两个独立 FreeRTOS 队列）：
  *   - 按键队列：稀疏、事件型（单击/双击/长按等语义动作），队首投递 +
  *     满时挤最旧，按键永不丢失；
  *   - 触摸队列：高频、状态型（GT911 中断唤醒读取的坐标流，轨迹绘制
- *     需要中间点），满时丢弃新事件（顺序不乱、Queue Set 通知计数一致），
- *     触摸洪泛不挤占按键队列。
+ *     需要中间点），满时丢弃新事件（顺序不乱），触摸洪泛不挤占按键
+ *     队列；LVGL 线程每个 indev read 周期（~30ms）全量排空。
  * 触摸中断接入方式：GT911 的 I2C 读取不能在 ISR 内执行，由中断唤醒
  * 触摸任务，任务内读取坐标后经 espaperplay_input_post_event() 投递到
  * 触摸队列。
@@ -77,12 +77,12 @@ typedef enum {
  * @brief 归一化的输入事件。
  */
 typedef struct {
-    espaperplay_input_event_type_t type;       /*!< 事件来源类型 */
-    espaperplay_touch_point_t point;           /*!< 触摸数据（type == TOUCH 时有效） */
+    espaperplay_input_event_type_t type; /*!< 事件来源类型 */
+    espaperplay_touch_point_t point;     /*!< 触摸数据（type == TOUCH 时有效） */
     uint8_t touch_pressed; /*!< 触摸是否按下（type == TOUCH 时有效；0 表示全部手指抬起） */
     uint8_t touch_points;  /*!< 本帧触摸点总数（type == TOUCH 时有效；释放帧为 0） */
     uint16_t touch_seq;    /*!< 触摸帧序号（同一帧内的各点共享，用于识别帧边界） */
-    uint8_t key_id;                            /*!< 按键标识（type == KEY 时有效） */
+    uint8_t key_id;        /*!< 按键标识（type == KEY 时有效） */
     espaperplay_input_key_action_t key_action; /*!< 按键动作（type == KEY 时有效） */
     uint16_t key_press_time_ms;                /*!< 本次按压持续时间（type == KEY 时有效） */
 } espaperplay_input_event_t;
@@ -101,15 +101,60 @@ typedef struct {
 esp_err_t espaperplay_input_init(void);
 
 /**
- * @brief 等待下一个输入事件。
+ * @brief 非阻塞读取一个按键事件（LVGL 线程按键泵调用）。
  *
- * @param[out] event      接收下一个输入事件。
- * @param[in]  timeout_ms 最长等待时间（毫秒）。0 表示非阻塞；较大的值
- *                        （接近 portMAX_DELAY）表示无限阻塞。
+ * @param[out] event 接收按键事件。
  *
- * @return 收到事件返回 ESP_OK，超时返回 ESP_ERR_TIMEOUT。
+ * @return 收到事件返回 ESP_OK；队列空返回 ESP_ERR_TIMEOUT；
+ *         未初始化返回 ESP_ERR_INVALID_STATE。
  */
-esp_err_t espaperplay_input_get_event(espaperplay_input_event_t *event, uint32_t timeout_ms);
+esp_err_t espaperplay_input_try_get_key(espaperplay_input_event_t *event);
+
+/**
+ * @brief 非阻塞读取一个触摸事件（LVGL indev read_cb 调用，循环排空）。
+ *
+ * @param[out] event 接收触摸事件。
+ *
+ * @return 收到事件返回 ESP_OK；队列空返回 ESP_ERR_TIMEOUT；
+ *         未初始化返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_input_try_get_touch(espaperplay_input_event_t *event);
+
+/**
+ * @brief 获取最近一次用户活动时刻（毫秒，esp_timer 单调时钟）。
+ *
+ * 任意按键 / 触摸事件投递时刷新。电源管理据此判断"无操作"超时，
+ * 触发自动浅睡眠。返回 0 表示尚未有任何用户活动（系统启动后未交互）。
+ *
+ * @return 最近活动时刻（毫秒）。
+ */
+uint64_t espaperplay_input_get_last_activity_ms(void);
+
+/**
+ * @brief 主动标记一次用户活动（刷新活动时间戳为当前时刻）。
+ *
+ * 供电源管理在浅睡眠唤醒后调用，重置"无操作"计时，给唤醒事件
+ * （触摸 / 按键）的处理留出窗口，避免刚唤醒又立即重新睡眠。
+ */
+void espaperplay_input_mark_activity(void);
+
+/**
+ * @brief 设置/清除"设备已进入睡眠"指示标志。
+ *
+ * 由电源管理在即将进入浅睡眠前置位、在用户唤醒后清除。UI 各页面据此在
+ * 状态栏右侧显示节能图标，提示设备处于低功耗睡眠态。标志存于 input 组件
+ * 以避免 power 与 ui 形成 REQUIRES 环（ui 已 REQUIRES power）。
+ *
+ * @param shown true=显示节能图标（设备已睡眠），false=隐藏。
+ */
+void espaperplay_input_set_sleep_indicator(bool shown);
+
+/**
+ * @brief 获取"设备已进入睡眠"指示标志当前值。
+ *
+ * @return true=应显示节能图标，false=不显示。
+ */
+bool espaperplay_input_is_sleep_indicator(void);
 
 /**
  * @brief 获取按键动作的字符串表示（日志 / 界面显示用）。

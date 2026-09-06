@@ -19,6 +19,12 @@ extern const lv_image_dsc_t icon_weather_64;
 /** 64x64 A8 图标（Iconify: reader） */
 extern const lv_image_dsc_t icon_reader_64;
 
+/** 64x64 A8 图标（Iconify: settings） */
+extern const lv_image_dsc_t icon_settings_64;
+
+/** 64x64 A8 图标（Iconify: files） */
+extern const lv_image_dsc_t icon_files_64;
+
 /** 64x64 A8 图标（Iconify: debug） */
 extern const lv_image_dsc_t icon_debug_64;
 
@@ -60,3 +66,6 @@ extern const lv_image_dsc_t icon_visibility_16;
 
 /** 16x16 A8 图标（Iconify: thermo） */
 extern const lv_image_dsc_t icon_thermo_16;
+
+/** 16x16 A8 图标（Iconify: leaf） */
+extern const lv_image_dsc_t icon_leaf_16;

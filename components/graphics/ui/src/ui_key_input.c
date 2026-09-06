@@ -8,67 +8,58 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
-#include "esp_timer.h"
 
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
 #include "espaperplay_ui.h"
-#include "espaperplay_ui_touch.h"
+
+#include "lvgl.h"
 
 static const char *TAG = "ESPaperPlay_UI";
 
-#define ESPAPERPLAY_UI_KEY_INPUT_TASK_STACK_SIZE 4096
-#define ESPAPERPLAY_UI_KEY_INPUT_TASK_PRIORITY 4
-
-/** 触摸批量投递：窗口（毫秒）内累积的事件一并转发到 LVGL 线程。 */
-#define UI_TOUCH_BATCH_WINDOW_MS 30
-/** 触摸批量投递：单批最大事件数（触发立即转发，防止窗口内超量）。 */
-#define UI_TOUCH_BATCH_MAX_EVENTS 32
-
-/* ====================================================================
- * 输入分发：input 事件队列 -> LVGL 线程 -> 页面钩子 / 触摸指针
- * ====================================================================
- *
- * 输入分发任务阻塞在 espaperplay_input_get_event() 上（按键、触摸事件
- * 走同一条合并队列）。分发策略：
- *   - 按键：事件型（低速率），每次经 espaperplay_gui_lv_call 投递到
- *     LVGL 线程，由页面栈转发给栈顶页面 on_key（导航/刷新内容）；
- *   - 触摸：高频状态型（GT911 上报可达 ~100 帧/秒）。指针 indev 状态
- *     直接在本任务逐事件更新（espaperplay_ui_touch_update，临界区保护，
- *     无 LVGL 往返延迟）；页面级展示（轨迹绘制需要每个中间点）按
- *     UI_TOUCH_BATCH_WINDOW_MS 窗口批量投递一次 gui_lv_call，批内事件
- *     逐条转发给页面 on_touch——既保留全部中间坐标，又摊薄跨线程开销
- *     （批内点在同一 LVGL 周期渲染，脏区自然合并为一次 e-paper 刷新）。
- */
-
-/** LVGL 线程内执行：把按键事件转发给栈顶页面（arg 指向任务栈上的事件副本）。 */
-static void ui_key_dispatch_cb(void *arg) {
-    const espaperplay_input_event_t *event = (const espaperplay_input_event_t *)arg;
-
-    ESP_LOGI(TAG, "key event: id=%u action=%s press=%u ms", event->key_id,
-             espaperplay_input_key_action_str(event->key_action), event->key_press_time_ms);
-
-    espaperplay_ui_page_handle_key_lv(event);
-}
-
-/** 触摸批量投递描述（分发任务栈上的事件数组 + 数量）。 */
-typedef struct {
-    const espaperplay_input_event_t *events; /*!< 本批事件数组 */
-    uint16_t count;                          /*!< 本批事件数 */
-} ui_touch_batch_t;
-
-/** LVGL 线程内执行：把批量触摸事件逐条转发给栈顶页面（on_touch）。 */
-static void ui_touch_batch_dispatch_cb(void *arg) {
-    const ui_touch_batch_t *batch = (const ui_touch_batch_t *)arg;
-    for (uint16_t i = 0; i < batch->count; i++) {
-        espaperplay_ui_page_handle_touch_lv(&batch->events[i]);
-    }
-}
+/** 按键泵周期（毫秒）：LVGL 线程内 lv_timer 排空按键队列的间隔。 */
+#define UI_KEY_PUMP_PERIOD_MS 20
 
 #if ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
 #define ESPAPERPLAY_UI_SELFTEST_TASK_STACK_SIZE 3072
 #define ESPAPERPLAY_UI_SELFTEST_TASK_PRIORITY 3
 #define ESPAPERPLAY_UI_SELFTEST_WAIT_MS 3000
+#endif
+
+/* ====================================================================
+ * 输入消费：input 双队列 -> LVGL 线程直读 -> 页面钩子 / 触摸指针
+ * ====================================================================
+ *
+ * 按键与触摸分别由 LVGL 线程内的两个入口直接消费（无独立分发任务、
+ * 无跨线程投递）：
+ *   - 按键：本文件创建的按键泵 lv_timer（UI_KEY_PUMP_PERIOD_MS 周期）
+ *     排空按键队列，逐条转发给栈顶页面 on_key（导航/刷新内容）。按键
+ *     稀疏（长按 HOLD 节流后 ~2/秒），20ms 泵周期延迟可忽略；
+ *   - 触摸：触摸指针 indev 的 read_cb 排空触摸队列（见 lvgl_touch.c），
+ *     逐条转发页面 on_touch 并驱动控件点击。
+ *
+ * 两个入口都运行在 LVGL 线程内，页面钩子可直接调用任意 lv_* API 与
+ * espaperplay_ui_page_*_lv()，无需 espaperplay_gui_lv_call 往返。
+ */
+
+/** 按键泵（LVGL 线程内周期执行）：排空按键队列，逐条转发页面 on_key。 */
+static void ui_key_pump_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    espaperplay_input_event_t event;
+    while (espaperplay_input_try_get_key(&event) == ESP_OK) {
+        ESP_LOGI(TAG, "key event: id=%u action=%s press=%u ms", event.key_id,
+                 espaperplay_input_key_action_str(event.key_action), event.key_press_time_ms);
+        espaperplay_ui_page_handle_key_lv(&event);
+    }
+}
+
+/** 在 LVGL 线程内创建按键泵定时器（经 gui_lv_call 投递执行）。 */
+static void ui_key_pump_create_cb(void *arg) {
+    (void)arg;
+    lv_timer_create(ui_key_pump_timer_cb, UI_KEY_PUMP_PERIOD_MS, NULL);
+}
+
+#if ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
 
 /** 等待页面栈深度达到期望值（自检用）。 */
 static bool ui_key_selftest_wait_depth(uint8_t want, uint32_t timeout_ms) {
@@ -83,21 +74,21 @@ static bool ui_key_selftest_wait_depth(uint8_t want, uint32_t timeout_ms) {
 /**
  * 按键链路自检任务：注入合成按键事件，断言 GUI 的读取与处理。
  *
- * 独立任务运行，按键分发任务在此期间持续消费输入队列——注入事件与真实
- * 按键走完全相同的路径（input 队列 -> 分发任务 -> LVGL 线程 -> 页面钩子）。
+ * 独立任务运行，按键泵在此期间持续消费按键队列——注入事件与真实
+ * 按键走完全相同的路径（input 按键队列 -> 按键泵 -> 页面钩子）。
  *
  * 用例 1：注入 SINGLE_CLICK，期望 home 的 on_key 压入测试页
  *         （页面栈深度 1 -> 2）；
  * 用例 2：注入 LONG_PRESS_UP，期望 测试页的 on_key 弹出返回 home
  *         （深度 2 -> 1，验证 pop 重建上一页）；
  * 用例 3：再次注入 SINGLE_CLICK，期望深度 1 -> 2（往返后系统仍存活、
- *         页面栈与分发链路工作正常）。
+ *         页面栈与按键泵链路工作正常）。
  */
 static void ui_key_selftest_task(void *arg) {
     (void)arg;
 
     ESP_LOGI(TAG, "key selftest start (injecting synthetic key events)");
-    vTaskDelay(pdMS_TO_TICKS(200)); /* 等待分发任务进入事件循环 */
+    vTaskDelay(pdMS_TO_TICKS(200)); /* 等待按键泵进入事件循环 */
 
     uint32_t passed = 0;
     uint32_t failed = 0;
@@ -162,69 +153,14 @@ static void ui_key_selftest_task(void *arg) {
 }
 #endif /* ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST */
 
-/** 按键分发任务：阻塞读取输入队列，按键/触摸事件分路处理。 */
-static void ui_key_input_task(void *arg) {
-    (void)arg;
-    ESP_LOGI(TAG, "key input task started");
-
-    /* 触摸批量投递缓冲（本任务独占；gui_lv_call 阻塞等待执行完成，
-     * 批数组在回调执行期间保持有效）。 */
-    espaperplay_input_event_t touch_batch[UI_TOUCH_BATCH_MAX_EVENTS];
-    uint16_t touch_batch_count = 0;
-    uint32_t touch_batch_start_ms = 0;
-
-    for (;;) {
-        espaperplay_input_event_t event;
-        const esp_err_t err = espaperplay_input_get_event(&event, portMAX_DELAY);
-        if (err != ESP_OK) {
-            /* 输入子系统未初始化等异常：避免忙等空转。 */
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        if (event.type == ESPAPERPLAY_INPUT_EVENT_TOUCH) {
-            /* 指针 indev 状态：逐事件直接更新（临界区保护），无 LVGL
-             * 往返延迟。 */
-            espaperplay_ui_touch_update(&event);
-
-            /* 页面展示：窗口内累积批量投递（保留全部中间点）；释放事件
-             * 必须立即转发（笔画收尾）。gui_lv_call 的完成信号是全局单
-             * 标志（单调用方语义），不可跳过等待，否则本次完成信号会
-             * 污染后续事件的完成同步。 */
-            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (touch_batch_count == 0) {
-                touch_batch_start_ms = now_ms;
-            }
-            touch_batch[touch_batch_count++] = event;
-
-            const bool batch_full = touch_batch_count >= UI_TOUCH_BATCH_MAX_EVENTS;
-            const bool window_elapsed = now_ms - touch_batch_start_ms >= UI_TOUCH_BATCH_WINDOW_MS;
-            if (batch_full || window_elapsed || event.touch_pressed == 0) {
-                ui_touch_batch_t batch = {touch_batch, touch_batch_count};
-                const esp_err_t call_err =
-                    espaperplay_gui_lv_call(ui_touch_batch_dispatch_cb, &batch, 1000);
-                if (call_err != ESP_OK) {
-                    ESP_LOGW(TAG, "dispatch touch batch to LVGL failed: %s",
-                             esp_err_to_name(call_err));
-                }
-                touch_batch_count = 0;
-            }
-            continue;
-        }
-
-        /* 按键事件：同步投递到 LVGL 线程处理。 */
-        const esp_err_t call_err = espaperplay_gui_lv_call(ui_key_dispatch_cb, &event, 1000);
-        if (call_err != ESP_OK) {
-            ESP_LOGW(TAG, "dispatch key event to LVGL failed: %s", esp_err_to_name(call_err));
-        }
-    }
-}
-
-esp_err_t espaperplay_ui_key_input_start(void) {
-    if (xTaskCreate(ui_key_input_task, "ui_key_input", ESPAPERPLAY_UI_KEY_INPUT_TASK_STACK_SIZE,
-                    NULL, ESPAPERPLAY_UI_KEY_INPUT_TASK_PRIORITY, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "key input task create failed");
-        return ESP_ERR_NO_MEM;
+esp_err_t espaperplay_ui_input_start(void) {
+    /* 按键泵定时器必须在 LVGL 线程内创建（lv_timer 非线程安全）。
+     * 超时放宽至 3000ms：首帧渲染（FreeType 栅格化）可能耗时较长，
+     * 避免 LVGL 任务忙于绘制时投递超时。 */
+    const esp_err_t err = espaperplay_gui_lv_call(ui_key_pump_create_cb, NULL, 3000);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "key pump timer create failed: %s", esp_err_to_name(err));
+        return err;
     }
 #if ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
     if (xTaskCreate(ui_key_selftest_task, "ui_key_selftest",
@@ -234,6 +170,7 @@ esp_err_t espaperplay_ui_key_input_start(void) {
         return ESP_ERR_NO_MEM;
     }
 #endif
-    ESP_LOGI(TAG, "input dispatcher started (key -> page on_key, touch -> indev + page on_touch)");
+    ESP_LOGI(TAG, "input consumer started (key pump %u ms + touch indev read, both in LVGL thread)",
+             (unsigned)UI_KEY_PUMP_PERIOD_MS);
     return ESP_OK;
 }

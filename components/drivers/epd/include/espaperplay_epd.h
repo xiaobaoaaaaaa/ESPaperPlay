@@ -22,7 +22,7 @@ extern "C" {
  *
  * 本组件实现 GDEY075T7-T01（7.5"，800x480，UC8179 控制器，SPI 接口）驱动：
  * SPI 设备注册、硬件复位、面板初始化（PSR / PON / CDI 等）、全屏与局部
- * （Partial Window）刷新、深度睡眠与电源轨关断。
+ * （Partial Window）刷新与深度睡眠。
  *
  * 实现依据：
  *  - 《GDEY075T7-T01 规格书》第 7 章命令表（MinerU 转换版 Markdown 在仓库根目录）；
@@ -71,7 +71,7 @@ extern "C" {
  *
  * 硬件引脚与 SPI 参数集中在 espaperplay_config.h。EPD 与 SD 卡共用 SPI2
  * 主机，主机总线由 board 组件初始化；本组件仅注册自己的 SPI 设备，并自行
- * 管理 DC / RST / BUSY / PWR 引脚（与 touch 组件的做法一致）。
+ * 管理 DC / RST / BUSY 引脚（与 touch 组件的做法一致）。
  */
 
 /**
@@ -136,13 +136,6 @@ uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void);
 #endif
 
 /**
- * @brief 初始化时是否使能 EPD 电源轨（ESPAPERPLAY_PIN_EPD_PWR 拉高）。
- */
-#ifndef ESPAPERPLAY_EPD_ENABLE_POWER_PIN
-#define ESPAPERPLAY_EPD_ENABLE_POWER_PIN 1
-#endif
-
-/**
  * @brief 等待 BUSY 释放的超时时间（毫秒）。
  *
  * 全屏刷新典型耗时约 2~3s（规格书未给出精确值），此处取 10s 作为安全上限；
@@ -155,11 +148,11 @@ uint32_t espaperplay_epd_get_idle_sleep_timeout_ms(void);
 /**
  * @brief 初始化电子纸显示屏。
  *
- * 完成电源轨上电、DC/RST/BUSY GPIO 配置、SPI 设备注册与硬件复位，随后使
- * 面板进入深度睡眠（低功耗待机）。第一次调用 espaperplay_epd_refresh()
+ * 完成 DC/RST/BUSY GPIO 配置、SPI 设备注册与硬件复位，随后使面板进入
+ * 深度睡眠（低功耗待机）。第一次调用 espaperplay_epd_refresh()
  * 时会自动完成控制器初始化（PSR/PON），无需额外步骤。
  *
- * @note 本函数可安全重复调用；esp_epd_power_off() 之后再次调用可重新上电。
+ * @note 本函数可安全重复调用。
  *
  * @return 成功返回 ESP_OK；SPI 设备注册或硬件初始化失败返回相应错误码。
  */
@@ -214,16 +207,6 @@ esp_err_t espaperplay_epd_sleep(void);
  * @return true = 面板处于深度睡眠（下一次刷新将走唤醒路径）。
  */
 bool espaperplay_epd_is_asleep(void);
-
-/**
- * @brief 完全关闭电子纸显示屏的电源轨。
- *
- * 若面板尚处于上电状态，先执行深度睡眠，再拉低 ESPAPERPLAY_PIN_EPD_PWR。
- * 再次使用前需调用 espaperplay_epd_init() 重新上电。
- *
- * @return 成功返回 ESP_OK，否则返回相应错误码。
- */
-esp_err_t espaperplay_epd_power_off(void);
 
 #ifdef __cplusplus
 }

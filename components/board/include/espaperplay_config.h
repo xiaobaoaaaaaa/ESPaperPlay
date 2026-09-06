@@ -30,14 +30,14 @@ extern "C" {
  * 根目录 CMakeLists.txt 也会解析这三个宏作为 ESP-IDF 应用版本
  * （esp_app_desc），改版本只需动这里。 */
 #define ESPAPERPLAY_VERSION_MAJOR 0
-#define ESPAPERPLAY_VERSION_MINOR 1
+#define ESPAPERPLAY_VERSION_MINOR 2
 #define ESPAPERPLAY_VERSION_PATCH 0
 
 /* 由 MAJOR/MINOR/PATCH 拼接人类可读版本字符串（勿手改字符串）。 */
 #define ESPAPERPLAY_VERSION_XSTR(major, minor, patch) #major "." #minor "." #patch
 #define ESPAPERPLAY_VERSION_STR(major, minor, patch) ESPAPERPLAY_VERSION_XSTR(major, minor, patch)
-#define ESPAPERPLAY_VERSION \
-    ESPAPERPLAY_VERSION_STR(ESPAPERPLAY_VERSION_MAJOR, ESPAPERPLAY_VERSION_MINOR, \
+#define ESPAPERPLAY_VERSION                                                                        \
+    ESPAPERPLAY_VERSION_STR(ESPAPERPLAY_VERSION_MAJOR, ESPAPERPLAY_VERSION_MINOR,                  \
                             ESPAPERPLAY_VERSION_PATCH)
 
 /** 项目 / 产品名称。 */
@@ -64,7 +64,6 @@ extern "C" {
 #define ESPAPERPLAY_PIN_EPD_DC 9    /*!< EPD 数据 / 命令 */
 #define ESPAPERPLAY_PIN_EPD_RST 8   /*!< EPD 硬件复位 */
 #define ESPAPERPLAY_PIN_EPD_BUSY 7  /*!< EPD 忙状态输入 */
-#define ESPAPERPLAY_PIN_EPD_PWR 6   /*!< EPD 电源轨使能 */
 
 /** EPD 默认 SPI 时钟频率，单位 Hz。 */
 #define ESPAPERPLAY_EPD_SPI_CLK_HZ 4000000
@@ -80,7 +79,6 @@ extern "C" {
 #define ESPAPERPLAY_PIN_TOUCH_SCL 5 /*!< I2C SCL */
 #define ESPAPERPLAY_PIN_TOUCH_INT 3 /*!< GT911 触摸中断（输入） */
 #define ESPAPERPLAY_PIN_TOUCH_RST 2 /*!< GT911 复位（输出） */
-#define ESPAPERPLAY_PIN_TOUCH_PWR 1 /*!< 触摸电源轨使能 */
 
 /**
  * GT911 I2C 设备地址（7 位）。
@@ -106,17 +104,18 @@ extern "C" {
  * 1/4-bit，slot 0 仅 1-bit。所有 SDMMC 信号经 GPIO 矩阵路由，可任意选脚。
  *
  * 引脚分配避开已占用 / 不可用的 GPIO：
- *   - EPD SPI（6-13）、触摸（1-5：INT=3 / RST=2 / PWR=1）、BOOT 键 0；
+ *   - EPD SPI（7-13）、触摸（2-5：INT=3 / RST=2）、BOOT 键 0；
  *   - **GPIO19/20 是芯片内置 USB D-/D+ 焊盘**，被板载 USB（烧录 / 调试 /
- *     次级 USB-Serial-JTAG 串口）占用，严禁用作 SD 信号或电源控制；
+ *     次级 USB-Serial-JTAG 串口）占用，严禁用作 SD 信号；
  *   - 43/44 为 UART0 串口。CLK/CMD 沿用 IDF 默认 14/15，D0-D3 收敛到
  *     16-18 + 21（21 原是 SPI 方案假定的片选脚，最可能已连到 SD 卡座）。
  *
  * 4-bit 模式要求 CMD/D0-D3 外接 10kΩ 上拉，驱动同时开启内部上拉
  * （SDMMC_SLOT_FLAG_INTERNAL_PULLUP）作为补充。上电前请务必对照原理图
- * 核对引脚；若板载 SD 供电由 GPIO 控制，请把 ESPAPERPLAY_PIN_SD_PWR 改为
- * 实际引脚并置 ESPAPERPLAY_SD_ENABLE_POWER_PIN=1（默认关闭：避免误操作
- * 未知引脚，例如 GPIO20=USB D+ 拉高会导致设备断连）。
+ * 核对引脚。
+ *
+ * @note TOUCH / EPD / SD 三个部件的供电为常供电（板上无 MOS 电源轨控制，
+ *       历史上的 *_PWR 电源轨配置已移除），固件不负责其上下电。
  * ==================================================================== */
 
 #define ESPAPERPLAY_PIN_SD_CLK 14 /*!< SDMMC 时钟线（CLK） */
@@ -125,7 +124,6 @@ extern "C" {
 #define ESPAPERPLAY_PIN_SD_D1 17  /*!< SDMMC 数据线 D1 */
 #define ESPAPERPLAY_PIN_SD_D2 18  /*!< SDMMC 数据线 D2 */
 #define ESPAPERPLAY_PIN_SD_D3 21  /*!< SDMMC 数据线 D3 */
-#define ESPAPERPLAY_PIN_SD_PWR -1 /*!< SD 卡电源轨使能（-1=无；按原理图配置实际引脚） */
 
 /** SDMMC 主机槽位（ESP32-S3：slot 1 支持 4-bit，slot 0 仅 1-bit）。 */
 #define ESPAPERPLAY_SDMMC_HOST_SLOT 1
@@ -138,6 +136,38 @@ extern "C" {
 
 /** SD 卡的 VFS 挂载点。 */
 #define ESPAPERPLAY_STORAGE_MOUNT_POINT "/sdcard"
+
+/**
+ * @brief SD 卡上存放系统/固件数据的顶层目录（VFS 路径，末尾无 '/'）。
+ *
+ * 与用户内容（小说 / EPUB 等阅读文件）在根目录下物理隔离：固件维护的
+ * 数据（如完整字库）统一收纳在本目录，避免与阅读文件混在一起。
+ */
+#define ESPAPERPLAY_SYSTEM_SD_DIR ESPAPERPLAY_STORAGE_MOUNT_POINT "/system"
+
+/**
+ * @brief SD 卡上存放完整字体文件的子目录（VFS 路径，末尾无 '/'）。
+ *
+ * 位于系统数据目录下（ESPAPERPLAY_SYSTEM_SD_DIR "/fonts"），当 SD 卡挂载
+ * 成功时，字体组件优先从此目录加载完整字库（而非 Flash 中的裁剪子集）。
+ */
+#define ESPAPERPLAY_FONTS_SD_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/fonts"
+
+/**
+ * @brief SD 卡字体所映射的 LVGL 文件系统盘符（大写字母）。
+ *
+ * Flash 字体分区使用 'A:'（espaperplay_fonts.h），SD 卡完整字体使用本盘符
+ * 'B:'。两者互不冲突，允许 FreeType 通过 LVGL 文件系统同时访问两处资源。
+ */
+#define ESPAPERPLAY_SD_FONT_DRIVE_LETTER 'B'
+
+/**
+ * @brief 阅读器默认文本存放目录（SD 卡，VFS 路径，末尾无 '/'）。
+ *
+ * 阅读器主页「SD 卡图书」递归扫描本目录下的 TXT 文件（含子目录，深度与
+ * 条目数有上限）；目录不存在时主页给出提示。
+ */
+#define ESPAPERPLAY_READER_SD_DIR ESPAPERPLAY_STORAGE_MOUNT_POINT "/books"
 
 /* ====================================================================
  * 物理按键（BOOT）

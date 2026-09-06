@@ -46,7 +46,7 @@ extern "C" {
 /**
  * @brief 挂载 SD 卡并注册到 VFS（FAT 文件系统）。
  *
- * 依次完成：SD 驱动初始化（电源轨 + SDMMC 主机/槽位 + SDIO 卡片探测）
+ * 依次完成：SD 驱动初始化（SDMMC 主机/槽位 + SDIO 卡片探测）
  * → 分配 FAT 卷号并注册底层磁盘驱动 → 注册 VFS 挂载点 → f_mount 挂载。
  *
  * 不做自动格式化：卡片无文件系统（或文件系统损坏）时返回错误，避免误格式化
@@ -62,8 +62,7 @@ esp_err_t espaperplay_storage_mount(void);
 /**
  * @brief 卸载 SD 卡并释放相关资源。
  *
- * 先卸载 FATFS 卷并注销 VFS 挂载点，再反初始化 SD 驱动（主机/槽位 +
- * 电源轨下电）。
+ * 先卸载 FATFS 卷并注销 VFS 挂载点，再反初始化 SD 驱动（主机/槽位）。
  *
  * @return 成功返回 ESP_OK，否则返回对应错误码。
  */

@@ -14,6 +14,7 @@
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
@@ -33,12 +34,21 @@ static esp_event_handler_instance_t s_ip_event_instance = NULL;
 static bool s_started = false;        /*!< WiFi 驱动是否已启动 */
 static bool s_connected = false;      /*!< 网络是否可用（AP：热点已开；STA：已获取 IP） */
 static bool s_auto_reconnect = false; /*!< STA 断线后是否自动重连 */
+static bool s_sleep_suppress_reconnect =
+    false; /*!< 睡眠期间抑制自动重连（主动断开后由电源管理控制） */
 static espaperplay_wifi_mode_t s_mode = ESPAPERPLAY_WIFI_MODE_AP; /*!< 当前工作模式 */
 static char s_ssid[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN] = "";         /*!< 当前 SSID */
 static char s_ip[16] = "0.0.0.0";                                 /*!< 当前 IP */
 static uint8_t s_sta_retry_count = 0;                             /*!< 已执行的自动重连次数 */
 static bool s_boot_in_progress = false;       /*!< 是否处于系统启动阶段（允许回退 AP） */
 static TimerHandle_t s_fallback_timer = NULL; /*!< 回退到 AP 的延时定时器 */
+
+/* 扫描状态：结果缓存 + 互斥锁（LVGL 线程读 / worker·HTTP 任务写）。 */
+static SemaphoreHandle_t s_scan_mutex = NULL;                 /*!< 扫描缓存互斥锁 */
+static bool s_scan_in_progress = false;                       /*!< 是否正在扫描（抑制临时 STA 启动时的自动连接） */
+static espaperplay_wifi_scan_item_t
+    s_scan_cache[ESPAPERPLAY_WIFI_SCAN_MAX]; /*!< 最近一次扫描结果（RSSI 降序、去重） */
+static size_t s_scan_count = 0;                               /*!< 缓存中的结果条数 */
 
 /* ------------------------------------------------------------------ */
 /* WiFi 事件处理                                                        */
@@ -195,6 +205,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
     switch (event_id) {
     case WIFI_EVENT_STA_START:
+        /* 扫描期间临时切换 APSTA 会启动 STA 接口：此时不应按（可能过期的）
+         * STA 配置发起连接，否则会与扫描冲突。 */
+        if (s_scan_in_progress) {
+            ESP_LOGD(TAG, "STA started during scan, skip auto-connect");
+            break;
+        }
         ESP_LOGI(TAG, "STA started, connecting to \"%s\"...", s_ssid);
         s_sta_retry_count = 0;
         esp_wifi_connect();
@@ -210,6 +226,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGW(TAG, "STA disconnected, reason=%u", (unsigned)disc->reason);
         s_connected = false;
         strlcpy(s_ip, "0.0.0.0", sizeof(s_ip));
+
+        /* 睡眠期间主动断开：抑制自动重连，交由电源管理在唤醒后决定是否重连。 */
+        if (s_sleep_suppress_reconnect) {
+            ESP_LOGI(TAG, "STA disconnect suppressed for sleep (no auto-reconnect)");
+            break;
+        }
 
         /* 仅在主动运行状态下自动重连，避免 stop / 配置切换期间被事件触发重连。 */
         if (s_auto_reconnect && s_started) {
@@ -357,6 +379,13 @@ esp_err_t espaperplay_wifi_init(void) {
         return ESP_FAIL;
     }
 
+    /* 创建扫描互斥锁（防止 UI 与 Web 并发扫描）。 */
+    s_scan_mutex = xSemaphoreCreateMutex();
+    if (s_scan_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create scan mutex");
+        return ESP_FAIL;
+    }
+
     s_initialized = true;
 
     /* 标记处于系统启动阶段：仅此阶段允许 STA 失败后回退到 AP。 */
@@ -412,6 +441,61 @@ esp_err_t espaperplay_wifi_stop(void) {
     return ESP_OK;
 }
 
+/**
+ * @brief 进入浅睡眠前主动断开 STA 并抑制自动重连。
+ *
+ * 手动 esp_light_sleep_start() 期间 WiFi modem 完全断电，无法按 listen
+ * interval 收信标，AP 侧会因站点长时间无活动而解关联，唤醒后触发
+ * BEACON_TIMEOUT 被动断开 + 自动重连（约 2.5s 活跃爆发，且对仅刷新时钟
+ * 的定时器唤醒毫无必要）。本函数在睡眠前显式断开并置位抑制标志，使断开
+ * 时机可控、日志干净；唤醒后由 espaperplay_wifi_resume_after_wake() 决定
+ * 是否重连。
+ *
+ * 仅 STA 模式生效；AP 模式（热点）保持运行不处理。
+ *
+ * @return 成功返回 ESP_OK（已断开或本就未连接），否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_suspend_for_sleep(void) {
+    if (s_mode != ESPAPERPLAY_WIFI_MODE_STA || !s_started) {
+        return ESP_OK; /* AP 模式或未启动：无需处理 */
+    }
+    s_sleep_suppress_reconnect = true;
+    esp_err_t err = esp_wifi_disconnect();
+    if (err != ESP_OK) {
+        /* 未连接时断开会返回 ESP_ERR_WIFI_NOT_CONNECT，属正常情况，忽略。 */
+        ESP_LOGD(TAG, "esp_wifi_disconnect for sleep: %s", esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "WiFi suspended for sleep (STA disconnected, reconnect suppressed)");
+    return ESP_OK;
+}
+
+/**
+ * @brief 浅睡眠唤醒后恢复 STA 关联策略。
+ *
+ * @param reconnect true=清除抑制标志并立即重连（用户操作唤醒，需恢复网络）；
+ *                  false=保持断开（定时器唤醒仅刷新时钟，无需网络）。
+ *
+ * @return 成功返回 ESP_OK，否则返回错误码。
+ */
+esp_err_t espaperplay_wifi_resume_after_wake(bool reconnect) {
+    if (s_mode != ESPAPERPLAY_WIFI_MODE_STA || !s_started) {
+        return ESP_OK; /* AP 模式或未启动：无需处理 */
+    }
+    if (reconnect) {
+        s_sleep_suppress_reconnect = false;
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            /* 已连接时重连可能返回 ESP_ERR_WIFI_STATE 等，属正常情况，忽略。 */
+            ESP_LOGD(TAG, "esp_wifi_connect after wake: %s", esp_err_to_name(err));
+        }
+        ESP_LOGI(TAG, "WiFi resumed after wake (reconnect requested)");
+    } else {
+        /* 保持断开：抑制标志维持，避免后续被动断开事件触发重连。 */
+        ESP_LOGI(TAG, "WiFi kept disconnected after timer wake");
+    }
+    return ESP_OK;
+}
+
 esp_err_t espaperplay_wifi_get_status(espaperplay_wifi_status_t *status) {
     if (status == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -441,3 +525,107 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi) {
 }
 
 bool espaperplay_wifi_is_connected(void) { return s_connected; }
+
+esp_err_t espaperplay_wifi_scan_start(void) {
+    if (s_scan_mutex == NULL || xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(8000)) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE; /* 已有扫描在进行或服务未初始化 */
+    }
+    if (!s_started) {
+        xSemaphoreGive(s_scan_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 纯 AP 模式不支持扫描：临时切到 APSTA（软 AP 保持运行，已连接站点
+     * 不掉线），扫描完成后恢复。STA 配置由 wifi_start() 每次重设，驱动内
+     * 的残留配置被临时清空是安全的。 */
+    wifi_mode_t cur_mode = WIFI_MODE_NULL;
+    bool switched = false;
+    esp_err_t err = esp_wifi_get_mode(&cur_mode);
+    if (err == ESP_OK && cur_mode == WIFI_MODE_AP) {
+        wifi_config_t empty_sta_cfg = {0};
+        err = esp_wifi_set_config(WIFI_IF_STA, &empty_sta_cfg);
+        if (err == ESP_OK) {
+            s_scan_in_progress = true;
+            err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+            if (err != ESP_OK) {
+                s_scan_in_progress = false;
+            } else {
+                switched = true;
+            }
+        }
+    }
+
+    if (err == ESP_OK) {
+        /* 阻塞扫描全信道（约 2~4s）；记录缓冲用堆分配（worker 栈小）。 */
+        uint16_t num = ESPAPERPLAY_WIFI_SCAN_MAX;
+        wifi_ap_record_t *records = malloc(sizeof(wifi_ap_record_t) * (size_t)num);
+        if (records == NULL) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            err = esp_wifi_scan_start(NULL, true);
+            if (err == ESP_OK) {
+                err = esp_wifi_scan_get_ap_records(&num, records);
+            } else {
+                /* 扫描失败时也须取一次记录释放驱动内存（忽略返回值）。 */
+                uint16_t drain = ESPAPERPLAY_WIFI_SCAN_MAX;
+                esp_wifi_scan_get_ap_records(&drain, records);
+            }
+
+            if (err == ESP_OK) {
+                /* 写缓存：跳过隐藏网络，按 SSID 去重（记录已按 RSSI 降序，
+                 * 保留首个即最强信号）。互斥锁持有至函数末尾统一释放。 */
+                size_t count = 0;
+                for (uint16_t i = 0; i < num && count < ESPAPERPLAY_WIFI_SCAN_MAX; i++) {
+                    const char *ssid = (const char *)records[i].ssid;
+                    if (ssid[0] == '\0') {
+                        continue;
+                    }
+                    bool dup = false;
+                    for (size_t j = 0; j < count; j++) {
+                        if (strcmp(s_scan_cache[j].ssid, ssid) == 0) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (dup) {
+                        continue;
+                    }
+                    strlcpy(s_scan_cache[count].ssid, ssid, sizeof(s_scan_cache[count].ssid));
+                    s_scan_cache[count].rssi = records[i].rssi;
+                    s_scan_cache[count].auth = (records[i].authmode != WIFI_AUTH_OPEN);
+                    s_scan_cache[count].channel = records[i].primary;
+                    count++;
+                }
+                s_scan_count = count;
+                ESP_LOGI(TAG, "WiFi scan done: %u APs, %u unique", (unsigned)num,
+                         (unsigned)count);
+            }
+            free(records);
+        }
+    }
+
+    /* 恢复纯 AP 模式（若期间用户已重新应用配置导致模式变化，则跳过恢复）。 */
+    if (switched && esp_wifi_get_mode(&cur_mode) == ESP_OK && cur_mode == WIFI_MODE_APSTA) {
+        esp_err_t restore_err = esp_wifi_set_mode(WIFI_MODE_AP);
+        if (restore_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to restore AP-only mode after scan: %s",
+                     esp_err_to_name(restore_err));
+        }
+    }
+    s_scan_in_progress = false;
+    xSemaphoreGive(s_scan_mutex);
+    return err;
+}
+
+size_t espaperplay_wifi_scan_get_results(espaperplay_wifi_scan_item_t *out, size_t max) {
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    if (s_scan_mutex == NULL || xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return 0;
+    }
+    const size_t n = (s_scan_count < max) ? s_scan_count : max;
+    memcpy(out, s_scan_cache, n * sizeof(*out));
+    xSemaphoreGive(s_scan_mutex);
+    return n;
+}

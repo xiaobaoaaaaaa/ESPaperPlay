@@ -31,13 +31,21 @@ extern "C" {
  * 创建一个后台任务：等待 WiFi STA 联网后，依次执行
  * 「获取公网 IP → 查询地理位置 → 设置时区 → NTP 同步」，
  * 并将每一步结果打印到日志。WiFi 未联网（如 AP 模式）或步骤失败时
- * 记录日志后退出，不阻塞系统启动。
+ * 记录日志后自动重试；网络恢复后通过 IP 事件及时唤醒重试，不阻塞系统启动。
  *
  * 应在 WiFi 服务初始化之后调用，可重复调用（幂等）。
  *
  * @return ESP_OK 任务创建成功；否则返回错误码。
  */
 esp_err_t espaperplay_nettime_start(void);
+
+/**
+ * @brief 请求立即执行一次网络时间同步（若网络可用）。
+ *
+ * 可由网络事件（如 STA 获取 IP）或外部调用触发，唤醒后台任务立即重试。
+ * 任务未启动时直接返回。
+ */
+void espaperplay_nettime_request_sync(void);
 
 #ifdef __cplusplus
 }

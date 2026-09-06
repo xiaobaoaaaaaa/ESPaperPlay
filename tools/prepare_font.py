@@ -37,8 +37,9 @@ def build_charset() -> str:
     chars.update(chr(c) for c in range(0x20, 0x7F))
 
     # GB2312 two-byte region: L1 0xB0-0xD7, L2 0xD8-0xF7 (row) x 0xA1-0xFE (cell)
+    # 注意：位码合法范围是 0xA1-0xFE，range 上界必须取 0xFF 才能覆盖到 0xFE
     for b1 in range(0xB0, 0xF8):
-        for b2 in range(0xA1, 0xFE):
+        for b2 in range(0xA1, 0xFF):
             try:
                 chars.update(bytes([b1, b2]).decode("gb2312"))
             except UnicodeDecodeError:

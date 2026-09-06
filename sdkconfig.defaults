@@ -34,13 +34,33 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # LVGL 字体
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
+# LVGL QR 码控件（首次开机引导页：展示 WebUI 配置地址二维码）
+CONFIG_LV_USE_QRCODE=y
 # LVGL FreeType 字体引擎：TTF/OTF 矢量字体渲染（配合 fonts 分区资产，
 # 见 components/graphics/fonts）。LV_FREETYPE_USE_LVGL_PORT 让 FreeType
 # 走 LVGL 的内存分配与文件系统（盘符 A: 由 esp_lv_fs 注册）。
 CONFIG_LV_USE_FREETYPE=y
 CONFIG_LV_FREETYPE_USE_LVGL_PORT=y
-CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=256
-# FreeType 字形栅格化在 LVGL draw 线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+# 每字号档的字形缓存条数（位图 LRU；元数据 LRU 为其 2 倍）。阅读器整页
+# 中文可达 300-600 个不同字形、跨页翻阅 384 会持续逐出重栅格化；1024 覆盖
+# 两页跨页 + UI。缓存已随 LVGL 内存后端迁 PSRAM，不再挤占内部 RAM。
+CONFIG_LV_FREETYPE_CACHE_FT_GLYPH_CNT=1024
+# LVGL 操作系统与双核并行：启用 FreeRTOS 支持，充分利用 ESP32-S3 双核
+# - LV_OS_FREERTOS：启用 FreeRTOS 互斥/线程/条件变量，支撑多线程渲染与线程安全
+#   （修复：此前 LV_OS_NONE 单线程模式在复杂页面下易阻塞；FreeRTOS 模式让
+#    LVGL 内部使用递归互斥与条件变量，避免跨线程调用时的断言死循环）
+# - LV_DRAW_SW_DRAW_UNIT_CNT=1：暂保持单绘制单元（双核并行需 2，但当前
+#   flush 回调直接写共享主帧，并发写存在竞态；先以单单元验证 FreeRTOS 稳定性，
+#   后续再通过加锁或双缓冲启用 2 单元并行）
+# - LV_USE_FREERTOS_TASK_NOTIFY=y：任务通知替代二值信号量，快 45% 且更省 RAM
+# - LV_DRAW_THREAD_PRIO=3：绘制线程高优先级，减少渲染延迟（单单元时此项无实际线程）
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_USE_FREERTOS_TASK_NOTIFY=y
+CONFIG_LV_DRAW_SW_DRAW_UNIT_CNT=1
+CONFIG_LV_DRAW_THREAD_PRIO=3
+# FreeType 字形栅格化在 LVGL 绘制线程执行，栈需 >=32KB（lv_conf_internal.h 编译期检查）
+# LV_OS_FREERTOS 下此配置生效于绘制线程（单单元时仍在 gui_lvgl 任务内执行）；
+# gui_lvgl 任务栈另在 lvgl_port.c 中设为 32KB PSRAM
 CONFIG_LV_DRAW_THREAD_STACK_SIZE=32768
 # LVGL 内存用 C 标准库 malloc（走 ESP-IDF heap，大块分配自动落 8MB PSRAM）；
 # 不用内置 TLSF 池（仅 64KB，触发 benchmark 的 #warning 且被 -Werror 当错误）
@@ -50,7 +70,10 @@ CONFIG_LV_LOG_LEVEL_WARN=y
 # esp_mmap_assets 文件名缓冲长度（默认 16 会截断 NotoSansSC_Regular.ttf 这类
 # 长文件名，导致运行时 strcmp 匹配失败、字体打不开；32 为 Kconfig 上限）
 CONFIG_MMAP_FILE_NAME_LENGTH=32
-CONFIG_LV_USE_CLIB_MALLOC=y
+# LVGL 内存后端走项目实现（espaperplay_lv_mem_psram.c）：全部 lv_malloc
+# —— FreeType 字形缓存/库本体、widget/style 等 —— PSRAM 优先、内部 RAM 兜底
+# （此前 CLIB 直连系统 malloc，≤16KB 全落内部 RAM，字形缓存挤占内部堆）
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 
 # 网络时间（IP 定位 + NTP）：HTTPS 客户端使用 ESP-IDF 内置 CA 证书包校验
 # uapis.cn / NTP 域名证书（netip / geoip 服务依赖）
@@ -65,13 +88,13 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=3
 CONFIG_LWIP_MAX_SOCKETS=20
 CONFIG_LWIP_MAX_ACTIVE_TCP=32
 
-# 内部 RAM 保护：TLS 的 16KB SSL 收发缓冲若按默认阈值 16384 强制落在内部
-# RAM，长时间运行后内部堆碎片化（最大连续块 <16KB）会直接导致握手失败
-# （create_ssl_handle failed）。阈值降至 8192 后 16KB 级缓冲自动回落到
-# 8MB PSRAM（仅缓存映射访问，性能影响可忽略），内部 RAM 只保留小块分配。
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
+# 内部 RAM 保护：TLS 的 16KB SSL 收发缓冲若落在内部 RAM，长时间运行后内部堆
+# 碎片化（最大连续块 <16KB）会直接导致握手失败（create_ssl_handle failed）。
+# 故 mbedTLS 内存分配模式设为 EXTERNAL，将 TLS 缓冲分配到 8MB PSRAM
+# （仅缓存映射访问，性能影响可忽略），内部 RAM 只保留小块分配。
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # mbedtls 动态缓冲：握手完成后释放 16KB×2 大缓冲（Web 管理页 keep-alive
-# 长连接不再长期占用内部 RAM / PSRAM）。
+# 长连接不再长期占用 PSRAM）。
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 
 # FATFS（SD 卡文件系统，SDIO/SDMMC 接口）：

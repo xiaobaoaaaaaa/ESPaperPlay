@@ -184,13 +184,16 @@ typedef struct {
 
 /** 天文（astronomy/sun + astronomy/moon）。
  *  注：sunrise/sunset/moonrise/moonset 为完整时间戳（如 "2026-08-16T05:12+08:00"），
- *  展示时可按需截取 "HH:MM"。 */
+ *  展示时可按需截取 "HH:MM"。moonrise/moonset 当天无月升/月落现象时为空串
+ *  （月升月落每日推迟约 50 分钟，跨午夜的那天无月出或无月落，每朔望月各约 1-2 天）。 */
 typedef struct {
     char date[16];           /*!< 日期 */
     char sunrise[24];        /*!< 日出时间（时间戳） */
     char sunset[24];         /*!< 日落时间（时间戳） */
     char moonrise[24];       /*!< 月升时间（时间戳） */
     char moonset[24];        /*!< 月落时间（时间戳） */
+    char moonrise_prev[24];  /*!< 最近一次月出（前一日，仅今日无月出时回填） */
+    char moonset_next[24];   /*!< 下一次月落（次日，仅今日无月落时回填） */
     char moon_phase[16];     /*!< 月相名称（如 "盈凸月"） */
     char moon_phase_icon[8]; /*!< 月相图标代码 */
 } espaperplay_weather_astronomy_t;
@@ -293,6 +296,26 @@ void espaperplay_weather_config_changed(void);
  *         网络 / 业务码错误返回相应错误码。
  */
 esp_err_t espaperplay_weather_refresh(void);
+
+/**
+ * @brief 判断天气数据是否已过期且值得发起联网刷新。
+ *
+ * 数据距上次成功刷新超过刷新周期，且距上次真实尝试（含失败）也已超过
+ * 一周期（失败退避：持续失败时不会每次唤醒都触发重连）。API Key 未配置
+ * 时恒为 false。供电源管理在定时器唤醒时判定是否借本次唤醒重连拉取；
+ * 刷新周期同 espaperplay_weather_set_refresh_interval_ms()。
+ */
+bool espaperplay_weather_is_refresh_due(void);
+
+/**
+ * @brief 等待在途的整体刷新结束（最多 timeout_ms）。
+ *
+ * 后台任务未运行或无在途刷新时立即返回 true；超时返回 false。
+ * 与 espaperplay_weather_request_refresh() 配合使用可同步等待一次刷新完成。
+ *
+ * @return true=刷新已结束（成功与否需另行查询）；false=等待超时。
+ */
+bool espaperplay_weather_wait_refresh_done(uint32_t timeout_ms);
 
 /**
  * @brief 获取天气数据快照（当前缓存数据的拷贝）。

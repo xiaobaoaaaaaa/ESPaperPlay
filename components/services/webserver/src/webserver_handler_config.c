@@ -12,10 +12,12 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
+#include "espaperplay_power.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -44,8 +46,7 @@ static const char *boot_long_press_action_str(espaperplay_boot_long_press_action
 }
 
 /** 解析 Web 表单值；非法返回 false。 */
-static bool boot_long_press_action_parse(const char *s,
-                                         espaperplay_boot_long_press_action_t *out) {
+static bool boot_long_press_action_parse(const char *s, espaperplay_boot_long_press_action_t *out) {
     if (strcmp(s, "full_refresh") == 0) {
         *out = ESPAPERPLAY_BOOT_LONG_PRESS_FULL_REFRESH;
     } else if (strcmp(s, "back") == 0) {
@@ -85,14 +86,17 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     /* 屏幕空闲自动睡眠超时（秒，0=关闭）。 */
     cJSON_AddNumberToObject(root, "epd_idle_sleep_timeout_s",
                             (double)(cfg->epd_idle_sleep_timeout_ms / 1000));
+    /* 设备自动浅睡眠超时（秒，0=关闭）。 */
+    cJSON_AddNumberToObject(root, "auto_sleep_timeout_s",
+                            (double)(cfg->auto_sleep_timeout_ms / 1000));
     /* 连续局刷后强制全刷阈值（0=禁用，只局刷）。 */
     cJSON_AddNumberToObject(root, "gui_full_force_after", (double)cfg->gui_full_force_after);
     /* BOOT 键长按的全局默认动作（全屏刷新 / 返回上一页 / 无操作）。 */
     cJSON_AddStringToObject(root, "boot_long_press_action",
                             boot_long_press_action_str(cfg->boot_long_press_action));
     /* BOOT 键长按判定时间（毫秒）。 */
-    cJSON_AddNumberToObject(root, "boot_long_press_time_ms",
-                            (double)cfg->boot_long_press_time_ms);
+    cJSON_AddNumberToObject(root, "boot_long_press_time_ms", (double)cfg->boot_long_press_time_ms);
+    cJSON_AddBoolToObject(root, "reader_img_gray4", cfg->reader_img_gray4);
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -154,12 +158,18 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         webserver_form_get_field(body, "ap_password", ap_password, sizeof(ap_password));
     const bool has_epd_idle = webserver_form_get_field(body, "epd_idle_sleep_timeout_s",
                                                        epd_idle_sleep_s, sizeof(epd_idle_sleep_s));
+    char auto_sleep_s[16] = {0}; /* 设备自动浅睡眠超时（秒，0=关闭） */
+    const bool has_auto_sleep =
+        webserver_form_get_field(body, "auto_sleep_timeout_s", auto_sleep_s, sizeof(auto_sleep_s));
     const bool has_gui_force = webserver_form_get_field(
         body, "gui_full_force_after", gui_force_after_s, sizeof(gui_force_after_s));
-    const bool has_boot_lp = webserver_form_get_field(
-        body, "boot_long_press_action", boot_lp_action, sizeof(boot_lp_action));
-    const bool has_boot_lp_ms = webserver_form_get_field(
-        body, "boot_long_press_time_ms", boot_lp_time_s, sizeof(boot_lp_time_s));
+    const bool has_boot_lp = webserver_form_get_field(body, "boot_long_press_action",
+                                                      boot_lp_action, sizeof(boot_lp_action));
+    const bool has_boot_lp_ms = webserver_form_get_field(body, "boot_long_press_time_ms",
+                                                         boot_lp_time_s, sizeof(boot_lp_time_s));
+    char reader_img_gray4_s[8] = {0};
+    const bool has_reader_img_gray4 = webserver_form_get_field(
+        body, "reader_img_gray4", reader_img_gray4_s, sizeof(reader_img_gray4_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -168,8 +178,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char weather_location[ESPAPERPLAY_SYSTEM_WEATHER_LOC_MAX_LEN] = {0};
     char weather_api_host[ESPAPERPLAY_SYSTEM_WEATHER_HOST_MAX_LEN] = {0};
     const bool has_weather_key =
-        webserver_form_get_field(body, "weather_api_key", weather_api_key,
-                                 sizeof(weather_api_key));
+        webserver_form_get_field(body, "weather_api_key", weather_api_key, sizeof(weather_api_key));
     const bool has_weather_loc = webserver_form_get_field(
         body, "weather_location", weather_location, sizeof(weather_location));
     const bool has_weather_host = webserver_form_get_field(
@@ -261,6 +270,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
             err = espaperplay_epd_set_idle_sleep_timeout_ms(ms);
         }
     }
+    /* 设备自动浅睡眠超时（秒 -> 毫秒，0=关闭）；字段缺失 = 保持不变。 */
+    if (err == ESP_OK && has_auto_sleep) {
+        char *end = NULL;
+        long secs = strtol(auto_sleep_s, &end, 10);
+        if (end == auto_sleep_s || *end != '\0' || secs < 0 || secs > 86400) {
+            webserver_send_json_err(req, "无效的设备睡眠超时（0-86400 秒）");
+            return ESP_FAIL;
+        }
+        const uint32_t ms = (uint32_t)secs * 1000;
+        err = espaperplay_system_set_auto_sleep_timeout_ms(ms);
+        if (err == ESP_OK) {
+            /* 立即应用到电源管理（不必等重启）。 */
+            err = espaperplay_power_set_auto_sleep_timeout_ms(ms);
+        }
+    }
     /* 连续局刷后强制全刷阈值（0=禁用，0-255）；字段缺失 = 保持不变。 */
     if (err == ESP_OK && has_gui_force) {
         char *end = NULL;
@@ -307,6 +331,21 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
             }
         }
     }
+    /* 阅读器插图自动灰度刷新（开/关）。 */
+    if (err == ESP_OK && has_reader_img_gray4) {
+        if (strcmp(reader_img_gray4_s, "1") == 0 || strcasecmp(reader_img_gray4_s, "true") == 0 ||
+            strcasecmp(reader_img_gray4_s, "on") == 0) {
+            err = espaperplay_system_set_reader_img_gray4(true);
+        } else if (strcmp(reader_img_gray4_s, "0") == 0 ||
+                   strcasecmp(reader_img_gray4_s, "false") == 0 ||
+                   strcasecmp(reader_img_gray4_s, "off") == 0) {
+            err = espaperplay_system_set_reader_img_gray4(false);
+        } else {
+            webserver_send_json_err(req, "无效的 reader_img_gray4（1/0）");
+            return ESP_FAIL;
+        }
+    }
+
     /* 和风天气：字段出现时应用。API Key 语义与密码一致——输入非空 → 设置新值；
      * 输入为空且勾选"清除" → 置空；否则保留当前值。位置留空 + 勾选清除 =
      * 恢复自动定位（按公网 IP）。API Host 同理（留空 + 勾选清除 = 公共地址）。 */
@@ -315,9 +354,8 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     const char *new_weather_loc = cur->weather_location;
     const char *new_weather_host = cur->weather_api_host;
     if (has_weather_key) {
-        new_weather_key = (weather_api_key[0] == '\0' && !clear_weather_key)
-                              ? cur->weather_api_key
-                              : weather_api_key;
+        new_weather_key = (weather_api_key[0] == '\0' && !clear_weather_key) ? cur->weather_api_key
+                                                                             : weather_api_key;
     }
     if (has_weather_loc) {
         new_weather_loc = (weather_location[0] == '\0' && !clear_weather_loc)
@@ -329,22 +367,19 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
                                ? cur->weather_api_host
                                : weather_api_host;
     }
-    if (err == ESP_OK && has_weather_key &&
-        strcmp(new_weather_key, cur->weather_api_key) != 0) {
+    if (err == ESP_OK && has_weather_key && strcmp(new_weather_key, cur->weather_api_key) != 0) {
         err = espaperplay_system_set_weather_api_key(new_weather_key);
         if (err == ESP_OK) {
             weather_changed = true;
         }
     }
-    if (err == ESP_OK && has_weather_loc &&
-        strcmp(new_weather_loc, cur->weather_location) != 0) {
+    if (err == ESP_OK && has_weather_loc && strcmp(new_weather_loc, cur->weather_location) != 0) {
         err = espaperplay_system_set_weather_location(new_weather_loc);
         if (err == ESP_OK) {
             weather_changed = true;
         }
     }
-    if (err == ESP_OK && has_weather_host &&
-        strcmp(new_weather_host, cur->weather_api_host) != 0) {
+    if (err == ESP_OK && has_weather_host && strcmp(new_weather_host, cur->weather_api_host) != 0) {
         err = espaperplay_system_set_weather_api_host(new_weather_host);
         if (err == ESP_OK) {
             weather_changed = true;
@@ -379,7 +414,7 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
-/** POST /api/config/reset —— 恢复出厂默认并重新应用 WiFi。 */
+/** POST /api/config/reset —— 恢复出厂默认并重启设备。 */
 esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
     if (webserver_require_auth(req) != ESP_OK) {
         return ESP_FAIL;
@@ -390,24 +425,24 @@ esp_err_t webserver_handle_config_reset_post(httpd_req_t *req) {
         webserver_send_json_err(req, esp_err_to_name(err));
         return ESP_FAIL;
     }
-    /* 恢复默认后同步应用到驱动。 */
+    /* 恢复默认后同步应用到驱动（仅内存态，NVS 已由 reset_defaults 落盘）。 */
     espaperplay_epd_set_idle_sleep_timeout_ms(
         espaperplay_system_get_config()->epd_idle_sleep_timeout_ms);
+    espaperplay_power_set_auto_sleep_timeout_ms(
+        espaperplay_system_get_config()->auto_sleep_timeout_ms);
+    /* 天气配置已恢复默认（Key 清空），同步清空天气缓存。 */
+    espaperplay_weather_config_changed();
 
-    /* 先返回成功响应，再延时重启 WiFi（恢复默认可能切回 AP 模式并改变 IP）。 */
+    /* 先返回成功响应，再延时重启设备（恢复默认会重新进入首次开机引导）。 */
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "message", "已恢复出厂默认，设备即将重启");
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
 
     vTaskDelay(pdMS_TO_TICKS(200));
-    err = espaperplay_wifi_start();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to re-apply wifi after reset: %s", esp_err_to_name(err));
-    }
-    /* 天气配置已恢复默认（Key 清空），同步清空天气缓存。 */
-    espaperplay_weather_config_changed();
-    return ESP_OK;
+    esp_restart();
+    return ESP_OK; /* 不会执行到这里 */
 }
 
 /** POST /api/wifi/restart —— 重新应用 WiFi 配置。 */
@@ -422,6 +457,47 @@ esp_err_t webserver_handle_wifi_restart_post(httpd_req_t *req) {
     cJSON_AddBoolToObject(root, "ok", err == ESP_OK);
     if (err != ESP_OK) {
         cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+    webserver_send_json(req, "200 OK", root);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+/** GET /api/wifi/scan —— 扫描附近 AP 并返回列表（阻塞约 2~4 秒）。 */
+esp_err_t webserver_handle_wifi_scan_get(httpd_req_t *req) {
+    if (webserver_require_auth(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    /* 阻塞扫描在 HTTP 工作任务内执行（栈 10240，结果数组约 0.7KB 可承受）；
+     * 期间该服务器其他请求会排队，心跳最多延迟数秒，可接受。 */
+    esp_err_t err = espaperplay_wifi_scan_start();
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_WIFI_STATE) {
+            webserver_send_json_err(req, "WiFi 正忙（可能正在连接），请稍后重试");
+        } else {
+            webserver_send_json_err(req, esp_err_to_name(err));
+        }
+        return ESP_FAIL;
+    }
+
+    espaperplay_wifi_scan_item_t items[ESPAPERPLAY_WIFI_SCAN_MAX];
+    const size_t count = espaperplay_wifi_scan_get_results(items, ESPAPERPLAY_WIFI_SCAN_MAX);
+
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+    cJSON_AddNumberToObject(root, "count", (double)count);
+    cJSON *aps = cJSON_AddArrayToObject(root, "aps");
+    for (size_t i = 0; i < count && aps != NULL; i++) {
+        cJSON *ap = cJSON_CreateObject();
+        cJSON_AddStringToObject(ap, "ssid", items[i].ssid);
+        cJSON_AddNumberToObject(ap, "rssi", (double)items[i].rssi);
+        cJSON_AddBoolToObject(ap, "auth", items[i].auth);
+        cJSON_AddNumberToObject(ap, "channel", (double)items[i].channel);
+        cJSON_AddItemToArray(aps, ap);
     }
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);

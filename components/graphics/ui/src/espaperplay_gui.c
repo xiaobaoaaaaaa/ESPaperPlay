@@ -17,6 +17,8 @@
 #include "espaperplay_config.h"
 #include "espaperplay_display.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_input.h"
+#include "icons_data.h"
 
 static const char *TAG = "ESPaperPlay_GUI";
 
@@ -25,13 +27,13 @@ static const char *TAG = "ESPaperPlay_GUI";
  * ==================================================================== */
 
 /* 显示参数（运行时，来自 espaperplay_display；gui_init 时读取） */
-static uint16_t s_disp_w = 0; /*!< 显示区宽度（像素） */
-static uint16_t s_disp_h = 0; /*!< 显示区高度（像素） */
-static uint32_t s_fb_pixels = 0;      /*!< 全屏像素数 w*h */
-static size_t s_fb_rgb_bytes = 0;     /*!< RGB565 主帧字节数 w*h*2 */
-static size_t s_fb_bw_bytes = 0;      /*!< 1bpp 帧字节数 w*h/8 */
-static size_t s_fb_gray4_bytes = 0;   /*!< 2bpp 帧字节数 w*h/4 */
-static size_t s_stride_rgb = 0;       /*!< 主帧行字节数 w*2 */
+static uint16_t s_disp_w = 0;       /*!< 显示区宽度（像素） */
+static uint16_t s_disp_h = 0;       /*!< 显示区高度（像素） */
+static uint32_t s_fb_pixels = 0;    /*!< 全屏像素数 w*h */
+static size_t s_fb_rgb_bytes = 0;   /*!< RGB565 主帧字节数 w*h*2 */
+static size_t s_fb_bw_bytes = 0;    /*!< 1bpp 帧字节数 w*h/8 */
+static size_t s_fb_gray4_bytes = 0; /*!< 2bpp 帧字节数 w*h/4 */
+static size_t s_stride_rgb = 0;     /*!< 主帧行字节数 w*2 */
 
 /* ====================================================================
  * 内部状态
@@ -66,6 +68,12 @@ static uint16_t s_dirty_h = 0;
 static uint32_t s_partial_count = 0;
 /* 连续局刷后强制全刷的阈值（0=禁用；运行期可经 Web 调整并持久化）。 */
 static uint32_t s_full_force_after = ESPAPERPLAY_GUI_FULL_FORCE_AFTER;
+
+/* 灰阶残留清理标志：上一次"已执行"的刷新是灰阶时置位。驱动在灰阶切回黑白
+ * 时只对刷新窗口内的旧平面反写清除中间灰残留；窗口外的灰阶点会残留，故
+ * 灰阶之后的第一次 BW 刷新必须整帧快照 + 全屏窗口（把反写扩展到整个面板）。
+ * 任何 BW 刷新（含清屏）执行后即满足该需求，标志清除。读写均持 s_lock。 */
+static bool s_pending_bw_clean = false;
 
 /* 刷新操作槽位状态：
  *   IDLE  = 空闲，可被渲染端快照写入；
@@ -245,6 +253,10 @@ static void gui_convert_gray4(const uint8_t *fb, uint8_t *out) {
  * 会对整个窗口强制 DTM1 反写（全像素 K2W/W2K），把"首个脏区窗口"的翻转
  * 扩展到整个面板，一次建立全屏干净差分基线；后续任意窗口的局刷均可靠。
  * 该全屏基线刷新同样建立新基线，连续局刷计数归零（op->reset_count）。
+ *
+ * 灰阶残留清理（s_pending_bw_clean）：上一次已执行的刷新是灰阶（GRAY4）时，
+ * 下一次 BW 快照同样采用整帧 + 全屏窗口局刷——驱动对全窗口反写 DTM1
+ * （~新帧），整屏清除中间灰残留（局部窗口只在窗口内反写，窗口外灰点残留）。
  */
 static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) {
     op->state = GUI_SLOT_READY;
@@ -261,14 +273,12 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
         op->force_full = false;
     } else {
         /* 无论脏区面积大小：只要连续局刷已达满阈值，本次就强制全刷清残影。 */
-        const bool do_force =
-            s_full_force_after > 0 && s_partial_count >= s_full_force_after;
+        const bool do_force = s_full_force_after > 0 && s_partial_count >= s_full_force_after;
 
         op->type = GUI_OP_FRAME;
         if (do_force) {
             /* 连续局刷已执行满阈值：本次强制全像素翻转全刷清残影。 */
-            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h,
-                           stage_bw);
+            gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage_bw);
             op->stage = stage_bw;
             op->force_full = true;
             op->reset_count = true;
@@ -276,11 +286,12 @@ static void gui_snapshot(gui_op_t *op, uint8_t *stage_bw, uint8_t *stage_gray4) 
             op->y = 0;
             op->w = s_disp_w;
             op->h = s_disp_h;
-        } else if (espaperplay_epd_is_asleep()) {
-            /* 深度睡眠唤醒后的首次刷新：整帧快照 + 全屏窗口局刷，把驱动的
-             * 唤醒翻转（DTM1 = ~新帧，全像素 K2W/W2K）从首个脏区窗口扩展
-             * 到整个面板；N2OCP 随后同步全平面，此后任意窗口的差分局刷都
-             * 有干净基线（含"首帧之后才变化"的其他区域）。耗时 ~0.5s
+        } else if (espaperplay_epd_is_asleep() || s_pending_bw_clean) {
+            /* 深度睡眠唤醒后的首次刷新 或 刚从灰阶切回黑白：整帧快照 +
+             * 全屏窗口局刷，把驱动的窗口翻转（唤醒：DTM1 = 当前帧；灰阶：
+             * DTM1 = ~新帧，全像素 K2W/W2K 清除中间灰残留）从首个脏区窗口
+             * 扩展到整个面板；N2OCP 随后同步全平面，此后任意窗口的差分局刷
+             * 都有干净基线（含"首帧之后才变化"的其他区域）。耗时 ~0.5s
              * （全屏窗口局刷），远快于全屏 FULL/FULL_FORCE（~1.7s）。 */
             gui_convert_bw(s_fb_rgb, 0, 0, s_disp_w, s_disp_h, stage_bw);
             op->stage = stage_bw;
@@ -337,9 +348,8 @@ static esp_err_t gui_execute_op(const gui_op_t *op) {
  * 渲染端合并进另一槽的帧只会计数，不会再排队下一个 force。
  */
 static void gui_count_executed(const gui_op_t *op) {
-    const bool plain_partial = op->type == GUI_OP_FRAME &&
-                               op->color == ESPAPERPLAY_GUI_COLOR_BW && !op->force_full &&
-                               !op->reset_count;
+    const bool plain_partial = op->type == GUI_OP_FRAME && op->color == ESPAPERPLAY_GUI_COLOR_BW &&
+                               !op->force_full && !op->reset_count;
     if (plain_partial) {
         if (s_full_force_after > 0 && s_partial_count < s_full_force_after) {
             s_partial_count++;
@@ -347,6 +357,9 @@ static void gui_count_executed(const gui_op_t *op) {
     } else {
         s_partial_count = 0;
     }
+    /* 灰阶残留清理标志：灰阶刷新执行后置位（下一次 BW 刷新须全屏基线）；
+     * 任何 BW 刷新（含清屏）执行后即已清理，标志清除。 */
+    s_pending_bw_clean = (op->color == ESPAPERPLAY_GUI_COLOR_GRAY4);
 }
 
 /**
@@ -383,7 +396,19 @@ static void gui_worker_task(void *arg) {
         }
 
         const int64_t t0 = esp_timer_get_time();
-        const esp_err_t ret = gui_execute_op(&op);
+        /* 有界重试 2 次（200/400ms 退避）：瞬时失败（如内部 RAM 峰值期的
+         * NO_MEM）不丢帧；epd 驱动失败后置控制器状态未知，重试的刷新会
+         * 自动重新初始化控制器，重复执行安全。 */
+        esp_err_t ret = ESP_OK;
+        for (int attempt = 0;; attempt++) {
+            ret = gui_execute_op(&op);
+            if (ret == ESP_OK || attempt >= 2) {
+                break;
+            }
+            ESP_LOGW(TAG, "worker: refresh failed (%s), retry #%d", esp_err_to_name(ret),
+                     attempt + 1);
+            vTaskDelay(pdMS_TO_TICKS(attempt == 0 ? 200 : 400));
+        }
         if (op.type == GUI_OP_CLEAR) {
             ESP_LOGI(TAG, "worker: clear -> %s (%lld ms)", esp_err_to_name(ret),
                      (esp_timer_get_time() - t0) / 1000);
@@ -511,13 +536,11 @@ static void gui_selftest_task(void *arg) {
     {
         int64_t t0;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
-                       s_stage_a_bw);
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h, s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw bayer full convert -> %lld ms", (esp_timer_get_time() - t0) / 1000);
         s_converter = ESPAPERPLAY_GUI_CONVERTER_THRESHOLD;
         t0 = esp_timer_get_time();
-        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h,
-                       s_stage_a_bw);
+        gui_convert_bw(fb.buffer, 0, 0, s_disp_w, s_disp_h, s_stage_a_bw);
         ESP_LOGI(TAG, "perf: bw threshold full convert -> %lld ms",
                  (esp_timer_get_time() - t0) / 1000);
         s_converter = ESPAPERPLAY_GUI_CONVERTER_BAYER;
@@ -645,8 +668,12 @@ esp_err_t espaperplay_gui_init(void) {
     s_op_b.state = GUI_SLOT_IDLE;
     s_initialized = true;
 
-    /* 异步刷新 worker（创建失败退化为同步执行，仅告警）。 */
-    if (xTaskCreate(gui_worker_task, "gui_epd_worker", 4096, NULL, 6, &s_worker_task) != pdPASS) {
+    /* 异步刷新 worker（创建失败退化为同步执行，仅告警）。
+     * 优先级必须低于 LVGL 渲染任务（5）：SPI 传输分块填充时 worker 每次
+     * 就绪都会抢占 CPU，优先级过高会把 LVGL 渲染/indev 采样饿死数百 ms
+     * （实测 lv_timer_handler 耗时与 worker 刷新时长重合），触摸点击被吞。
+     * worker 降级后仅刷新墙钟时间略长，e-paper 场景无影响。 */
+    if (xTaskCreate(gui_worker_task, "gui_epd_worker", 4096, NULL, 3, &s_worker_task) != pdPASS) {
         ESP_LOGW(TAG, "worker task create failed: refreshes run synchronously");
         s_worker_task = NULL;
     }
