@@ -6,6 +6,15 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。版本号唯一来源是
 `components/board/include/espaperplay_config.h` 中的 `ESPAPERPLAY_VERSION_*`。
 
+## [未发布]
+
+### 变更
+
+- README 精简重构：主 README 仅保留简介 / 功能总览 / 硬件平台 / 文档索引 /
+  编译方法 / 路线图；模块级设计与实现细节原样拆分至 `docs/` 下的 10 篇
+  双语主题文档（架构、显示、字体、界面与输入、存储、网络时间、天气、
+  阅读器、电源与可靠性、Web 管理控制台）。
+
 ## [0.2.0] - 2026-09-06
 
 阅读器成型（TXT + EPUB）、完整设备 UI（主界面 / 天气页 / 文件 / 设置 / 首次开机向导）、
