@@ -17,6 +17,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 
 #include "espaperplay_config.h"
@@ -125,6 +126,14 @@ static uint8_t *s_snapshot =
 static uint8_t *s_last_frame =
     NULL; /*!< 整屏当前显示帧（1bpp 整帧）：deep sleep 唤醒后初次局刷写入 DTM1
               作为旧平面，避免强制反相翻转伤屏；每次成功刷新后维护为整屏显示 */
+/*!< PSRAM 帧分块搬运暂存（init 一次性预留 4KB 内部 DMA 块；NULL=预留失败，
+ *  epd_write_data 退化为 SPI_TRANS_DMA_USE_PSRAM 直读 + worker 重试兜底）。
+ *  不直读的原因：EDMA 取 PSRAM 的建立延迟是按空闲系统给的经验值（IDF
+ *  spi_master.c SPI_EDMA_SETUP_TIME_US，本配置下仅 2µs），LVGL/FreeType
+ *  并发压 PSRAM 时 EDMA 供数会断流——实测 DMA TX underflow，且该传输
+ *  中途数据已损坏，只有重初始化才能恢复。走内部 SRAM 则物理上无此风险，
+ *  且运行期零分配，不会复发旧「每事务现场分配 bounce→NO_MEM」问题。 */
+static uint8_t *s_spi_staging = NULL;
 static espaperplay_epd_mode_t s_last_mode =
     ESPAPERPLAY_EPD_MODE_MAX; /*!< 上次刷新模式（灰阶<->黑白切换时重置旧平面用） */
 static espaperplay_epd_mode_t s_controller_mode =
@@ -189,12 +198,12 @@ static esp_err_t epd_write_cmd(uint8_t cmd) {
  * @note CS 在每个事务间自动拉高再拉低，符合规格书"每 8 位拉高 CSB 防误码"
  *       的建议；DC 在整组数据期间保持高电平。
  *
- * @note 帧快照在 PSRAM：SPI master 默认对 PSRAM 缓冲逐事务现场分配内部
- *       DMA bounce（每块 4KB），开机内部 RAM 紧张时分配失败丢帧。置
- *       SPI_TRANS_DMA_USE_PSRAM 令 GDMA 直读 PSRAM（对齐时零拷贝；未对
- *       齐回落 PSRAM 内对齐拷贝），内部堆退出刷屏关键路径。内部源
- *       （s_fill/s_tmp/s_plane/TRES，均 aligned(16)）不受该标志影响，
- *       对齐且 DMA-capable 时同样直接传输。
+ * @note 帧快照在 PSRAM：先分块拷入内部 DMA 暂存（s_spi_staging，init 一次
+ *       性预留）再传输——DMA 读内部 SRAM 无断流风险，且运行期零分配，内部
+ *       堆峰值固定 4KB。仅在暂存预留失败时退化置 SPI_TRANS_DMA_USE_PSRAM
+ *       直读 PSRAM（见 s_spi_staging 注释的竞争风险），由 worker 有界重试
+ *       兜底。内部源（s_fill/s_tmp/s_plane/TRES，均 aligned(16)）对齐且
+ *       DMA-capable，直接传输不经暂存。
  */
 static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     esp_err_t ret;
@@ -202,9 +211,20 @@ static esp_err_t epd_write_data(const uint8_t *data, size_t len) {
     while (len > 0) {
         size_t chunk =
             len > ESPAPERPLAY_EPD_SPI_MAX_TRANSFER ? ESPAPERPLAY_EPD_SPI_MAX_TRANSFER : len;
+        /* PSRAM 源（或未对齐的内部源）先拷入内部暂存；无暂存则退化直读。 */
+        const uint8_t *dma_src = data;
+        bool direct_psram = false;
+        if ((((uint32_t)(uintptr_t)data | chunk) & 3) != 0 || esp_ptr_external_ram(data)) {
+            if (s_spi_staging != NULL) {
+                memcpy(s_spi_staging, data, chunk);
+                dma_src = s_spi_staging;
+            } else {
+                direct_psram = true;
+            }
+        }
         spi_transaction_t t = {
-            .flags = SPI_TRANS_DMA_USE_PSRAM,
-            .tx_buffer = data,
+            .flags = direct_psram ? SPI_TRANS_DMA_USE_PSRAM : 0,
+            .tx_buffer = dma_src,
             .length = (uint32_t)chunk * 8,
         };
         ret = spi_device_transmit(s_spi_dev, &t);
@@ -1135,6 +1155,17 @@ esp_err_t espaperplay_epd_init(void) {
             return ESP_ERR_NO_MEM;
         }
         memset(s_last_frame, 0xFF, s_frame_bytes); /* 全白 */
+    }
+
+    /* PSRAM 帧搬运暂存：一次性预留（见 s_spi_staging 注释）。失败仅告警：
+     * epd_write_data 退化为直读 PSRAM，由 worker 有界重试兜底。 */
+    if (s_spi_staging == NULL) {
+        s_spi_staging = heap_caps_aligned_alloc(16, ESPAPERPLAY_EPD_SPI_MAX_TRANSFER,
+                                                MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (s_spi_staging == NULL) {
+            ESP_LOGW(TAG, "SPI staging alloc failed (%u bytes), fallback to PSRAM EDMA",
+                     (unsigned)ESPAPERPLAY_EPD_SPI_MAX_TRANSFER);
+        }
     }
 
 #if ESPAPERPLAY_EPD_IDLE_SLEEP_TIMEOUT_MS > 0
