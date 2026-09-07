@@ -17,6 +17,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_reader.h"
@@ -557,46 +558,21 @@ static void rdh_del_cancel_cb(lv_event_t *e) {
 
 /** 打开确认/提示模态（alert_only=true 仅「确定」）。 */
 static void rdh_confirm_open(const char *title, const char *msg, bool alert_only) {
-    int32_t scr_w = 0;
-    int32_t scr_h = 0;
-    espaperplay_ui_screen_size(&scr_w, &scr_h);
-
-    /* 全屏覆盖层：背景透明，避免 BW 模式下浅灰渲染成纯白盖掉列表。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_modal, rdh_modal_overlay_cb, LV_EVENT_CLICKED, NULL);
+    /* 全屏覆盖层（点空白关闭）+ 居中卡片 + 标题/消息。 */
+    s_modal = espaperplay_ui_modal_overlay_create(true, rdh_modal_overlay_cb);
     s_modal_guard_until = 0;
     s_modal_track_release = false;
 
+    int32_t scr_w = 0;
+    int32_t scr_h = 0;
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
     const int card_w = scr_w - 2 * RDH_MARGIN;
     const int card_h = espaperplay_ui_scaled(250) < 210 ? 210 : espaperplay_ui_scaled(250);
-    lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, card_w, card_h);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *tl = espaperplay_ui_label_create(card, title, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(tl, LV_PCT(100));
-    lv_label_set_long_mode(tl, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(tl, 0, espaperplay_ui_scaled(14));
-
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, card_w, card_h);
+    espaperplay_ui_modal_card_title(card, title, espaperplay_ui_scaled(14), 0);
     if (msg != NULL) {
-        lv_obj_t *ml = espaperplay_ui_label_create(card, msg, 16, LV_TEXT_ALIGN_CENTER);
-        lv_obj_set_width(ml, card_w - espaperplay_ui_scaled(40));
-        lv_obj_set_pos(ml, espaperplay_ui_scaled(20), espaperplay_ui_scaled(52));
-        lv_label_set_long_mode(ml, LV_LABEL_LONG_WRAP);
+        espaperplay_ui_modal_card_msg(card, msg, espaperplay_ui_scaled(52),
+                                      card_w - espaperplay_ui_scaled(40));
     }
 
     const int bh = espaperplay_ui_scaled(44) < 38 ? 38 : espaperplay_ui_scaled(44);

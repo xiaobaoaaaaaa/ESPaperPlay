@@ -19,6 +19,7 @@
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_power.h"
@@ -178,32 +179,6 @@ static int setup_btn_h(void) {
     return h < 40 ? 40 : h;
 }
 
-/** 创建一个按钮（primary: true=黑底白字主按钮，false=白底黑边次按钮）。 */
-static lv_obj_t *setup_button(lv_obj_t *parent, const char *text, int x, int y, int w, int h,
-                              bool primary, lv_event_cb_t cb) {
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, w, h);
-    lv_obj_set_pos(btn, x, y);
-    if (primary) {
-        lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
-    } else {
-        lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
-    }
-    lv_obj_set_style_radius(btn, 8, 0);
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, espaperplay_ui_font(20), 0);
-    lv_obj_center(label);
-    if (cb != NULL) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
-    }
-    return btn;
-}
-
 /** 获取 WebUI 访问地址（https://<当前 IP>；IP 未就绪时回退 AP 默认网段）。 */
 static void setup_web_url(char *buf, size_t size) {
     const char *ip = "192.168.4.1";
@@ -350,10 +325,10 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
     const int btn2_y = skip_y - espaperplay_ui_scaled(60);
     const int btn1_y = btn2_y - setup_btn_h() - SETUP_BTN_GAP;
 
-    setup_button(parent, "联网配置（推荐）", SETUP_MARGIN, btn1_y, btn_w, setup_btn_h(), true,
-                 setup_btn_web_cb);
-    setup_button(parent, "在本机输入 WiFi", SETUP_MARGIN, btn2_y, btn_w, setup_btn_h(), false,
-                 setup_btn_local_cb);
+    espaperplay_ui_modal_button(parent, "联网配置（推荐）", SETUP_MARGIN, btn1_y, btn_w, setup_btn_h(), true,
+                 setup_btn_web_cb, NULL);
+    espaperplay_ui_modal_button(parent, "在本机输入 WiFi", SETUP_MARGIN, btn2_y, btn_w, setup_btn_h(), false,
+                 setup_btn_local_cb, NULL);
 
     /* 跳过：无边框文字按钮。 */
     lv_obj_t *skip = lv_button_create(parent);
@@ -427,10 +402,10 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     lv_obj_set_style_pad_left(steps_label, SETUP_MARGIN, 0);
     lv_obj_set_pos(steps_label, 0, y);
 
-    setup_button(parent, "返回", SETUP_MARGIN, btn_y, btn_w, setup_btn_h(), false,
-                 setup_btn_back_cb);
-    setup_button(parent, "完成配置", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, setup_btn_h(), true,
-                 setup_btn_skip_cb);
+    espaperplay_ui_modal_button(parent, "返回", SETUP_MARGIN, btn_y, btn_w, setup_btn_h(), false,
+                 setup_btn_back_cb, NULL);
+    espaperplay_ui_modal_button(parent, "完成配置", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, setup_btn_h(), true,
+                 setup_btn_skip_cb, NULL);
 }
 
 /** 扫描结果 RSSI 分档图标（与状态栏同款素材）。 */
@@ -603,10 +578,10 @@ static void setup_build_input(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     lv_obj_remove_flag(s_input_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
 
     const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
-    setup_button(parent, "手动输入", SETUP_MARGIN, btn_y, btn_w, btn_h, false,
-                 setup_btn_manual_cb);
-    setup_button(parent, "重新扫描", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, btn_h, false,
-                 setup_btn_rescan_cb);
+    espaperplay_ui_modal_button(parent, "手动输入", SETUP_MARGIN, btn_y, btn_w, btn_h, false,
+                 setup_btn_manual_cb, NULL);
+    espaperplay_ui_modal_button(parent, "重新扫描", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, btn_h, false,
+                 setup_btn_rescan_cb, NULL);
 
     /* 扫描进行中保持空列表等回调；否则用缓存结果即时重建。 */
     if (!s_scan_busy) {
@@ -630,8 +605,8 @@ static void setup_build_connecting(lv_obj_t *parent, int32_t scr_w, int32_t scr_
     lv_obj_set_pos(s_status_label, 0, espaperplay_ui_scaled(170));
 
     const int btn_w = scr_w - 2 * SETUP_MARGIN;
-    setup_button(parent, "取消并返回", SETUP_MARGIN, setup_bottom_btn_y(), btn_w,
-                 setup_btn_h(), false, setup_btn_cancel_connect_cb);
+    espaperplay_ui_modal_button(parent, "取消并返回", SETUP_MARGIN, setup_bottom_btn_y(), btn_w,
+                 setup_btn_h(), false, setup_btn_cancel_connect_cb, NULL);
 }
 
 /** 完成步骤：成功提示 + 开始使用。 */
@@ -652,8 +627,8 @@ static void setup_build_done(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     lv_obj_set_pos(body, 0, espaperplay_ui_scaled(150));
 
     const int btn_w = scr_w - 2 * SETUP_MARGIN;
-    setup_button(parent, "开始使用", SETUP_MARGIN, setup_bottom_btn_y(), btn_w, setup_btn_h(),
-                 true, setup_btn_done_cb);
+    espaperplay_ui_modal_button(parent, "开始使用", SETUP_MARGIN, setup_bottom_btn_y(), btn_w, setup_btn_h(),
+                 true, setup_btn_done_cb, NULL);
 }
 
 /** 失败步骤：原因 + 重试 / 改联网配置 / 跳过。 */
@@ -674,12 +649,12 @@ static void setup_build_fail(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
 
     const int btn_y = setup_bottom_btn_y();
     const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
-    setup_button(parent, "重试", SETUP_MARGIN, btn_y - setup_btn_h() - SETUP_BTN_GAP, btn_w,
-                 setup_btn_h(), true, setup_btn_retry_cb);
-    setup_button(parent, "改用联网配置", SETUP_MARGIN + btn_w + 12, btn_y - setup_btn_h() - SETUP_BTN_GAP,
-                 btn_w, setup_btn_h(), false, setup_btn_web_cb);
-    setup_button(parent, "跳过引导", SETUP_MARGIN, btn_y, scr_w - 2 * SETUP_MARGIN,
-                 espaperplay_ui_scaled(40), false, setup_btn_skip_cb);
+    espaperplay_ui_modal_button(parent, "重试", SETUP_MARGIN, btn_y - setup_btn_h() - SETUP_BTN_GAP, btn_w,
+                 setup_btn_h(), true, setup_btn_retry_cb, NULL);
+    espaperplay_ui_modal_button(parent, "改用联网配置", SETUP_MARGIN + btn_w + 12, btn_y - setup_btn_h() - SETUP_BTN_GAP,
+                 btn_w, setup_btn_h(), false, setup_btn_web_cb, NULL);
+    espaperplay_ui_modal_button(parent, "跳过引导", SETUP_MARGIN, btn_y, scr_w - 2 * SETUP_MARGIN,
+                 espaperplay_ui_scaled(40), false, setup_btn_skip_cb, NULL);
 }
 
 /** 构建当前步骤内容（s_content 已重建）。 */
@@ -796,16 +771,6 @@ static void setup_poll_cb(lv_timer_t *timer) {
 /* ------------------------------------------------------------------ */
 
 /** 密码可见性切换。 */
-static void setup_kb_toggle_cb(lv_event_t *e) {
-    lv_event_stop_bubbling(e);
-    if (s_kb_ta == NULL) {
-        return;
-    }
-    const bool hidden = lv_textarea_get_password_mode(s_kb_ta);
-    lv_textarea_set_password_mode(s_kb_ta, !hidden);
-    lv_label_set_text(lv_obj_get_child(lv_event_get_current_target(e), 0), hidden ? "隐藏" : "显示");
-}
-
 /** 键盘模态 取消 按钮：关闭并回到本机配置列表（不重新扫描）。 */
 static void setup_kb_cancel_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -871,113 +836,24 @@ static void setup_kb_ok_cb(lv_event_t *e) {
  */
 static void setup_open_keyboard(bool for_pass) {
     s_kb_for_pass = for_pass;
-
-    int32_t scr_w = 0;
-    int32_t scr_h = 0;
-    espaperplay_ui_screen_size(&scr_w, &scr_h);
-
-    /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-
-    /* 底部面板尺寸（内容驱动，横竖屏自适应）。 */
-    const int panel_w = scr_w - 2 * SETUP_MARGIN;
-    const int pad = 10;
-    const int title_h = 30;
-    const int ta_h = espaperplay_ui_scaled(52) < 40 ? 40 : espaperplay_ui_scaled(52);
-    const int hint_h = 22;
-    const int bh = setup_btn_h() < 38 ? 38 : setup_btn_h();
-    const int kb_h = espaperplay_ui_scaled(240) < 170 ? 170 : espaperplay_ui_scaled(240);
-    /* 面板仅含标题/输入框/提示/按钮（不含键盘，键盘单独挂全屏 modal 贴底，避免被面板裁剪）。 */
-    const int panel_h = pad + title_h + 6 + ta_h + 4 + hint_h + 6 + bh + pad;
-    const int kb_y = scr_h - kb_h - 6;       /* 键盘贴底 */
-    const int panel_y = kb_y - panel_h - 6;  /* 面板位于键盘上方 */
-
-    lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, panel_w, panel_h);
-    lv_obj_set_pos(panel, SETUP_MARGIN, panel_y);
-    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
-    lv_obj_set_style_border_color(panel, lv_color_black(), 0);
-    lv_obj_set_style_border_width(panel, 2, 0);
-    lv_obj_set_style_radius(panel, 12, 0);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 标题。 */
-    lv_obj_t *title = espaperplay_ui_label_create(panel, for_pass ? "输入 WiFi 密码" : "输入 WiFi 名称",
-                                         20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, panel_w - 140);
-    lv_obj_set_pos(title, 0, pad);
-
-    /* 输入框（一行）。 */
-    lv_obj_t *ta = lv_textarea_create(panel);
-    s_kb_ta = ta;
-    lv_obj_set_size(ta, panel_w - 2 * pad, ta_h);
-    lv_obj_set_pos(ta, pad, pad + title_h + 6);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_max_length(ta, (for_pass ? ESPAPERPLAY_SYSTEM_PASS_MAX_LEN
-                                             : ESPAPERPLAY_SYSTEM_SSID_MAX_LEN) -
-                                        1);
-    lv_textarea_set_password_mode(ta, for_pass);
-    lv_textarea_set_text(ta, "");
-    lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_text_font(ta, espaperplay_ui_font(20), 0);
-    lv_obj_set_style_border_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_border_width(ta, 2, 0);
-    lv_obj_set_style_radius(ta, 6, 0);
-    lv_obj_set_style_pad_left(ta, 8, 0);
-    /* 墨水屏：光标闪烁会触发连续局部刷新，禁用（anim_duration=0 即不闪烁）。
-     * 默认主题在 LV_PART_CURSOR|LV_STATE_FOCUSED 上设了 400ms，故默认态与聚焦态都要覆盖。 */
-    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR);
-    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
-
-    /* 校验提示（默认空）。 */
-    lv_obj_t *hint = espaperplay_ui_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
-    s_kb_hint = hint;
-    lv_obj_set_width(hint, LV_PCT(100));
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(hint, pad + 2, pad + title_h + 6 + ta_h + 4);
-
-    /* 取消 / 确定。 */
-    const int bw = (panel_w - 2 * pad - 12) / 2;
-    const int btn_y = pad + title_h + 6 + ta_h + 4 + hint_h + 6;
-    setup_button(panel, "取消", pad, btn_y, bw, bh, false, setup_kb_cancel_cb);
-    setup_button(panel, "确定", pad + bw + 12, btn_y, bw, bh, true, setup_kb_ok_cb);
-
-    /* 密码可见性切换（仅密码步骤；置于标题右侧）。 */
-    if (for_pass) {
-        lv_obj_t *toggle = lv_button_create(panel);
-        lv_obj_set_size(toggle, 120, 30);
-        lv_obj_set_pos(toggle, panel_w - 124, pad);
-        lv_obj_set_style_bg_color(toggle, lv_color_white(), 0);
-        lv_obj_set_style_border_color(toggle, lv_color_black(), 0);
-        lv_obj_set_style_border_width(toggle, 2, 0);
-        lv_obj_set_style_radius(toggle, 6, 0);
-        lv_obj_t *tl = lv_label_create(toggle);
-        lv_label_set_text(tl, "显示");
-        lv_obj_set_style_text_color(tl, lv_color_black(), 0);
-        lv_obj_set_style_text_font(tl, espaperplay_ui_font(16), 0);
-        lv_obj_center(tl);
-        lv_obj_add_event_cb(toggle, setup_kb_toggle_cb, LV_EVENT_CLICKED, NULL);
+    const espaperplay_ui_kb_cfg_t kb = {
+        .title = for_pass ? "输入 WiFi 密码" : "输入 WiFi 名称",
+        .init_text = "",
+        .max_len = (for_pass ? ESPAPERPLAY_SYSTEM_PASS_MAX_LEN : ESPAPERPLAY_SYSTEM_SSID_MAX_LEN) - 1,
+        .password = for_pass,
+        .ok_text = "确定",
+        .on_ok = setup_kb_ok_cb,
+        .on_cancel = setup_kb_cancel_cb,
+        .user_data = NULL,
+        .ta_out = &s_kb_ta,
+        .status_out = &s_kb_hint,
+        .margin = SETUP_MARGIN,
+    };
+    s_modal = espaperplay_ui_kb_modal_open(&kb);
+    if (s_modal != NULL) {
+        ESP_LOGI(TAG, "setup: keyboard modal open (%s)", for_pass ? "password" : "ssid");
     }
-
-    /* 键盘直接挂在全屏 modal 上并贴底，避免被面板裁剪（面板仅含标题/输入框/提示/按钮）。 */
-    lv_obj_t *kb = lv_keyboard_create(s_modal);
-    lv_obj_set_size(kb, panel_w, kb_h);
-    lv_obj_align(kb, LV_ALIGN_TOP_LEFT, SETUP_MARGIN, kb_y);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(kb, ta);
-
-    ESP_LOGI(TAG, "setup: keyboard modal open (%s)", for_pass ? "password" : "ssid");
 }
-
 /** 关闭键盘模态（LVGL 线程内）。 */
 static void setup_modal_close(void) {
     if (s_modal != NULL) {

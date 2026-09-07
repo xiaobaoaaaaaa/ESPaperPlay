@@ -13,6 +13,7 @@
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
@@ -1260,16 +1261,7 @@ static void reader_bar_open(void) {
 
     reader_gray4_mode_set(false);
 
-    s_bar_overlay = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_bar_overlay, scr_w, scr_h);
-    lv_obj_set_pos(s_bar_overlay, 0, 0);
-    lv_obj_set_style_bg_opa(s_bar_overlay, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_bar_overlay, 0, 0);
-    lv_obj_set_style_radius(s_bar_overlay, 0, 0);
-    lv_obj_set_style_pad_all(s_bar_overlay, 0, 0);
-    lv_obj_remove_flag(s_bar_overlay, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_bar_overlay, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_bar_overlay, reader_bar_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_bar_overlay = espaperplay_ui_modal_overlay_create(true, reader_bar_overlay_cb);
 
     const int margin = READER_MARGIN;
     const int pw = scr_w - 2 * margin;

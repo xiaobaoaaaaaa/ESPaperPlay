@@ -19,6 +19,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_sd_fonts.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_fonts.h"
@@ -1012,33 +1013,13 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_modal, settings_modal_overlay_cb, LV_EVENT_CLICKED, NULL);
-
-    /* 卡片（尺寸按屏高缩放） */
-    lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, espaperplay_ui_scaled(340), espaperplay_ui_scaled(250));
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    /* 全屏覆盖层（点空白关闭）+ 居中卡片（尺寸按屏高缩放）。 */
+    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, espaperplay_ui_scaled(340),
+                                                      espaperplay_ui_scaled(250));
 
     /* 标题 */
-    lv_obj_t *title = espaperplay_ui_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(14));
+    espaperplay_ui_modal_card_title(card, row->name, espaperplay_ui_scaled(14), 0);
 
     /* 消息（可换行居中） */
     lv_obj_t *msg = espaperplay_ui_label_create(card, message, 16, LV_TEXT_ALIGN_CENTER);
@@ -1047,33 +1028,14 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
 
     /* 取消（白底黑边） */
-    lv_obj_t *cancel = lv_button_create(card);
-    lv_obj_set_size(cancel, espaperplay_ui_scaled(120), espaperplay_ui_scaled(44));
-    lv_obj_set_pos(cancel, espaperplay_ui_scaled(30), espaperplay_ui_scaled(180));
-    lv_obj_set_style_bg_color(cancel, lv_color_white(), 0);
-    lv_obj_set_style_border_color(cancel, lv_color_black(), 0);
-    lv_obj_set_style_border_width(cancel, 2, 0);
-    lv_obj_set_style_radius(cancel, 8, 0);
-    lv_obj_t *cancel_label = lv_label_create(cancel);
-    lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_color(cancel_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(cancel_label, espaperplay_ui_font(20), 0);
-    lv_obj_center(cancel_label);
-    lv_obj_add_event_cb(cancel, settings_confirm_cancel_cb, LV_EVENT_CLICKED, NULL);
+    espaperplay_ui_modal_button(card, "取消", espaperplay_ui_scaled(30), espaperplay_ui_scaled(180),
+                                espaperplay_ui_scaled(120), espaperplay_ui_scaled(44), false,
+                                settings_confirm_cancel_cb, NULL);
 
     /* 确定（黑底白字） */
-    lv_obj_t *ok = lv_button_create(card);
-    lv_obj_set_size(ok, espaperplay_ui_scaled(120), espaperplay_ui_scaled(44));
-    lv_obj_set_pos(ok, espaperplay_ui_scaled(190), espaperplay_ui_scaled(180));
-    lv_obj_set_style_bg_color(ok, lv_color_black(), 0);
-    lv_obj_set_style_border_width(ok, 0, 0);
-    lv_obj_set_style_radius(ok, 8, 0);
-    lv_obj_t *ok_label = lv_label_create(ok);
-    lv_label_set_text(ok_label, "确定");
-    lv_obj_set_style_text_color(ok_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(ok_label, espaperplay_ui_font(20), 0);
-    lv_obj_center(ok_label);
-    lv_obj_add_event_cb(ok, settings_confirm_ok_cb, LV_EVENT_CLICKED, NULL);
+    espaperplay_ui_modal_button(card, "确定", espaperplay_ui_scaled(190), espaperplay_ui_scaled(180),
+                                espaperplay_ui_scaled(120), espaperplay_ui_scaled(44), true,
+                                settings_confirm_ok_cb, NULL);
 
     ESP_LOGI(TAG, "settings: confirm modal open (%s -> %d)", row->name, (int)new_value);
 }
@@ -1086,33 +1048,13 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_modal, settings_modal_overlay_cb, LV_EVENT_CLICKED, NULL);
-
-    /* 卡片（尺寸按屏高缩放） */
-    lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, espaperplay_ui_scaled(340), espaperplay_ui_scaled(280));
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    /* 全屏覆盖层（点空白关闭）+ 居中卡片（尺寸按屏高缩放）。 */
+    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, espaperplay_ui_scaled(340),
+                                                      espaperplay_ui_scaled(280));
 
     /* 标题 */
-    lv_obj_t *title = espaperplay_ui_label_create(card, row->name, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(14));
+    espaperplay_ui_modal_card_title(card, row->name, espaperplay_ui_scaled(14), 0);
 
     /* 大号数值 */
     s_modal_value_label = espaperplay_ui_label_create(card, "", 32, LV_TEXT_ALIGN_CENTER);
@@ -1214,32 +1156,13 @@ static void settings_font_modal_open(void) {
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层：拦截触摸（点击空白关闭），背景透明避免 BW 模式下整页变白。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_modal, settings_modal_overlay_cb, LV_EVENT_CLICKED, NULL);
-
-    /* 卡片（宽高按屏高缩放，宽不超过屏幕） */
+    /* 全屏覆盖层（点空白关闭）+ 居中卡片（宽高按屏高缩放，宽不超过屏幕）。 */
+    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
     const int card_w = espaperplay_ui_scaled(400) > scr_w - 2 * SETTINGS_MARGIN
                            ? scr_w - 2 * SETTINGS_MARGIN
                            : espaperplay_ui_scaled(400);
     const int card_h = espaperplay_ui_scaled(480);
-    lv_obj_t *card = lv_obj_create(s_modal);
-    lv_obj_set_size(card, card_w, card_h);
-    lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, card_w, card_h);
 
     /* 标题 */
     lv_obj_t *title = espaperplay_ui_label_create(card, "选择字体", 20, LV_TEXT_ALIGN_CENTER);

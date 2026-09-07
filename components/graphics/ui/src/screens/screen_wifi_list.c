@@ -19,6 +19,7 @@
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
 #include "espaperplay_system.h"
@@ -153,32 +154,6 @@ static int wifi_list_btn_h(void) {
 static int wifi_list_bar_h(void) {
     const int h = espaperplay_ui_scaled(WIFI_LIST_BAR_H);
     return h < WIFI_LIST_MIN_H ? WIFI_LIST_MIN_H : h;
-}
-
-/** 创建一个按钮（primary: true=黑底白字主按钮，false=白底黑边次按钮）。 */
-static lv_obj_t *wifi_list_button(lv_obj_t *parent, const char *text, int x, int y, int w, int h,
-                                  bool primary, lv_event_cb_t cb) {
-    lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, w, h);
-    lv_obj_set_pos(btn, x, y);
-    if (primary) {
-        lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
-    } else {
-        lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
-        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
-    }
-    lv_obj_set_style_radius(btn, 8, 0);
-    lv_obj_t *label = lv_label_create(btn);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
-    lv_obj_set_style_text_font(label, espaperplay_ui_font(20), 0);
-    lv_obj_center(label);
-    if (cb != NULL) {
-        lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, NULL);
-    }
-    return btn;
 }
 
 /** 更新状态提示行（仅文本变化时写入，EPD 上避免无谓刷新）。 */
@@ -516,8 +491,8 @@ static void wifi_list_build_list_view(lv_obj_t *parent, int32_t scr_w, int32_t s
     lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_OFF);
     lv_obj_remove_flag(s_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
 
-    wifi_list_button(parent, "重新扫描", WIFI_LIST_MARGIN, btn_y, scr_w - 2 * WIFI_LIST_MARGIN,
-                     btn_h, false, wifi_list_rescan_cb);
+    espaperplay_ui_modal_button(parent, "重新扫描", WIFI_LIST_MARGIN, btn_y, scr_w - 2 * WIFI_LIST_MARGIN,
+                     btn_h, false, wifi_list_rescan_cb, NULL);
 
     /* 首次进入（扫描进行中）：保持空列表与扫描提示，等扫描完成回调重建；
      * 从连接视图返回：s_scan_busy=false，用缓存结果即时重建。 */
@@ -559,10 +534,10 @@ static void wifi_list_build_connecting_view(lv_obj_t *parent, int32_t scr_w, int
         espaperplay_ui_label_create(parent, "正在应用网络配置…", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(s_status_label, 0, espaperplay_ui_scaled(170));
 
-    wifi_list_button(parent, "取消并返回", WIFI_LIST_MARGIN, scr_h - wifi_list_btn_h() -
+    espaperplay_ui_modal_button(parent, "取消并返回", WIFI_LIST_MARGIN, scr_h - wifi_list_btn_h() -
                                                                  espaperplay_ui_scaled(16),
                      scr_w - 2 * WIFI_LIST_MARGIN, wifi_list_btn_h(), false,
-                     wifi_list_cancel_connect_cb);
+                     wifi_list_cancel_connect_cb, NULL);
 }
 
 /** 切换视图：销毁旧内容容器并重建（EPD 只刷变化区域）。 */
@@ -602,16 +577,6 @@ static void wifi_list_show_view(wifi_list_view_t view) {
 /* ------------------------------------------------------------------ */
 
 /** 密码可见性切换。 */
-static void wifi_list_kb_toggle_cb(lv_event_t *e) {
-    lv_event_stop_bubbling(e);
-    if (s_kb_ta == NULL) {
-        return;
-    }
-    const bool hidden = lv_textarea_get_password_mode(s_kb_ta);
-    lv_textarea_set_password_mode(s_kb_ta, !hidden);
-    lv_label_set_text(lv_obj_get_child(lv_event_get_current_target(e), 0), hidden ? "隐藏" : "显示");
-}
-
 /** 密码模态 取消 按钮：关闭模态，留在列表。 */
 static void wifi_list_kb_cancel_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -648,110 +613,26 @@ static void wifi_list_kb_ok_cb(lv_event_t *e) {
  * 输入模态不可点空白关闭（防误触丢输入）。
  */
 static void wifi_list_open_keyboard(void) {
-    int32_t scr_w = 0;
-    int32_t scr_h = 0;
-    lv_display_t *disp = lv_display_get_default();
-    scr_w = lv_display_get_horizontal_resolution(disp);
-    scr_h = lv_display_get_vertical_resolution(disp);
-
-    /* 全屏覆盖层（不点空白关闭），背景透明避免 BW 模式下整页变白。 */
-    s_modal = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_modal, scr_w, scr_h);
-    lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_modal, 0, 0);
-    lv_obj_set_style_radius(s_modal, 0, 0);
-    lv_obj_set_style_pad_all(s_modal, 0, 0);
-    lv_obj_remove_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
-
-    /* 底部面板尺寸（内容驱动，横竖屏自适应）。 */
-    const int panel_w = scr_w - 2 * WIFI_LIST_MARGIN;
-    const int pad = 10;
-    const int title_h = 30;
-    const int ta_h = espaperplay_ui_scaled(52) < 40 ? 40 : espaperplay_ui_scaled(52);
-    const int hint_h = 22;
-    const int bh = wifi_list_btn_h() < 38 ? 38 : wifi_list_btn_h();
-    const int kb_h = espaperplay_ui_scaled(240) < 170 ? 170 : espaperplay_ui_scaled(240);
-    const int panel_h = pad + title_h + 6 + ta_h + 4 + hint_h + 6 + bh + pad;
-    const int kb_y = scr_h - kb_h - 6;      /* 键盘贴底 */
-    const int panel_y = kb_y - panel_h - 6; /* 面板位于键盘上方 */
-
-    lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, panel_w, panel_h);
-    lv_obj_set_pos(panel, WIFI_LIST_MARGIN, panel_y);
-    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
-    lv_obj_set_style_border_color(panel, lv_color_black(), 0);
-    lv_obj_set_style_border_width(panel, 2, 0);
-    lv_obj_set_style_radius(panel, 12, 0);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* 标题（含目标网络名）。 */
     char title_buf[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 32];
     snprintf(title_buf, sizeof(title_buf), "连接「%s」", s_target_ssid);
-    lv_obj_t *title = espaperplay_ui_label_create(panel, title_buf, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, panel_w - 140);
-    lv_obj_set_pos(title, 0, pad);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-
-    /* 输入框（一行，密码模式）。 */
-    lv_obj_t *ta = lv_textarea_create(panel);
-    s_kb_ta = ta;
-    lv_obj_set_size(ta, panel_w - 2 * pad, ta_h);
-    lv_obj_set_pos(ta, pad, pad + title_h + 6);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_max_length(ta, ESPAPERPLAY_SYSTEM_PASS_MAX_LEN - 1);
-    lv_textarea_set_password_mode(ta, true);
-    lv_textarea_set_text(ta, "");
-    lv_obj_set_style_text_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_text_font(ta, espaperplay_ui_font(20), 0);
-    lv_obj_set_style_border_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_border_width(ta, 2, 0);
-    lv_obj_set_style_radius(ta, 6, 0);
-    lv_obj_set_style_pad_left(ta, 8, 0);
-    /* 墨水屏：光标闪烁会触发连续局部刷新，禁用（anim_duration=0 即不闪烁）。 */
-    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR);
-    lv_obj_set_style_anim_duration(ta, 0, LV_PART_CURSOR | LV_STATE_FOCUSED);
-
-    /* 校验提示（默认空）。 */
-    lv_obj_t *hint = espaperplay_ui_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
-    s_kb_hint = hint;
-    lv_obj_set_width(hint, LV_PCT(100));
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(hint, pad + 2, pad + title_h + 6 + ta_h + 4);
-
-    /* 取消 / 连接。 */
-    const int bw = (panel_w - 2 * pad - 12) / 2;
-    const int btn_y = pad + title_h + 6 + ta_h + 4 + hint_h + 6;
-    wifi_list_button(panel, "取消", pad, btn_y, bw, bh, false, wifi_list_kb_cancel_cb);
-    wifi_list_button(panel, "连接", pad + bw + 12, btn_y, bw, bh, true, wifi_list_kb_ok_cb);
-
-    /* 密码可见性切换（标题右侧）。 */
-    lv_obj_t *toggle = lv_button_create(panel);
-    lv_obj_set_size(toggle, 120, 30);
-    lv_obj_set_pos(toggle, panel_w - 124, pad);
-    lv_obj_set_style_bg_color(toggle, lv_color_white(), 0);
-    lv_obj_set_style_border_color(toggle, lv_color_black(), 0);
-    lv_obj_set_style_border_width(toggle, 2, 0);
-    lv_obj_set_style_radius(toggle, 6, 0);
-    lv_obj_t *tl = lv_label_create(toggle);
-    lv_label_set_text(tl, "显示");
-    lv_obj_set_style_text_color(tl, lv_color_black(), 0);
-    lv_obj_set_style_text_font(tl, espaperplay_ui_font(16), 0);
-    lv_obj_center(tl);
-    lv_obj_add_event_cb(toggle, wifi_list_kb_toggle_cb, LV_EVENT_CLICKED, NULL);
-
-    /* 键盘挂在全屏 modal 上贴底，避免被面板裁剪。 */
-    lv_obj_t *kb = lv_keyboard_create(s_modal);
-    lv_obj_set_size(kb, panel_w, kb_h);
-    lv_obj_align(kb, LV_ALIGN_TOP_LEFT, WIFI_LIST_MARGIN, kb_y);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(kb, ta);
-
-    ESP_LOGI(TAG, "wifi_list: password modal open (\"%s\")", s_target_ssid);
+    const espaperplay_ui_kb_cfg_t kb = {
+        .title = title_buf,
+        .init_text = "",
+        .max_len = ESPAPERPLAY_SYSTEM_PASS_MAX_LEN - 1,
+        .password = true,
+        .ok_text = "连接",
+        .on_ok = wifi_list_kb_ok_cb,
+        .on_cancel = wifi_list_kb_cancel_cb,
+        .user_data = NULL,
+        .ta_out = &s_kb_ta,
+        .status_out = &s_kb_hint,
+        .margin = WIFI_LIST_MARGIN,
+    };
+    s_modal = espaperplay_ui_kb_modal_open(&kb);
+    if (s_modal != NULL) {
+        ESP_LOGI(TAG, "wifi_list: password modal open (\"%s\")", s_target_ssid);
+    }
 }
-
 /** 关闭密码模态（LVGL 线程内）。 */
 static void wifi_list_modal_close(void) {
     if (s_modal != NULL) {
