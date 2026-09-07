@@ -19,6 +19,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_ui_modal.h"
 #include "espaperplay_sd_fonts.h"
 #include "espaperplay_epd.h"
@@ -78,11 +79,6 @@ static const char *TAG = "ESPaperPlay_UI";
  * 黑字、圆角卡片（与屏幕边缘保持间距）。
  */
 
-#define SETTINGS_EDGE_PX 24           /* 边缘滑动触发宽度（物理手势，不缩放） */
-#define SETTINGS_EDGE_SWIPE_PX 70     /* 边缘向内滑动位移阈值（不缩放） */
-#define SETTINGS_SWIPE_PX 90          /* 分页切换位移阈值（不缩放） */
-#define SETTINGS_CLICK_MAX_PX 15      /* 点击允许的最大位移（防抖，不缩放） */
-#define SETTINGS_SWIPE_MIN_RATIO 1.2f /* 横向位移 / 纵向位移 最小比例 */
 #define SETTINGS_MARGIN 16            /* 卡片与屏幕边缘间距 */
 #define SETTINGS_CARD_PAD 16          /* 卡片左右内边距（上下各用其半） */
 #define SETTINGS_HEADER_GAP 10        /* 大类标题头与卡片间距 */
@@ -1335,7 +1331,6 @@ static void settings_show_page(int idx) {
     for (int i = 0; i < s_page_count; i++) {
         /* 未构建的分页没有控件（指针无效），跳过显隐操作。 */
         if (!s_page_built[i]) {
-            lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
             continue;
         }
         if (i == idx) {
@@ -1343,8 +1338,8 @@ static void settings_show_page(int idx) {
         } else {
             lv_obj_add_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
     }
+    espaperplay_ui_pager_dots_set(s_dots, s_page_count, idx);
     ESP_LOGI(TAG, "settings: page %d/%d", idx + 1, s_page_count);
 }
 
@@ -1390,19 +1385,9 @@ static void settings_enter(void) {
     settings_page_build(0);
 
     /* 指示点 */
-    for (int i = 0; i < s_page_count; i++) {
-        s_dots[i] = lv_obj_create(scr);
-        lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (s_page_count - 1) / 2) * 24 - 5, scr_h - 18);
-        lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_dots[i], 1, 0);
-        lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
+    espaperplay_ui_pager_dots_create(s_dots, s_page_count, scr_w, scr_h - 18, 0);
     /* 未构建的分页没有控件，仅指示点需要着色（当前页黑、其余白）。 */
-    for (int i = 0; i < s_page_count; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
-    }
+    espaperplay_ui_pager_dots_set(s_dots, s_page_count, 0);
 
     s_modal = NULL;
     s_modal_row = NULL;
@@ -1462,10 +1447,10 @@ static void settings_on_touch(const espaperplay_input_event_t *event) {
         const int ady = abs(dy);
 
         /* 边缘向内滑动返回（横向为主，避免与分页切换冲突）。 */
-        if (adx > SETTINGS_EDGE_SWIPE_PX && adx > ady * SETTINGS_SWIPE_MIN_RATIO) {
+        if (adx > UI_GESTURE_EDGE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
             int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
-            if ((s_touch_start.x < SETTINGS_EDGE_PX && dx > 0) ||
-                (s_touch_start.x > scr_w - SETTINGS_EDGE_PX && dx < 0)) {
+            if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > 0) ||
+                (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < 0)) {
                 if (espaperplay_ui_page_depth() > 1) {
                     ESP_LOGI(TAG, "settings: edge swipe -> pop back");
                     espaperplay_ui_page_pop_lv();
@@ -1476,14 +1461,14 @@ static void settings_on_touch(const espaperplay_input_event_t *event) {
         }
 
         /* 中间横向滑动：切换分页（优先于点击）。 */
-        if (adx > SETTINGS_SWIPE_PX && adx > ady * SETTINGS_SWIPE_MIN_RATIO) {
+        if (adx > UI_GESTURE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
             settings_show_page(s_page + (dx < 0 ? 1 : -1));
             s_touch_row = NULL;
             return;
         }
 
         /* 小位移 + 起点在行内：点击触发该行操作。 */
-        if (s_touch_row != NULL && adx <= SETTINGS_CLICK_MAX_PX && ady <= SETTINGS_CLICK_MAX_PX) {
+        if (s_touch_row != NULL && adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
             settings_row_trigger(s_touch_row);
         }
         s_touch_row = NULL;

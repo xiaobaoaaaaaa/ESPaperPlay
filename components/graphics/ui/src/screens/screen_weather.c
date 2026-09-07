@@ -14,6 +14,7 @@
 
 #include "espaperplay_clock.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
 #include "espaperplay_system.h"
@@ -67,9 +68,6 @@ static const char *TAG = "ESPaperPlay_UI";
 #define WEATHER_UI_PERIOD_MS 30000 /* 页面定时器刷新周期 */
 #define WEATHER_UI_RETRY_MS 1000   /* 快照还不可用时（启动初期/刷新失败）的快速重试周期 */
 #define WEATHER_BAR_H_PX 30        /* 标题栏高度 */
-#define WEATHER_EDGE_PX 24         /* 边缘滑动触发宽度 */
-#define WEATHER_EDGE_SWIPE_PX 70   /* 边缘向内滑动位移阈值 */
-#define WEATHER_SWIPE_PX 90        /* 子页切换位移阈值 */
 #define WEATHER_MARGIN 24          /* 卡片与屏幕边缘间距 */
 
 #define WEATHER_SUBPAGE_CNT 3
@@ -643,8 +641,8 @@ static void weather_show_page(int idx) {
         } else {
             lv_obj_add_flag(s_subpages[i], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
     }
+    espaperplay_ui_pager_dots_set(s_dots, WEATHER_SUBPAGE_CNT, idx);
     ESP_LOGI(TAG, "weather: subpage %d", idx);
 }
 
@@ -684,23 +682,14 @@ static void weather_enter(void) {
     lv_obj_set_pos(s_updated_label, 12, WEATHER_BAR_H_PX + 4);
 
     /* 指示点 */
-    for (int i = 0; i < WEATHER_SUBPAGE_CNT; i++) {
-        s_dots[i] = lv_obj_create(scr);
-        lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (WEATHER_SUBPAGE_CNT - 1) / 2) * 24 - 5,
-                       scr_h - 18);
-        lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_dots[i], 1, 0);
-        lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
+    espaperplay_ui_pager_dots_create(s_dots, WEATHER_SUBPAGE_CNT, scr_w, scr_h - 18, 0);
     s_page = 0;
     for (int i = 0; i < WEATHER_SUBPAGE_CNT; i++) {
         if (i != 0) {
             lv_obj_add_flag(s_subpages[i], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
     }
+    espaperplay_ui_pager_dots_set(s_dots, WEATHER_SUBPAGE_CNT, 0);
 
     /* 预警详情覆盖卡（初始隐藏；高度封顶 340，矮屏贴底收缩防越屏） */
     int detail_h = area_h - 90 < 340 ? area_h - 90 : 340;
@@ -1139,7 +1128,7 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
                            &p, espaperplay_ui_obj_screen_x(s_warn_bar), espaperplay_ui_obj_screen_y(s_warn_bar),
                            lv_obj_get_width(s_warn_bar), lv_obj_get_height(s_warn_bar))) {
                 s_touch_zone = 2; /* 预警条（仅子页 0） */
-            } else if (p.x < WEATHER_EDGE_PX || p.x > scr_w - WEATHER_EDGE_PX) {
+            } else if (p.x < UI_GESTURE_EDGE_PX || p.x > scr_w - UI_GESTURE_EDGE_PX) {
                 s_touch_zone = 0; /* 边缘返回 */
             } else {
                 s_touch_zone = 3; /* 普通区：切换子页 */
@@ -1159,8 +1148,8 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
         }
         if (s_touch_zone == 0) {
             int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
-            if ((s_touch_start.x < WEATHER_EDGE_PX && dx > WEATHER_EDGE_SWIPE_PX) ||
-                (s_touch_start.x > scr_w - WEATHER_EDGE_PX && dx < -WEATHER_EDGE_SWIPE_PX)) {
+            if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > UI_GESTURE_EDGE_SWIPE_PX) ||
+                (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < -UI_GESTURE_EDGE_SWIPE_PX)) {
                 if (espaperplay_ui_page_depth() > 1) {
                     ESP_LOGI(TAG, "weather: edge swipe -> pop back");
                     espaperplay_ui_page_pop_lv();
@@ -1177,7 +1166,7 @@ static void weather_on_touch(const espaperplay_input_event_t *event) {
         if (s_touch_zone == 1) {
             return; /* 图表滚动区：交给 LVGL 滚动 */
         }
-        if (adx > WEATHER_SWIPE_PX && adx > ady * 1.2f) {
+        if (adx > UI_GESTURE_SWIPE_PX && adx > ady * 1.2f) {
             weather_show_page(s_page + (dx < 0 ? 1 : -1));
         }
     }

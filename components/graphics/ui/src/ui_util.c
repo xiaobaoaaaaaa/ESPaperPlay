@@ -121,6 +121,38 @@ const char *espaperplay_ui_path_basename(const char *path) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 页点指示器（分页）                                                    */
+/* ------------------------------------------------------------------ */
+
+void espaperplay_ui_pager_dots_create(lv_obj_t **dots, int count, int32_t scr_w, int y,
+                                      int spacing) {
+    if (dots == NULL || count <= 0) {
+        return;
+    }
+    if (spacing <= 0) {
+        spacing = 24;
+    }
+    for (int i = 0; i < count; i++) {
+        dots[i] = lv_obj_create(lv_screen_active());
+        lv_obj_set_size(dots[i], 10, 10);
+        lv_obj_set_pos(dots[i], (int)scr_w / 2 + (i - (count - 1) / 2) * spacing - 5, y);
+        lv_obj_set_style_radius(dots[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(dots[i], 1, 0);
+        lv_obj_set_style_border_color(dots[i], lv_color_black(), 0);
+        lv_obj_remove_flag(dots[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
+}
+
+void espaperplay_ui_pager_dots_set(lv_obj_t **dots, int count, int current) {
+    if (dots == NULL) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        lv_obj_set_style_bg_color(dots[i], i == current ? lv_color_black() : lv_color_white(), 0);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* WiFi 信号分档图标                                                     */
 /* ------------------------------------------------------------------ */
 

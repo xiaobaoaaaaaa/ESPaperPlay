@@ -15,6 +15,7 @@
 
 #include "espaperplay_clock.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_config.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_power.h"
@@ -62,8 +63,6 @@ static const char *TAG = "ESPaperPlay_UI";
 
 #define HOME_STATUS_H_PX 30       /* 状态栏高度 */
 #define HOME_SWIPE_THRESH_PX 90   /* 滑动切页位移阈值 */
-#define HOME_CLICK_MAX_PX 15      /* 点击允许的最大位移（防抖） */
-#define HOME_SWIPE_MIN_RATIO 1.2f /* 横向位移 / 纵向位移 最小比例 */
 #define HOME_UI_PERIOD_MS 1000    /* 时间/状态轮询周期（秒级响应；内容未变不刷新 EPD） */
 
 #define HOME_APP_CNT 4  /* 应用数量 */
@@ -361,15 +360,7 @@ static void home_dots_create(lv_obj_t *scr) {
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    for (int i = 0; i < HOME_PAGE_CNT; i++) {
-        s_dots[i] = lv_obj_create(scr);
-        lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (HOME_PAGE_CNT - 1) / 2) * 28 - 5, scr_h - 20);
-        lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_dots[i], 1, 0);
-        lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
+    espaperplay_ui_pager_dots_create(s_dots, HOME_PAGE_CNT, scr_w, scr_h - 20, 28);
 }
 
 /* ------------------------------------------------------------------ */
@@ -472,9 +463,7 @@ static void home_show_page(int idx) {
         home_refresh(); /* 进入信息页立即刷新（时钟/天气不依赖下一次定时器） */
     }
 
-    for (int i = 0; i < HOME_PAGE_CNT; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
-    }
+    espaperplay_ui_pager_dots_set(s_dots, HOME_PAGE_CNT, idx);
     ESP_LOGI(TAG, "home: page %d", idx);
 }
 
@@ -528,9 +517,7 @@ static void home_enter(void) {
 
     /* 初始显示页 0；页 1 隐藏。 */
     lv_obj_add_flag(s_page1, LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < HOME_PAGE_CNT; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == 0 ? lv_color_black() : lv_color_white(), 0);
-    }
+    espaperplay_ui_pager_dots_set(s_dots, HOME_PAGE_CNT, 0);
 
     s_timer = lv_timer_create(home_timer_cb, HOME_UI_PERIOD_MS, NULL);
     if (s_timer == NULL) {
@@ -582,10 +569,10 @@ static void home_on_touch(const espaperplay_input_event_t *event) {
         const int adx = abs(dx);
         const int ady = abs(dy);
 
-        if (adx > HOME_SWIPE_THRESH_PX && adx > ady * HOME_SWIPE_MIN_RATIO) {
+        if (adx > HOME_SWIPE_THRESH_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
             /* 横向滑动：切页 */
             home_show_page(s_page + (dx < 0 ? 1 : -1));
-        } else if (s_touch_card >= 0 && adx <= HOME_CLICK_MAX_PX && ady <= HOME_CLICK_MAX_PX) {
+        } else if (s_touch_card >= 0 && adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
             /* 小位移 + 起点在卡片内：点击进入应用 */
             home_open_app(s_touch_card);
         }

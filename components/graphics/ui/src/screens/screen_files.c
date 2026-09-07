@@ -25,6 +25,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_ui_modal.h"
 #include "espcache.h"
 #include "espaperplay_fs.h"
@@ -82,15 +83,7 @@ static const char *TAG = "ESPaperPlay_UI";
  * （防误触丢输入），必须显式取消 / 确定。
  */
 
-#define FILES_EDGE_PX 24                 /* 边缘滑动触发宽度（物理手势，不缩放） */
-#define FILES_EDGE_SWIPE_PX 70           /* 边缘向内滑动位移阈值（不缩放） */
-#define FILES_SWIPE_PX 90                /* 分页切换位移阈值（不缩放） */
-#define FILES_CLICK_MAX_PX 15            /* 点击允许的最大位移（防抖，不缩放） */
-#define FILES_SWIPE_MIN_RATIO 1.2f       /* 横向位移 / 纵向位移 最小比例 */
 #define FILES_MARGIN 16                  /* 卡片与屏幕边缘间距 */
-#define FILES_LONG_PRESS_MS 600          /* 长按判定时长 */
-#define FILES_MODAL_GUARD_MS 300         /* 按住期间弹出模态的点击抑制下限 */
-#define FILES_MODAL_RELEASE_GRACE_MS 150 /* 观察到物理释放后的额外抑制宽限 */
 
 /* ---- 尺寸缩放（与设置页同方案：垂直尺寸按屏高缩放并设下限） ---- */
 #define FILES_REF_H 800       /* 基准逻辑高度（缩放参考） */
@@ -573,9 +566,7 @@ static void files_show_page(int idx) {
             lv_obj_add_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
-    for (int i = 0; i < s_page_count; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == idx ? lv_color_black() : lv_color_white(), 0);
-    }
+    espaperplay_ui_pager_dots_set(s_dots, s_page_count, idx);
     ESP_LOGI(TAG, "files: page %d/%d", idx + 1, s_page_count);
 }
 
@@ -679,17 +670,9 @@ static void files_scan(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
-    for (int i = 0; i < s_page_count && i < FILES_PAGE_MAX; i++) {
-        s_dots[i] = lv_obj_create(lv_screen_active());
-        lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (s_page_count - 1) / 2) * 24 - 5,
-                       s_bottom_y - 18);
-        lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_dots[i], 1, 0);
-        lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_bg_color(s_dots[i], i == s_page ? lv_color_black() : lv_color_white(), 0);
-    }
+    const int dot_cnt = s_page_count < FILES_PAGE_MAX ? s_page_count : FILES_PAGE_MAX;
+    espaperplay_ui_pager_dots_create(s_dots, dot_cnt, scr_w, s_bottom_y - 18, 0);
+    espaperplay_ui_pager_dots_set(s_dots, dot_cnt, s_page);
 
     files_page_build(s_page);
     espaperplay_ui_status_bar_refresh(s_bar);
@@ -833,7 +816,7 @@ static lv_obj_t *files_modal_base(const char *title, const char *msg, int card_h
 
     /* 按住期间打开的模态：开启点击抑制（下限 300ms，并跟踪首次物理释放
      * 以延长窗口，见 files_modal_click_ok 说明）。 */
-    s_modal_guard_until = mid_press ? (lv_tick_get() + FILES_MODAL_GUARD_MS) : 0;
+    s_modal_guard_until = mid_press ? (lv_tick_get() + UI_GESTURE_MODAL_GUARD_MS) : 0;
     s_modal_track_release = mid_press;
     return card;
 }
@@ -1358,7 +1341,7 @@ static void files_on_touch(const espaperplay_input_event_t *event) {
      * 读周期（~30ms），确保迟到的 phantom CLICKED 仍落在窗口内。 */
     if (!event->touch_pressed && s_modal_track_release) {
         s_modal_track_release = false;
-        const uint32_t until = lv_tick_get() + FILES_MODAL_RELEASE_GRACE_MS;
+        const uint32_t until = lv_tick_get() + UI_GESTURE_MODAL_RELEASE_GRACE_MS;
         if ((int32_t)(until - s_modal_guard_until) > 0) {
             s_modal_guard_until = until;
         }
@@ -1389,9 +1372,9 @@ static void files_on_touch(const espaperplay_input_event_t *event) {
 
         /* 长按判定（仅条目）：按住达阈值且位移极小，立即弹菜单（不等抬起；
          * 触发后锁存等释放——不用 lv_timer，见文件头说明）。 */
-        if (s_touch_hit >= 0 && lv_tick_elaps(s_touch_down_tick) >= FILES_LONG_PRESS_MS &&
-            abs(p.x - s_touch_start.x) <= FILES_CLICK_MAX_PX &&
-            abs(p.y - s_touch_start.y) <= FILES_CLICK_MAX_PX) {
+        if (s_touch_hit >= 0 && lv_tick_elaps(s_touch_down_tick) >= UI_GESTURE_LONG_PRESS_MS &&
+            abs(p.x - s_touch_start.x) <= UI_GESTURE_CLICK_MAX_PX &&
+            abs(p.y - s_touch_start.y) <= UI_GESTURE_CLICK_MAX_PX) {
             const int idx = s_touch_hit;
             s_touch_down = false;
             s_touch_hit = -1;
@@ -1417,10 +1400,10 @@ static void files_on_touch(const espaperplay_input_event_t *event) {
     s_touch_btn = -1;
 
     /* 边缘向内滑动返回主页（横向为主，避免与分页切换冲突）。 */
-    if (adx > FILES_EDGE_SWIPE_PX && adx > ady * FILES_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_EDGE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         const int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
-        if ((s_touch_start.x < FILES_EDGE_PX && dx > 0) ||
-            (s_touch_start.x > scr_w - FILES_EDGE_PX && dx < 0)) {
+        if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > 0) ||
+            (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < 0)) {
             if (espaperplay_ui_page_depth() > 1) {
                 ESP_LOGI(TAG, "files: edge swipe -> pop back");
                 espaperplay_ui_page_pop_lv();
@@ -1430,15 +1413,15 @@ static void files_on_touch(const espaperplay_input_event_t *event) {
     }
 
     /* 中间横向滑动：切换分页（优先于点击）。 */
-    if (adx > FILES_SWIPE_PX && adx > ady * FILES_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         files_show_page(s_page + (dx < 0 ? 1 : -1));
         return;
     }
 
     /* 小位移 + 时长在长按阈值以下：点击触发（达到长按阈值的笔画不再按
      * 点击处理，防止长按松手误触发）。 */
-    if (adx <= FILES_CLICK_MAX_PX && ady <= FILES_CLICK_MAX_PX &&
-        lv_tick_elaps(s_touch_down_tick) < FILES_LONG_PRESS_MS) {
+    if (adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX &&
+        lv_tick_elaps(s_touch_down_tick) < UI_GESTURE_LONG_PRESS_MS) {
         if (hit >= 0) {
             files_entry_activate(hit);
         } else if (btn == 0) {

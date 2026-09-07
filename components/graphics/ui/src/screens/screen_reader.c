@@ -13,6 +13,7 @@
 
 #include "espaperplay_fonts.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_ui_modal.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
@@ -52,11 +53,6 @@ static const char *TAG = "ESPaperPlay_UI";
 #define READER_MARGIN 16
 #define READER_STATUS_H 30
 #define READER_FOOTER_H 30
-#define READER_EDGE_PX 24
-#define READER_EDGE_SWIPE_PX 70
-#define READER_SWIPE_PX 90
-#define READER_CLICK_MAX_PX 15
-#define READER_SWIPE_MIN_RATIO 1.2f
 
 /* 字号档位（固定集合，避免挤爆 FreeType 缓存） */
 static const int READER_FONT_SIZES[] = {16, 20, 24, 32};
@@ -2088,12 +2084,12 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
     const int ady = abs(dy);
 
     /* 边缘向内滑动：返回 */
-    if (adx > READER_EDGE_SWIPE_PX && adx > ady * READER_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_EDGE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
         espaperplay_ui_screen_size(&scr_w, &scr_h);
-        if ((s_touch_start.x < READER_EDGE_PX && dx > 0) ||
-            (s_touch_start.x > scr_w - READER_EDGE_PX && dx < 0)) {
+        if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > 0) ||
+            (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < 0)) {
             if (espaperplay_ui_page_depth() > 1) {
                 ESP_LOGI(TAG, "reader: edge swipe -> back");
                 espaperplay_ui_page_pop_lv();
@@ -2103,7 +2099,7 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
     }
 
     /* 横滑：左滑下一页 / 右滑上一页 */
-    if (adx > READER_SWIPE_PX && adx > ady * READER_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         if (dx < 0) {
             reader_next_page();
         } else {
@@ -2114,7 +2110,7 @@ static void reader_on_touch(const espaperplay_input_event_t *event) {
 
     /* 点击分区：左 1/3 上一页，右 1/3 下一页，中 1/3 展开底边栏（判定用按下
      * 起点，释放帧事件不带坐标；详见 input_touch_event_cb）。 */
-    if (adx <= READER_CLICK_MAX_PX && ady <= READER_CLICK_MAX_PX) {
+    if (adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
         espaperplay_ui_screen_size(&scr_w, &scr_h);

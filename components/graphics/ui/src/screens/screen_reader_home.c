@@ -17,6 +17,7 @@
 
 #include "espaperplay_config.h"
 #include "espaperplay_ui_util.h"
+#include "espaperplay_ui_gesture.h"
 #include "espaperplay_ui_modal.h"
 #include "espaperplay_fonts.h"
 #include "espaperplay_input.h"
@@ -51,17 +52,9 @@ static const char *TAG = "ESPaperPlay_UI";
  * 手势：边缘向内滑动返回；点击块打开；长按历史块删除记录；单键返回。
  */
 
-#define RDH_EDGE_PX 24
-#define RDH_EDGE_SWIPE_PX 70
-#define RDH_CLICK_MAX_PX 15
-#define RDH_SWIPE_MIN_RATIO 1.2f
-#define RDH_SWIPE_PX 90 /* 分页切换位移阈值 */
 #define RDH_MARGIN 16
 #define RDH_BAR_H 30
 #define RDH_TAB_H 40
-#define RDH_LONG_PRESS_MS 600
-#define RDH_MODAL_GUARD_MS 300
-#define RDH_MODAL_RELEASE_GRACE_MS 150
 
 #define RDH_BOOKS_MAX 200 /* 递归扫描条目上限 */
 #define RDH_DEPTH_MAX 6   /* 递归深度上限 */
@@ -409,9 +402,7 @@ static void rdh_show_page(int idx) {
     }
     s_page = idx;
     rdh_build_grid();
-    for (int i = 0; i < s_page_count; i++) {
-        lv_obj_set_style_bg_color(s_dots[i], i == s_page ? lv_color_black() : lv_color_white(), 0);
-    }
+    espaperplay_ui_pager_dots_set(s_dots, s_page_count, s_page);
 }
 
 /** 重建整个列表（条目数/分页/提示），LVGL 线程内调用。 */
@@ -454,17 +445,9 @@ static void rdh_rebuild(void) {
     int32_t scr_w = 0;
     int32_t scr_h = 0;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
-    const int dots_y = s_bottom_y - 18;
-    for (int i = 0; i < s_page_count && i < RDH_PAGE_MAX; i++) {
-        s_dots[i] = lv_obj_create(lv_screen_active());
-        lv_obj_set_size(s_dots[i], 10, 10);
-        lv_obj_set_pos(s_dots[i], scr_w / 2 + (i - (s_page_count - 1) / 2) * 24 - 5, dots_y);
-        lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_dots[i], 1, 0);
-        lv_obj_set_style_border_color(s_dots[i], lv_color_black(), 0);
-        lv_obj_remove_flag(s_dots[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_bg_color(s_dots[i], i == s_page ? lv_color_black() : lv_color_white(), 0);
-    }
+    const int dot_cnt = s_page_count < RDH_PAGE_MAX ? s_page_count : RDH_PAGE_MAX;
+    espaperplay_ui_pager_dots_create(s_dots, dot_cnt, scr_w, s_bottom_y - 18, 0);
+    espaperplay_ui_pager_dots_set(s_dots, dot_cnt, s_page);
 
     rdh_build_grid();
     espaperplay_ui_status_bar_refresh(s_bar);
@@ -681,7 +664,7 @@ static void rdh_delete_history(int idx) {
     s_pending_hist_idx = idx;
     rdh_confirm_open("删除记录", msg, false);
     /* 长按期间打开模态：启用点击抑制（与文件页同款） */
-    s_modal_guard_until = lv_tick_get() + RDH_MODAL_GUARD_MS;
+    s_modal_guard_until = lv_tick_get() + UI_GESTURE_MODAL_GUARD_MS;
     s_modal_track_release = true;
 }
 
@@ -899,7 +882,7 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
     /* 长按打开模态：观察其后的首次物理释放并延长抑制窗口 */
     if (!event->touch_pressed && s_modal_track_release) {
         s_modal_track_release = false;
-        const uint32_t until = lv_tick_get() + RDH_MODAL_RELEASE_GRACE_MS;
+        const uint32_t until = lv_tick_get() + UI_GESTURE_MODAL_RELEASE_GRACE_MS;
         if ((int32_t)(until - s_modal_guard_until) > 0) {
             s_modal_guard_until = until;
         }
@@ -926,9 +909,9 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
 
         /* 长按判定（仅历史块）：按住达阈值且位移极小，弹删除确认 */
         if (s_touch_hit >= 0 && s_tab == 0 &&
-            lv_tick_elaps(s_touch_down_tick) >= RDH_LONG_PRESS_MS &&
-            abs(p.x - s_touch_start.x) <= RDH_CLICK_MAX_PX &&
-            abs(p.y - s_touch_start.y) <= RDH_CLICK_MAX_PX) {
+            lv_tick_elaps(s_touch_down_tick) >= UI_GESTURE_LONG_PRESS_MS &&
+            abs(p.x - s_touch_start.x) <= UI_GESTURE_CLICK_MAX_PX &&
+            abs(p.y - s_touch_start.y) <= UI_GESTURE_CLICK_MAX_PX) {
             const int idx = s_touch_hit;
             s_touch_down = false;
             s_touch_hit = -1;
@@ -951,12 +934,12 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
     s_touch_hit = -1;
 
     /* 边缘向内滑动返回 */
-    if (adx > RDH_EDGE_SWIPE_PX && adx > ady * RDH_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_EDGE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         int32_t scr_w = 0;
         int32_t scr_h = 0;
         espaperplay_ui_screen_size(&scr_w, &scr_h);
-        if ((s_touch_start.x < RDH_EDGE_PX && dx > 0) ||
-            (s_touch_start.x > scr_w - RDH_EDGE_PX && dx < 0)) {
+        if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > 0) ||
+            (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < 0)) {
             if (espaperplay_ui_page_depth() > 1) {
                 ESP_LOGI(TAG, "rdh: edge swipe -> pop back");
                 espaperplay_ui_page_pop_lv();
@@ -966,13 +949,13 @@ static void rdh_on_touch(const espaperplay_input_event_t *event) {
     }
 
     /* 中间横向滑动：切换分页（优先于点击，与文件/设置页一致） */
-    if (adx > RDH_SWIPE_PX && adx > ady * RDH_SWIPE_MIN_RATIO) {
+    if (adx > UI_GESTURE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
         rdh_show_page(s_page + (dx < 0 ? 1 : -1));
         return;
     }
 
     /* 小位移点击：块 -> 打开；选项卡按钮由 LVGL 控件处理 */
-    if (adx <= RDH_CLICK_MAX_PX && ady <= RDH_CLICK_MAX_PX) {
+    if (adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
         if (hit >= 0) {
             if (s_tab == 0) {
                 ESP_LOGI(TAG, "rdh: open history %s", s_hist[hit].path);

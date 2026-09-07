@@ -78,6 +78,24 @@ bool espaperplay_ui_path_join(char *dst, size_t n, const char *a, const char *b)
 const char *espaperplay_ui_path_basename(const char *path);
 
 /* ------------------------------------------------------------------ */
+/* 页点指示器（分页）                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief 创建页点指示器：count 个 10px 圆点水平居中于 scr_w。
+ * @param dots    输出对象数组（调用方持有，用于后续着色/删除）。
+ * @param count   页数。
+ * @param scr_w   屏宽（居中基准）。
+ * @param y       圆点顶部 y（常用 scr_h - 18，或底部栏上方）。
+ * @param spacing 圆点中心间距（像素；0 = 默认 24）。
+ */
+void espaperplay_ui_pager_dots_create(lv_obj_t **dots, int count, int32_t scr_w, int y,
+                                      int spacing);
+
+/** @brief 页点着色：current 页黑（实心），其余白（黑边空心）。 */
+void espaperplay_ui_pager_dots_set(lv_obj_t **dots, int count, int current);
+
+/* ------------------------------------------------------------------ */
 /* WiFi 信号分档图标                                                     */
 /* ------------------------------------------------------------------ */
 
