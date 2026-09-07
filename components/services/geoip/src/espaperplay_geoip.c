@@ -12,7 +12,7 @@
 #include "freertos/FreeRTOS.h"
 
 #include "esp_crt_bundle.h"
-#include "esp_http_client.h"
+#include "nethttp.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -98,92 +98,14 @@ static void geoip_cache_store_locked(const char *ip, const espaperplay_geoip_inf
 /* HTTPS GET 辅助（本组件自包含，不与其他服务共享）                        */
 /* ------------------------------------------------------------------ */
 
-/** 响应累积缓冲。 */
-typedef struct {
-    char *data; /*!< 已接收的响应体（NUL 结尾） */
-    size_t len; /*!< 已接收字节数（不含结尾 NUL） */
-    size_t cap; /*!< 已分配容量 */
-} geoip_resp_t;
-
-/** esp_http_client 事件回调：把响应体分块累积进缓冲。 */
-static esp_err_t geoip_http_event_handler(esp_http_client_event_t *evt) {
-    geoip_resp_t *resp = (geoip_resp_t *)evt->user_data;
-    if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
-        size_t need = resp->len + evt->data_len + 1;
-        if (need > ESPAPERPLAY_GEOIP_RESP_MAX_LEN) {
-            ESP_LOGW(TAG, "response too large (%u bytes), aborting", (unsigned)need);
-            return ESP_FAIL;
-        }
-        if (need > resp->cap) {
-            size_t new_cap = resp->cap ? resp->cap : 512;
-            while (new_cap < need) {
-                new_cap *= 2;
-            }
-            char *new_data = realloc(resp->data, new_cap);
-            if (new_data == NULL) {
-                return ESP_FAIL;
-            }
-            resp->data = new_data;
-            resp->cap = new_cap;
-        }
-        memcpy(resp->data + resp->len, evt->data, evt->data_len);
-        resp->len += evt->data_len;
-        resp->data[resp->len] = '\0';
-    }
-    return ESP_OK;
-}
-
-/**
- * @brief 发起一次 HTTPS GET 请求并返回完整响应体。
- *
- * 使用 ESP-IDF 内置 CA 证书包（esp_crt_bundle）校验服务器证书。
- *
- * @param url        请求地址（非空）。
- * @param out_body   成功时输出 malloc 的响应体字符串（调用方负责 free）。
- *
- * @return ESP_OK 且 HTTP 状态为 200 时成功，否则返回错误码。
- */
+/** 发起一次 HTTPS GET（公共 nethttp 客户端；512B 起倍增，响应上限见宏）。 */
 static esp_err_t geoip_http_get(const char *url, char **out_body) {
-    geoip_resp_t resp = {0};
-
-    esp_http_client_config_t cfg = {
+    const nethttp_cfg_t cfg = {
         .url = url,
-        .method = HTTP_METHOD_GET,
         .timeout_ms = ESPAPERPLAY_GEOIP_HTTP_TIMEOUT_MS,
-        .disable_auto_redirect = true,
-        .event_handler = geoip_http_event_handler,
-        .user_data = &resp,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .max_len = ESPAPERPLAY_GEOIP_RESP_MAX_LEN,
     };
-
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client == NULL) {
-        ESP_LOGE(TAG, "failed to init http client");
-        return ESP_ERR_NO_MEM;
-    }
-
-    esp_err_t err = esp_http_client_perform(client);
-    int status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "http request failed: %s", esp_err_to_name(err));
-        free(resp.data);
-        return err;
-    }
-    if (status != 200) {
-        ESP_LOGE(TAG, "unexpected http status: %d", status);
-        free(resp.data);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-    if (resp.data == NULL || resp.len == 0) {
-        ESP_LOGE(TAG, "empty response body");
-        free(resp.data);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    *out_body = resp.data;
-    return ESP_OK;
+    return nethttp_get(&cfg, out_body, NULL);
 }
 
 /* ------------------------------------------------------------------ */

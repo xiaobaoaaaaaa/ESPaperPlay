@@ -13,12 +13,12 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "nethttp.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -331,31 +331,6 @@ static uint64_t weather_now_ms(void) {
 /* HTTP 层                                                              */
 /* ------------------------------------------------------------------ */
 
-/** 响应累积缓冲（data 由调用方按 max 一次性分配，避免 realloc 增长
- *  在内部 RAM 制造碎片；>=8KB 的大缓冲随 SPIRAM_MALLOC_ALWAYSINTERNAL
- *  阈值自动落入 PSRAM）。 */
-typedef struct {
-    char *data; /*!< 响应体缓冲（NUL 结尾） */
-    size_t len; /*!< 已接收字节数（不含结尾 NUL） */
-    size_t max; /*!< 缓冲容量（= 允许的最大字节数） */
-} weather_resp_t;
-
-/** esp_http_client 事件回调：把响应体分块累积进预分配的缓冲。 */
-static esp_err_t weather_http_event_handler(esp_http_client_event_t *evt) {
-    weather_resp_t *resp = (weather_resp_t *)evt->user_data;
-    if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data_len > 0) {
-        size_t need = resp->len + evt->data_len + 1;
-        if (need > resp->max) {
-            ESP_LOGW(TAG, "response too large (%u bytes), aborting", (unsigned)need);
-            return ESP_FAIL;
-        }
-        memcpy(resp->data + resp->len, evt->data, evt->data_len);
-        resp->len += evt->data_len;
-        resp->data[resp->len] = '\0';
-    }
-    return ESP_OK;
-}
-
 /** gzip 魔数（RFC 1952：0x1f 0x8b）。 */
 #define WEATHER_GZIP_MAGIC_1 0x1f
 #define WEATHER_GZIP_MAGIC_2 0x8b
@@ -453,10 +428,8 @@ static void weather_log_body_preview(const char *body, size_t len) {
 /**
  * @brief 发起一次携带 API Key 的 HTTPS GET 请求并返回完整响应体。
  *
- * 使用 ESP-IDF 内置 CA 证书包（esp_crt_bundle）校验服务器证书；API Key
- * 通过 X-QW-Api-Key 请求头传递。瞬时连接失败（connect 被拒 / 连接被对端
- * 关闭 / 超时）自动重试 WEATHER_HTTP_MAX_RETRIES 次（退避 300/600ms），
- * 用于自愈 LWIP 连接池暂满（TIME_WAIT 堆积）等场景。
+ * 实际请求由公共 nethttp 客户端执行（预分配缓冲 + 瞬时失败重试 + 附加
+ * 请求头）；本函数只负责和风特有的 gzip 检测解压与失败时的内存诊断。
  *
  * @param url     请求地址（非空）。
  * @param api_key API Key（非空）。
@@ -467,91 +440,47 @@ static void weather_log_body_preview(const char *body, size_t len) {
  */
 static esp_err_t weather_http_get(const char *url, const char *api_key, size_t max_len,
                                   char **out_body) {
-    for (int attempt = 0;; attempt++) {
-        /* 响应缓冲按上限一次性分配（大缓冲落 PSRAM，不做 realloc 增长）。 */
-        weather_resp_t resp = {0};
-        resp.max = max_len;
-        resp.data = malloc(max_len + 1);
-        if (resp.data == NULL) {
-            ESP_LOGE(TAG, "failed to allocate response buffer (%u bytes)", (unsigned)max_len);
-            return ESP_ERR_NO_MEM;
-        }
-        resp.data[0] = '\0';
-
-        esp_http_client_config_t cfg = {
-            .url = url,
-            .method = HTTP_METHOD_GET,
-            .timeout_ms = ESPAPERPLAY_WEATHER_HTTP_TIMEOUT_MS,
-            .disable_auto_redirect = true,
-            .event_handler = weather_http_event_handler,
-            .user_data = &resp,
-            .crt_bundle_attach = esp_crt_bundle_attach,
-        };
-
-        esp_http_client_handle_t client = esp_http_client_init(&cfg);
-        if (client == NULL) {
-            ESP_LOGE(TAG, "failed to init http client");
-            free(resp.data);
-            return ESP_ERR_NO_MEM;
-        }
-        esp_http_client_set_header(client, "X-QW-Api-Key", api_key);
-        /* 明确要求不压缩：esp_http_client 不解压 gzip，防止服务端按
-         * Accept-Encoding 返回压缩体导致 JSON 解析失败。 */
-        esp_http_client_set_header(client, "Accept-Encoding", "identity");
-
-        esp_err_t err = esp_http_client_perform(client);
-        int status = esp_http_client_get_status_code(client);
-        esp_http_client_cleanup(client);
-
-        /* 瞬时连接失败：重试（最多 WEATHER_HTTP_MAX_RETRIES 次，指数退避）。 */
-        const bool transient = (err == ESP_ERR_HTTP_CONNECT || err == ESP_ERR_HTTP_CONNECTION_CLOSED ||
-                                err == ESP_ERR_TIMEOUT);
-        if (transient && attempt < WEATHER_HTTP_MAX_RETRIES) {
-            ESP_LOGW(TAG, "http request failed (%s), retrying %d/%d",
-                     esp_err_to_name(err), attempt + 1, WEATHER_HTTP_MAX_RETRIES);
-            vTaskDelay(pdMS_TO_TICKS(300u << attempt));
-            free(resp.data);
-            continue;
-        }
-
-        if (err != ESP_OK) {
-            /* 输出内存诊断：区分内部 RAM 不足（TLS 缓冲分配失败）与网络问题。 */
-            ESP_LOGE(TAG,
-                     "http request failed: %s (heap internal free=%u largest=%u, total free=%u)",
-                     esp_err_to_name(err), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                     (unsigned)esp_get_free_heap_size());
-            free(resp.data);
-            return err;
-        }
-        if (status != 200) {
-            ESP_LOGE(TAG, "unexpected http status: %d", status);
-            free(resp.data);
-            return ESP_ERR_INVALID_RESPONSE;
-        }
-        if (resp.data == NULL || resp.len == 0) {
-            ESP_LOGE(TAG, "empty response body");
-            free(resp.data);
-            return ESP_ERR_INVALID_RESPONSE;
-        }
-
-        /* 和风天气 API 默认 gzip 压缩：检测魔数并解压（esp_http_client 不自动解压）。 */
-        if (resp.len >= 2 && (uint8_t)resp.data[0] == WEATHER_GZIP_MAGIC_1 &&
-            (uint8_t)resp.data[1] == WEATHER_GZIP_MAGIC_2) {
-            ESP_LOGD(TAG, "response is gzip (%u bytes), inflating", (unsigned)resp.len);
-            size_t plain_len = 0;
-            char *plain = weather_inflate(resp.data, resp.len, max_len, &plain_len);
-            free(resp.data);
-            if (plain == NULL) {
-                return ESP_ERR_INVALID_RESPONSE;
-            }
-            resp.data = plain;
-            resp.len = plain_len;
-        }
-
-        *out_body = resp.data;
-        return ESP_OK;
+    const char *const headers[] = {"X-QW-Api-Key", api_key,
+                                   /* 明确要求不压缩：esp_http_client 不解压 gzip，防止
+                                    * 服务端按 Accept-Encoding 返回压缩体导致 JSON
+                                    * 解析失败（部分响应仍可能 gzip，下方按魔数兜底）。 */
+                                   "Accept-Encoding", "identity",
+                                   NULL};
+    const nethttp_cfg_t cfg = {
+        .url = url,
+        .timeout_ms = ESPAPERPLAY_WEATHER_HTTP_TIMEOUT_MS,
+        .max_len = max_len,
+        .prealloc = true,
+        .headers = headers,
+        .max_retries = WEATHER_HTTP_MAX_RETRIES,
+    };
+    char *body = NULL;
+    size_t body_len = 0;
+    const esp_err_t err = nethttp_get(&cfg, &body, &body_len);
+    if (err != ESP_OK) {
+        /* 输出内存诊断：区分内部 RAM 不足（TLS 缓冲分配失败）与网络问题。 */
+        ESP_LOGE(TAG, "http request failed: %s (heap internal free=%u largest=%u, total free=%u)",
+                 esp_err_to_name(err), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)esp_get_free_heap_size());
+        return err;
     }
+
+    /* 和风天气 API 默认 gzip 压缩：检测魔数并解压（esp_http_client 不自动解压）。 */
+    if (body_len >= 2 && (uint8_t)body[0] == WEATHER_GZIP_MAGIC_1 &&
+        (uint8_t)body[1] == WEATHER_GZIP_MAGIC_2) {
+        ESP_LOGD(TAG, "response is gzip (%u bytes), inflating", (unsigned)body_len);
+        size_t plain_len = 0;
+        char *plain = weather_inflate(body, body_len, max_len, &plain_len);
+        free(body);
+        if (plain == NULL) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        body = plain;
+    }
+
+    *out_body = body;
+    return ESP_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2351,13 +2280,6 @@ void espaperplay_weather_cache_clear(void) {
 /* 后台任务                                                             */
 /* ------------------------------------------------------------------ */
 
-/** 判断设备是否处于已联网的 STA 模式。 */
-static bool weather_wifi_sta_online(void) {
-    espaperplay_wifi_status_t status;
-    return espaperplay_wifi_get_status(&status) == ESP_OK && status.started && status.connected &&
-           status.mode == ESPAPERPLAY_WIFI_MODE_STA;
-}
-
 /** 后台刷新任务：等待联网后按周期刷新，可被 xTaskNotify 唤醒立即刷新。 */
 static void weather_task(void *arg) {
     (void)arg;
@@ -2365,11 +2287,11 @@ static void weather_task(void *arg) {
 
     /* 启动时等待 STA 联网（超时后仍进入主循环，断网时自动空转）。 */
     int waited = 0;
-    while (waited < ESPAPERPLAY_WEATHER_WIFI_WAIT_MS && !weather_wifi_sta_online()) {
+    while (waited < ESPAPERPLAY_WEATHER_WIFI_WAIT_MS && !espaperplay_wifi_is_sta_online()) {
         vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_WEATHER_WIFI_POLL_MS));
         waited += ESPAPERPLAY_WEATHER_WIFI_POLL_MS;
     }
-    if (!weather_wifi_sta_online()) {
+    if (!espaperplay_wifi_is_sta_online()) {
         ESP_LOGW(TAG, "no STA network at startup, weather will be fetched once online");
     }
 
@@ -2378,7 +2300,7 @@ static void weather_task(void *arg) {
         if (s_refresh_done != NULL) {
             xEventGroupClearBits(s_refresh_done, BIT(0));
         }
-        if (weather_wifi_sta_online()) {
+        if (espaperplay_wifi_is_sta_online()) {
             esp_err_t err = espaperplay_weather_refresh();
             if (err == ESP_OK) {
                 s_last_refresh_ok_ms = esp_timer_get_time() / 1000LL;

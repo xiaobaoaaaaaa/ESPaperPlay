@@ -38,13 +38,6 @@ static TaskHandle_t s_task = NULL;
 static esp_event_handler_instance_t s_ip_instance = NULL;
 static bool s_synced = false;
 
-/** 判断当前是否已通过 STA 获取 IP（可上网）。 */
-static bool nettime_wifi_sta_online(void) {
-    espaperplay_wifi_status_t status;
-    return espaperplay_wifi_get_status(&status) == ESP_OK && status.started && status.connected &&
-           status.mode == ESPAPERPLAY_WIFI_MODE_STA;
-}
-
 /** IP 事件回调：STA 获取 IP 后立即唤醒同步任务，实现“联网后及时对时”。 */
 static void nettime_on_got_ip(void *arg, esp_event_base_t event_base, int32_t event_id,
                               void *event_data) {
@@ -132,7 +125,7 @@ static void nettime_task(void *arg) {
 
     while (1) {
         /* 等待 STA 联网：未联网时阻塞等待 IP 事件通知，超时则轮询一次，避免事件丢失。 */
-        while (!nettime_wifi_sta_online()) {
+        while (!espaperplay_wifi_is_sta_online()) {
             ESP_LOGD(TAG, "waiting for STA network...");
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ESPAPERPLAY_NETTIME_POLL_INTERVAL_MS));
         }

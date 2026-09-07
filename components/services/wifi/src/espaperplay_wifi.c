@@ -526,6 +526,12 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi) {
 
 bool espaperplay_wifi_is_connected(void) { return s_connected; }
 
+bool espaperplay_wifi_is_sta_online(void) {
+    espaperplay_wifi_status_t status;
+    return espaperplay_wifi_get_status(&status) == ESP_OK && status.started &&
+           status.connected && status.mode == ESPAPERPLAY_WIFI_MODE_STA;
+}
+
 esp_err_t espaperplay_wifi_scan_start(void) {
     if (s_scan_mutex == NULL || xSemaphoreTake(s_scan_mutex, pdMS_TO_TICKS(8000)) != pdTRUE) {
         return ESP_ERR_INVALID_STATE; /* 已有扫描在进行或服务未初始化 */

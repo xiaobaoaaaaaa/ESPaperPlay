@@ -122,6 +122,15 @@ esp_err_t espaperplay_wifi_get_rssi(int *out_rssi);
 bool espaperplay_wifi_is_connected(void);
 
 /**
+ * @brief 查询设备是否处于已联网的 STA 模式（可上网）。
+ *
+ * 此前 weather / nettime 各自维护一份逐字相同的私有实现，收口为单一实现。
+ *
+ * @return STA 已启动且已连接时返回 true（AP 模式返回 false）。
+ */
+bool espaperplay_wifi_is_sta_online(void);
+
+/**
  * @brief 扫描附近 AP（阻塞式，全程约 2~4 秒）。
  *
  * 结果按 RSSI 降序、按 SSID 去重（保留最强信号）写入内部缓存，经
