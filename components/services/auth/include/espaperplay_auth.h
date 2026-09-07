@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "espaperplay_nvs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +29,20 @@ extern "C" {
  */
 
 /** NVS 配置命名空间。 */
-#define ESPAPERPLAY_AUTH_NVS_NAMESPACE "auth"
+/**
+ * @brief 恒定时间比较（时序侧信道防护；auth/session 共用单一实现）。
+ * @return 0=相等，非 0=不等（不泄露差异位置）。
+ */
+uint8_t espaperplay_crypto_secure_memcmp(const void *a, const void *b, size_t n);
+
+/**
+ * @brief 确保 PSA 密码学库已初始化（幂等）。
+ * @return ESP_OK=就绪；ESP_ERR_INVALID_STATE=初始化失败。
+ */
+esp_err_t espaperplay_crypto_ensure_init(void);
+
+/* 命名空间以 nvs 登记簿为唯一来源（factory_reset 依赖清单一致性）。 */
+#define ESPAPERPLAY_AUTH_NVS_NAMESPACE ESPAPERPLAY_NVS_NS_AUTH
 
 /** 密码最小长度（不含结尾 '\0'）。 */
 #define ESPAPERPLAY_AUTH_PASSWORD_MIN_LEN 8

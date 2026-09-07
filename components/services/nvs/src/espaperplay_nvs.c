@@ -22,6 +22,23 @@ static const char *const s_app_namespaces[] = {
     ESPAPERPLAY_NVS_NS_TLS,
 };
 
+esp_err_t espaperplay_nvs_flash_init_once(void) {
+    static bool s_done = false;
+    if (s_done) {
+        return ESP_OK;
+    }
+    /* 分区满或格式版本变化时先擦除重建。 */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS partition needs erase, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+    s_done = true;
+    return err;
+}
+
 esp_err_t espaperplay_nvs_factory_reset(void) {
     esp_err_t last_err = ESP_OK;
     for (size_t i = 0; i < sizeof(s_app_namespaces) / sizeof(s_app_namespaces[0]); i++) {

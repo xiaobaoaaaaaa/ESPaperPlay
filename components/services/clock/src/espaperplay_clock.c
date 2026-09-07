@@ -12,6 +12,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "espaperplay_nvs.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
@@ -24,7 +25,8 @@
 static const char *TAG = "ESPaperPlay_CLOCK";
 
 /** NVS 命名空间。 */
-#define ESPAPERPLAY_CLOCK_NVS_NAMESPACE "clock"
+/* 命名空间以 nvs 登记簿为唯一来源（factory_reset 依赖清单一致性）。 */
+#define ESPAPERPLAY_CLOCK_NVS_NAMESPACE ESPAPERPLAY_NVS_NS_CLOCK
 /** NVS 中保存时区名称的键。 */
 #define ESPAPERPLAY_CLOCK_NVS_KEY_TZ "tz"
 /** NVS 中保存漂移标定模型的键。 */

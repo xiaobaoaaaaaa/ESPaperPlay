@@ -29,6 +29,13 @@ extern "C" {
 #define ESPAPERPLAY_NVS_NS_TLS "tls"
 
 /**
+ * @brief 初始化 NVS 分区（幂等）；分区满或格式版本变化时先擦除重建。
+ *
+ * system / auth 等服务的 init 都走此单一实现（此前两份相同拷贝）。
+ */
+esp_err_t espaperplay_nvs_flash_init_once(void);
+
+/**
  * @brief 恢复出厂：擦除全部应用层 NVS 命名空间。
  *
  * 逐个擦除已知应用命名空间（system/auth/clock/tls）。命名空间不存在时

@@ -46,7 +46,8 @@ static bool s_configured = false;
  *
  * @return 相等返回 0，否则非 0（不泄露差异位置）。
  */
-static uint8_t secure_memcmp(const void *a, const void *b, size_t n) {
+/** 时序侧信道防护比较（单一实现，session/tls 共用；0=相等）。 */
+uint8_t espaperplay_crypto_secure_memcmp(const void *a, const void *b, size_t n) {
     const volatile uint8_t *pa = (const volatile uint8_t *)a;
     const volatile uint8_t *pb = (const volatile uint8_t *)b;
     uint8_t diff = 0;
@@ -54,6 +55,16 @@ static uint8_t secure_memcmp(const void *a, const void *b, size_t n) {
         diff |= (uint8_t)(pa[i] ^ pb[i]);
     }
     return diff;
+}
+
+esp_err_t espaperplay_crypto_ensure_init(void) {
+    /* PSA 密码学库（幂等；ESP-IDF 启动时通常已自动初始化）。 */
+    psa_status_t psa_status = psa_crypto_init();
+    if (psa_status != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "psa_crypto_init failed: %d", (int)psa_status);
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
 }
 
 /** 清零敏感缓冲区（防编译器优化掉）。 */
@@ -179,20 +190,12 @@ esp_err_t espaperplay_auth_init(void) {
         return ESP_OK;
     }
 
-    /* 初始化 NVS 分区；分区满或格式版本变化时先擦除重建。 */
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition needs erase, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
+    /* 初始化 NVS 分区（单一实现，幂等）。 */
+    esp_err_t err = espaperplay_nvs_flash_init_once();
 
-    /* 初始化 PSA 密码学库（幂等；ESP-IDF 启动时通常已自动初始化）。 */
-    psa_status_t psa_status = psa_crypto_init();
-    if (psa_status != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "psa_crypto_init failed: %d", (int)psa_status);
-        return ESP_ERR_INVALID_STATE;
+    err = espaperplay_crypto_ensure_init();
+    if (err != ESP_OK) {
+        return err;
     }
 
     err = auth_load();
@@ -228,7 +231,7 @@ esp_err_t espaperplay_auth_verify(const char *password) {
         secure_zeroize(derived, sizeof(derived));
         return err;
     }
-    uint8_t mismatch = secure_memcmp(derived, s_blob.derived, sizeof(derived));
+    uint8_t mismatch = espaperplay_crypto_secure_memcmp(derived, s_blob.derived, sizeof(derived));
     secure_zeroize(derived, sizeof(derived));
 
     return mismatch == 0 ? ESP_OK : ESP_ERR_NOT_ALLOWED;

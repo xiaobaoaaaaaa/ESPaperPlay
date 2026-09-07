@@ -16,6 +16,8 @@
 
 #include "espaperplay_session.h"
 
+#include "espaperplay_auth.h" /* crypto 单一实现 */
+
 static const char *TAG = "ESPaperPlay_SESSION";
 
 /* SHA-256 摘要长度（字节）。 */
@@ -48,17 +50,6 @@ static uint64_t s_lockout_until_ms;
 
 /** 当前时间（毫秒）。 */
 static uint64_t session_now_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
-
-/** 恒定时间比较，避免时序侧信道泄露比较结果。 */
-static uint8_t secure_memcmp(const void *a, const void *b, size_t n) {
-    const volatile uint8_t *pa = (const volatile uint8_t *)a;
-    const volatile uint8_t *pb = (const volatile uint8_t *)b;
-    uint8_t diff = 0;
-    for (size_t i = 0; i < n; i++) {
-        diff |= (uint8_t)(pa[i] ^ pb[i]);
-    }
-    return diff;
-}
 
 /** 计算 token 原始字节的 SHA-256 哈希。 */
 static esp_err_t hash_token(const uint8_t *raw, size_t len, uint8_t hash[SESSION_HASH_LEN]) {
@@ -118,7 +109,7 @@ static int session_find(const uint8_t *hash, uint64_t now) {
         if (!s_sessions[i].active) {
             continue;
         }
-        if (secure_memcmp(s_sessions[i].token_hash, hash, SESSION_HASH_LEN) != 0) {
+        if (espaperplay_crypto_secure_memcmp(s_sessions[i].token_hash, hash, SESSION_HASH_LEN) != 0) {
             continue;
         }
         if (s_sessions[i].last_active_ms + s_sessions[i].ttl_ms < now) {
@@ -158,11 +149,10 @@ esp_err_t espaperplay_session_init(void) {
         return ESP_OK;
     }
 
-    /* PSA 密码学库（幂等；ESP-IDF 启动时通常已自动初始化）。 */
-    psa_status_t psa_status = psa_crypto_init();
-    if (psa_status != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "psa_crypto_init failed: %d", (int)psa_status);
-        return ESP_ERR_INVALID_STATE;
+    /* PSA 密码学库（幂等，auth 组件单一实现）。 */
+    esp_err_t cerr = espaperplay_crypto_ensure_init();
+    if (cerr != ESP_OK) {
+        return cerr;
     }
 
     s_mutex = xSemaphoreCreateMutex();
@@ -261,6 +251,15 @@ esp_err_t espaperplay_session_create(uint32_t ttl_ms, char *token_buf, size_t to
     return ESP_OK;
 }
 
+/** token 前奏：hex 解码 + SHA-256（verify/renew/destroy 共用）。 */
+static esp_err_t session_token_to_hash(const char *token, uint8_t hash[SESSION_HASH_LEN]) {
+    uint8_t raw[ESPAPERPLAY_SESSION_TOKEN_LEN];
+    if (!from_hex(token, strlen(token), raw)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return hash_token(raw, sizeof(raw), hash);
+}
+
 esp_err_t espaperplay_session_verify(const char *token, espaperplay_session_id_t *out_id) {
     if (token == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -269,12 +268,8 @@ esp_err_t espaperplay_session_verify(const char *token, espaperplay_session_id_t
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t raw[ESPAPERPLAY_SESSION_TOKEN_LEN];
-    if (!from_hex(token, strlen(token), raw)) {
-        return ESP_ERR_INVALID_ARG;
-    }
     uint8_t hash[SESSION_HASH_LEN];
-    esp_err_t err = hash_token(raw, sizeof(raw), hash);
+    const esp_err_t err = session_token_to_hash(token, hash);
     if (err != ESP_OK) {
         return err;
     }
@@ -307,12 +302,8 @@ esp_err_t espaperplay_session_renew(const char *token, uint32_t ttl_ms) {
         ttl_ms = ESPAPERPLAY_SESSION_DEFAULT_TTL_MS;
     }
 
-    uint8_t raw[ESPAPERPLAY_SESSION_TOKEN_LEN];
-    if (!from_hex(token, strlen(token), raw)) {
-        return ESP_ERR_INVALID_ARG;
-    }
     uint8_t hash[SESSION_HASH_LEN];
-    esp_err_t err = hash_token(raw, sizeof(raw), hash);
+    const esp_err_t err = session_token_to_hash(token, hash);
     if (err != ESP_OK) {
         return err;
     }
@@ -338,12 +329,8 @@ esp_err_t espaperplay_session_destroy(const char *token) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t raw[ESPAPERPLAY_SESSION_TOKEN_LEN];
-    if (!from_hex(token, strlen(token), raw)) {
-        return ESP_ERR_INVALID_ARG;
-    }
     uint8_t hash[SESSION_HASH_LEN];
-    esp_err_t err = hash_token(raw, sizeof(raw), hash);
+    const esp_err_t err = session_token_to_hash(token, hash);
     if (err != ESP_OK) {
         return err;
     }
@@ -353,7 +340,7 @@ esp_err_t espaperplay_session_destroy(const char *token) {
     }
     for (int i = 0; i < ESPAPERPLAY_SESSION_MAX; i++) {
         if (s_sessions[i].active &&
-            secure_memcmp(s_sessions[i].token_hash, hash, SESSION_HASH_LEN) == 0) {
+            espaperplay_crypto_secure_memcmp(s_sessions[i].token_hash, hash, SESSION_HASH_LEN) == 0) {
             s_sessions[i].active = false;
             ESP_LOGI(TAG, "Session %lu destroyed", (unsigned long)s_sessions[i].id);
             break;

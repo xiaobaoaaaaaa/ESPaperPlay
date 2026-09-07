@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "espaperplay_nvs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,8 @@ extern "C" {
  */
 
 /** NVS 配置命名空间。 */
-#define ESPAPERPLAY_SYSTEM_NVS_NAMESPACE "system"
+/* 命名空间以 nvs 登记簿为唯一来源（factory_reset 依赖清单一致性）。 */
+#define ESPAPERPLAY_SYSTEM_NVS_NAMESPACE ESPAPERPLAY_NVS_NS_SYSTEM
 
 /** SSID 最大长度（含结尾 '\0'）。 */
 #define ESPAPERPLAY_SYSTEM_SSID_MAX_LEN 32

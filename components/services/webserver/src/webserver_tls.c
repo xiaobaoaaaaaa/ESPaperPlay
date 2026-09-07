@@ -9,6 +9,8 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "espaperplay_nvs.h"
+#include "espaperplay_auth.h" /* crypto 单一实现 */
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "mbedtls/asn1.h"
@@ -26,7 +28,7 @@
 static const char *TAG = "ESPaperPlay_WEB";
 
 /* NVS 命名空间与键名。 */
-#define TLS_NVS_NAMESPACE "tls" /*!< 证书/私钥存储命名空间 */
+#define TLS_NVS_NAMESPACE ESPAPERPLAY_NVS_NS_TLS /*!< 证书/私钥存储命名空间（登记簿唯一来源） */
 #define TLS_NVS_KEY_CERT "cert" /*!< 证书（DER） */
 #define TLS_NVS_KEY_KEY "key"   /*!< 私钥（SEC1 DER） */
 #define TLS_NVS_KEY_IP "ip"     /*!< 证书生成时记录的 IP（用于检测 IP 变化） */
@@ -120,21 +122,6 @@ static esp_err_t tls_generate(const char *san_ip, uint8_t **out_cert, size_t *ou
                                        &p, sec1, MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE));
 
     /* 3. 解析私钥到 mbedtls_pk_context，供自签名签名使用。 */
-    /* 诊断：打印组装后的 SEC1 头，并复刻 mbedtls_pk_ecc_set_key 的 PSA 导入
-     * 以确认 set_key 阶段正常（d 内容在 SEC1 偏移 7）。 */
-    ESP_LOGI(TAG, "SEC1 len=%u head=%02X%02X%02X%02X%02X%02X%02X%02X", (unsigned)sec1_len, p[0],
-             p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-
-    psa_key_attributes_t imp_attrs = PSA_KEY_ATTRIBUTES_INIT;
-    psa_set_key_type(&imp_attrs, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
-    psa_set_key_usage_flags(&imp_attrs, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_EXPORT);
-    psa_set_key_algorithm(&imp_attrs, PSA_ALG_ECDSA(PSA_ALG_ANY_HASH));
-    psa_key_id_t test_id = 0;
-    psa_status_t imp_st = psa_import_key(&imp_attrs, p + 7, 32, &test_id);
-    ESP_LOGI(TAG, "psa_import_key(raw d): %d", (int)imp_st);
-    if (imp_st == PSA_SUCCESS) {
-        psa_destroy_key(test_id);
-    }
 
     mbedtls_pk_context pk;
     mbedtls_pk_init(&pk);
@@ -371,9 +358,8 @@ esp_err_t webserver_tls_get(const uint8_t **cert, size_t *cert_len, const uint8_
         return ESP_OK;
     }
 
-    /* 初始化 PSA 密码学库（幂等；一般已被 auth/session 组件初始化）。 */
-    if (psa_crypto_init() != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "psa_crypto_init failed");
+    /* 初始化 PSA 密码学库（幂等，auth 组件单一实现）。 */
+    if (espaperplay_crypto_ensure_init() != ESP_OK) {
         return ESP_ERR_INVALID_STATE;
     }
 

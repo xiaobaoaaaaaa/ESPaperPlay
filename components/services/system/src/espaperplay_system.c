@@ -65,49 +65,45 @@ static bool s_initialized = false;
 /* NVS 底层辅助函数                                                     */
 /* ------------------------------------------------------------------ */
 
-static esp_err_t save_u8_field(const char *key, uint8_t value) {
+/** 打开命名空间写一个字段并 commit（三类字段的公共收尾）。 */
+static esp_err_t save_with(nvs_type_t type, const char *key, uint32_t uval, const char *sval) {
     nvs_handle_t handle;
     esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_u8(handle, key, value);
+    switch (type) {
+    case NVS_TYPE_U8:
+        err = nvs_set_u8(handle, key, (uint8_t)uval);
+        break;
+    case NVS_TYPE_U32:
+        err = nvs_set_u32(handle, key, uval);
+        break;
+    case NVS_TYPE_STR:
+        err = nvs_set_str(handle, key, sval);
+        break;
+    default:
+        err = ESP_ERR_NOT_SUPPORTED;
+        break;
+    }
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
     return err;
+}
+
+static esp_err_t save_u8_field(const char *key, uint8_t value) {
+    return save_with(NVS_TYPE_U8, key, value, NULL);
 }
 
 static esp_err_t save_u32_field(const char *key, uint32_t value) {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = nvs_set_u32(handle, key, value);
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    nvs_close(handle);
-    return err;
+    return save_with(NVS_TYPE_U32, key, value, NULL);
 }
 
 static esp_err_t save_str_field(const char *key, const char *value) {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(ESPAPERPLAY_SYSTEM_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = nvs_set_str(handle, key, value);
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    nvs_close(handle);
-    return err;
+    return save_with(NVS_TYPE_STR, key, 0, value);
 }
 
 /**
@@ -340,14 +336,8 @@ esp_err_t espaperplay_system_init(void) {
         return ESP_OK;
     }
 
-    /* 初始化 NVS 分区；分区满或格式版本变化时先擦除重建。 */
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition needs erase, erasing...");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
+    /* 初始化 NVS 分区（单一实现，幂等）。 */
+    esp_err_t err = espaperplay_nvs_flash_init_once();
 
     err = system_load();
     if (err != ESP_OK) {
