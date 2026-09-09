@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -159,6 +161,16 @@ esp_err_t espaperplay_ui_input_start(void);
 uint8_t espaperplay_ui_page_depth(void);
 
 /**
+ * @brief 栈顶页面描述（须在 LVGL 线程内调用）。
+ *
+ * 返回栈内按值副本的地址（不是全局页面实例），跨线程读取不安全；供
+ * 屏保等需要识别当前页的 LVGL 线程内逻辑比较 enter 函数指针使用。
+ *
+ * @return 栈顶页面；空栈返回 NULL。
+ */
+const espaperplay_ui_page_t *espaperplay_ui_page_top_lv(void);
+
+/**
  * @brief 统一状态栏（顶栏）句柄（不透明）。
  *
  * 各页面（测试页除外）共用同一套顶栏逻辑：左侧时间、居中标题、右侧
@@ -231,6 +243,38 @@ void espaperplay_ui_status_bar_init(void);
 
 /** 主界面页面实例（screen_home.c）。 */
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
+
+/**
+ * @brief 睡眠屏保页页面实例（screen_screensaver.c）：大字时钟 + 日期 +
+ * 天气摘要 + 版本页脚。由电源管理在「主页进入睡眠」时经
+ * espaperplay_ui_screensaver_show() 压入、用户唤醒时经
+ * espaperplay_ui_screensaver_dismiss() 弹出；页内任意触摸/按键自退出。
+ * 仅供内部比较栈顶用，勿直接 push。
+ */
+extern const espaperplay_ui_page_t espaperplay_ui_page_screensaver;
+
+/**
+ * @brief 压入睡眠屏保并同步渲染落屏（跨线程安全，供电源管理任务调用）。
+ *
+ * 仅当栈顶为主界面且屏保未在栈顶时压入屏保页；在 LVGL 线程内同步渲染
+ * 首帧（lv_refr_now）并等待 EPD 刷新完成后返回——返回 true 即保证屏保
+ * 已真正落到面板，随后可安全进入浅睡眠（冻结刷新管线不会丢屏保帧）。
+ * 幂等：屏保已在栈顶（如上次入睡被睡前守卫拦截后的重试）直接返回 true。
+ *
+ * @return true=屏保已展示并落屏；false=栈顶非主界面或投递失败（调用方
+ *         走无屏保的常规入睡路径）。
+ */
+bool espaperplay_ui_screensaver_show(void);
+
+/**
+ * @brief 弹出睡眠屏保、重建主界面（跨线程安全，供电源管理任务调用）。
+ *
+ * 供用户唤醒路径（触摸/按键/串口唤醒、定时器唤醒升级为用户唤醒）恢复
+ * 主界面；屏保不在栈顶时为无操作（幂等，与屏保页 on_touch/on_key 的
+ * 自退出互兜底）。重建后主界面的渲染由 LVGL 任务异步完成，本函数不
+ * 等待落屏。
+ */
+void espaperplay_ui_screensaver_dismiss(void);
 
 /** 测试页页面实例（screen_test.c）：局刷压力测试 + 按键/触摸事件显示 +
  * 可点击返回按钮，双击旋转屏幕，长按返回。 */

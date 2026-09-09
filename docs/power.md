@@ -23,13 +23,18 @@ cycle around **auto light sleep**:
   NVS-persisted) the device enters light sleep automatically. The Web console
   sends heartbeats (`/api/heartbeat`) while open, suppressing auto sleep so
   remote sessions are not interrupted.
-- **Before sleeping** — WiFi is disconnected deliberately and auto-reconnect
-  suppressed; wakeup sources are configured (touch, BOOT, timer).
+- **Before sleeping** — if the home screen is on top, a **sleep screensaver**
+  page (large clock + date + weather summary) is pushed and synchronously
+  rendered first, so the bistable panel shows it throughout light sleep; the
+  minute-aligned wakeups update the big clock in the wake window. WiFi is then
+  disconnected deliberately and auto-reconnect suppressed; wakeup sources are
+  configured (touch, BOOT, timer). On any user wake the screensaver is popped
+  and the home screen rebuilt.
 - **Minute-aligned timer wakeup** — while asleep the device wakes on whole
-  minutes to refresh weather and the clock, so the screen is up to date the
-  moment you wake it. Wake/sleep races are handled (touch during the wake
-  window cancels re-sleep; phantom frames after resume are dropped; the
-  status-bar sleep icon clears).
+  minutes to refresh weather and the clock (home screen or screensaver), so the
+  screen is up to date the moment you wake it. Wake/sleep races are handled
+  (touch during the wake window cancels re-sleep and exits the screensaver;
+  phantom frames after resume are dropped; the status-bar sleep icon clears).
 - **Software RTC drift calibration** — the periodic timer wakeups double as
   drift measurements for the internal RC oscillator (sleep time only), so
   long sleep periods keep wall-clock accuracy without an external 32k crystal.
@@ -70,11 +75,13 @@ so field failures can be reconstructed from the card afterwards.
 - **活动追踪**——触摸、按键、刷新都会记录用户活动；空闲超时（设备端
   设置页与 Web 管理页均可配置，NVS 持久化）后自动进入浅睡眠。Web 管理
   页打开期间发送心跳（`/api/heartbeat`）抑制自动睡眠，远程操作不被打断。
-- **睡前**——主动断开 WiFi 并抑制自动重连；配置唤醒源（触摸 / BOOT /
-  定时器）。
-- **分钟对齐定时唤醒**——睡眠中整分唤醒，刷新天气与时钟，亮屏瞬间数据
-  即新。唤醒 / 睡眠竞态已处理（唤醒窗口内的触摸不再立刻又睡；恢复后的
-  幻影帧被丢弃；状态栏睡眠图标正常清除）。
+- **睡前**——栈顶为主界面时先压入**睡眠屏保页**（大字时钟 + 日期 +
+  天气摘要）并同步渲染落屏，双稳态面板在浅睡眠期间持续显示；整分唤醒
+  借刷新窗口更新大字时钟。随后主动断开 WiFi 并抑制自动重连；配置唤醒源
+  （触摸 / BOOT / 定时器）。用户唤醒（触摸/按键）时弹出屏保、重建主界面。
+- **分钟对齐定时唤醒**——睡眠中整分唤醒，刷新天气与时钟（主界面或屏保），
+  亮屏瞬间数据即新。唤醒 / 睡眠竞态已处理（唤醒窗口内的触摸不再立刻又睡，
+  并同步退出屏保；恢复后的幻影帧被丢弃；状态栏睡眠图标正常清除）。
 - **软件 RTC 漂移标定**——周期定时唤醒兼作内部 RC 振荡器（仅睡眠时段）
   的漂移测量，无外部 32k 晶振也能长期保持走时精度。
 - EPD 面板自身另有 90s 无刷新自动深睡（见 [EPD 驱动](display.md)）。

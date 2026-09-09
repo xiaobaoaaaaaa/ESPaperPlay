@@ -9,6 +9,7 @@ idf_component_register(
          "src/qweather_icons.c"
          "src/screens/screen_reader.c"
          "src/screens/screen_reader_home.c"
+         "src/screens/screen_screensaver.c"
          "src/screens/screen_settings.c"
          "src/screens/screen_files.c"
          "src/screens/screen_setup.c"

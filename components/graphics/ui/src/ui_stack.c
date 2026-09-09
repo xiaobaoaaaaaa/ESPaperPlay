@@ -225,6 +225,10 @@ void espaperplay_ui_page_handle_touch_lv(const espaperplay_input_event_t *event)
 
 uint8_t espaperplay_ui_page_depth(void) { return s_depth; }
 
+const espaperplay_ui_page_t *espaperplay_ui_page_top_lv(void) {
+    return s_depth > 0 ? &s_stack[s_depth - 1] : NULL;
+}
+
 /* ====================================================================
  * 睡眠/节能指示图标
  * ====================================================================

@@ -23,6 +23,7 @@
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
+#include "espaperplay_ui.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
 
@@ -323,6 +324,10 @@ static void power_wait_wifi_connected(void) {
  * 每 1s 检查最近一次用户活动时刻：若空闲时长超过阈值（取
  * max(配置超时, EPD 空闲超时 + 5s)），进入浅睡眠。唤醒后由
  * espaperplay_power_enter_light_sleep() 内部重置活动时间戳，循环继续。
+ *
+ * 入睡前若栈顶为主界面，先压入睡眠屏保页并等落屏（大字时钟等信息页
+ * 在睡眠期间由电子纸双稳态保持）；用户唤醒（含定时器唤醒升级）时弹出
+ * 屏保、重建主界面，定时器唤醒则保留屏保借刷新窗口更新时钟后重新入睡。
  */
 static void power_auto_sleep_task(void *arg) {
     (void)arg;
@@ -355,12 +360,27 @@ static void power_auto_sleep_task(void *arg) {
             }
             ESP_LOGI(TAG, "idle %llu ms >= threshold %u ms -> light sleep", idle_ms,
                      (unsigned)threshold);
+
+            /* 睡眠屏保：栈顶为主界面时，先压入屏保页并同步等待渲染落屏，
+             * 使浅睡眠期间屏幕显示大字时钟等信息页（电子纸双稳态保持）。
+             * 屏保整屏替换主界面，无需再等状态栏睡眠图标局刷；非主界面
+             * （或屏保失败）走原路径（睡眠图标 + 2s 落屏窗口）。 */
+            const bool screensaver = espaperplay_ui_screensaver_show();
+            if (screensaver && espaperplay_input_get_last_activity_ms() != last) {
+                /* 屏保落屏窗口内有用户触摸：屏保页 on_touch 已自行弹出并
+                 * 重建主界面，本轮放弃入睡（下轮循环因活动新鲜而保持
+                 * 唤醒）——避免「用户在场却入睡」与屏保/主界面切换竞态。 */
+                continue;
+            }
+
             espaperplay_input_set_sleep_indicator(true);
             /* 先断开 WiFi（睡眠期间 modem 断电，无法保活），再留出约 2s 窗口
              * 让状态栏定时器把睡眠图标绘制到屏上（与 WiFi 图标同一局部刷新
              * 路径），随后才正式进入浅睡眠（睡眠期间屏幕冻结）。 */
             espaperplay_wifi_suspend_for_sleep();
-            vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS));
+            if (!screensaver) {
+                vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_SLEEP_ICON_DELAY_MS));
+            }
             const esp_err_t sleep_ret = espaperplay_power_enter_light_sleep();
             if (sleep_ret == ESP_ERR_INVALID_STATE) {
                 /* 睡前守卫拦截（触摸 INT 未释放）：本次未真正入睡。必须
@@ -423,10 +443,12 @@ static void power_auto_sleep_task(void *arg) {
                         espaperplay_wifi_resume_after_wake(true);
                     }
                     /* 真实用户操作意味着设备即将回到交互状态：睡眠图标必须
-                     * 同步清除，否则设备保持唤醒而图标滞留在屏上（实测缺陷；
-                     * 纯 Web 心跳升级保持图标，屏幕无需多一次刷新）。 */
+                     * 同步清除，屏保也要退出、重建主界面，否则设备保持唤醒
+                     * 而图标/屏保滞留在屏上（实测缺陷；纯 Web 心跳升级保持
+                     * 图标与屏保，屏幕无需多一次刷新）。 */
                     if (user_active) {
                         espaperplay_input_set_sleep_indicator(false);
+                        espaperplay_ui_screensaver_dismiss();
                     }
                     espaperplay_input_mark_activity();
                 } else {
@@ -439,8 +461,11 @@ static void power_auto_sleep_task(void *arg) {
             } else {
                 /* 用户/串口唤醒：立即清除睡眠指示（须在重连/NTP 等阻塞调用
                  * 之前，否则状态栏 1s 定时器要等数秒才能把图标局刷隐藏）。
-                 * 定时器唤醒不清除，图标在睡眠期间持续显示。 */
+                 * 定时器唤醒不清除，图标在睡眠期间持续显示。
+                 * 屏保恢复：睡眠期间栈顶为屏保页时弹出、重建主界面（非屏保
+                 * 入睡时为无操作；与屏保页 on_touch/on_key 自退出幂等互兜底）。 */
                 espaperplay_input_set_sleep_indicator(false);
+                espaperplay_ui_screensaver_dismiss();
                 /* 重连 WiFi 并强制 NTP 对时（立即校正时钟，消除标定残差），
                  * 再标记活动避免立即重新睡眠。重连约 2.5s；期间若再有用户
                  * 操作，输入路径会持续刷新活动时间戳，设备保持唤醒，重连与

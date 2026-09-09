@@ -23,14 +23,20 @@
   setup runs before the desktop — configure WiFi (scan list or manual entry)
   either on-device or from the Web console via QR code; factory reset is
   available from the Web console.
-- **Home desktop** (`screen_home`): Android-style, two pages — a large clock
-  with date, weather summary and version/heap status, and the app grid
-  (**天气 / 阅读器 / 文件 / 设置**). Tapping a card pushes the application
-  page; the weather card shows the live QWeather icon.
+- **Home desktop** (`screen_home`): clock area (large hour/minute digits,
+  weekday and date) above the app grid (**weather / reader / files / settings**).
+  Tapping a card pushes the application page; the weather card shows the live
+  QWeather icon.
+- **Sleep screensaver** (`screen_screensaver`): pushed when the device auto
+  sleeps while on the home screen — a large clock, date, weather summary and
+  version footer that the e-paper bistable panel keeps showing throughout
+  light sleep. Minute-aligned timer wakeups refresh the clock inside the wake
+  window; any user wake (touch/key) pops the screensaver and rebuilds the home
+  screen.
 - **Unified status bar**: time, WiFi state and the sleep/energy icon live on
-  every screen and share a single refresh path.
-- Page-stack navigation with edge-swipe back (24 px trigger width), gesture
-  paging, and the physical BOOT key; all layouts scale to the logical screen
+  every screen and share a single refresh path (except the screensaver).
+- Page-stack navigation with edge-swipe back (24 px trigger width) and the
+  physical BOOT key; all layouts scale to the logical screen
   size (portrait 480x800 / landscape 800x480, and other resolutions).
 
 ### Input: Physical Keys & Event Queues
@@ -133,11 +139,15 @@ response (1→2→1→2), printing `key selftest PASS/FAIL`.
 - **首次开机引导**（`screen_setup`）：未配置的设备先进引导再进桌面——
   配置 WiFi（扫描列表选择或手动输入），支持设备端本机配置与 Web 端扫码
   两种方式；恢复出厂在 Web 管理页。
-- **主界面桌面**（`screen_home`）：安卓风格双页——大字号时钟 + 日期 +
-  天气摘要 + 版本/堆状态一页，应用卡片一页（**天气 / 阅读器 / 文件 / 设置**）。
-  点击卡片进入应用；天气卡片显示和风实时天气图标。
+- **主界面桌面**（`screen_home`）：时钟区（大字时/分 + 星期 + 日期）+
+  应用卡片（**天气 / 阅读器 / 文件 / 设置**）。点击卡片进入应用；天气
+  卡片显示和风实时天气图标。
+- **睡眠屏保页**（`screen_screensaver`）：自动浅睡眠且位于主界面时压入，
+  大字时钟 + 日期星期 + 天气摘要 + 版本页脚在睡眠期间由电子纸双稳态
+  保持；定时器唤醒借刷新窗口更新时钟，用户唤醒（触摸/按键）即弹出、
+  重建主界面。
 - **统一状态栏**：时间、WiFi 状态、睡眠（节能）图标出现在所有页面，
-  共用同一条刷新路径。
+  共用同一条刷新路径（屏保页除外）。
 - 页面栈导航 + 边缘滑动返回（24px 触发宽度）+ 手势翻页 + 物理按键；
   全部布局按逻辑分辨率缩放（竖屏 480x800 / 横屏 800x480 及其他分辨率）。
 
