@@ -245,8 +245,9 @@ void espaperplay_ui_status_bar_init(void);
 extern const espaperplay_ui_page_t espaperplay_ui_page_home;
 
 /**
- * @brief 睡眠屏保页页面实例（screen_screensaver.c）：大字时钟 + 日期 +
- * 天气摘要 + 版本页脚。由电源管理在「主页进入睡眠」时经
+ * @brief 睡眠屏保页页面实例（screen_screensaver.c）：桌面时钟版式——
+ * 头部公历+农历、大字时间盒、天气盒、月历盒（今日反白圆标）、
+ * 一言盒（Hitokoto 服务）、IP/版本页脚。由电源管理在「主页进入睡眠」时经
  * espaperplay_ui_screensaver_show() 压入、用户唤醒时经
  * espaperplay_ui_screensaver_dismiss() 弹出；页内任意触摸/按键自退出。
  * 仅供内部比较栈顶用，勿直接 push。
