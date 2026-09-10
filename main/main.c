@@ -26,6 +26,7 @@
 #include "espaperplay_fonts.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
+#include "espaperplay_hitokoto.h"
 #include "espaperplay_input.h"
 #include "espaperplay_nettime.h"
 #include "espaperplay_power.h"
@@ -248,6 +249,11 @@ void app_main(void) {
      * 预警 / 指数 / 空气质量 / 天文）到内存快照。API Key 与位置经 Web
      * 管理页配置（NVS 持久化）。 */
     ESP_ERROR_CHECK(espaperplay_weather_start());
+
+    BOOT_LOGF("一言服务启动…");
+    /* 一言：STA 联网后拉取 Hitokoto 句子到内存快照（免鉴权、无需配置），
+     * 按周期刷新；一言页「换一句」经任务通知立即拉取。 */
+    ESP_ERROR_CHECK(espaperplay_hitokoto_start());
 
     /* ---- 汇合：等显示链路就绪后推主界面并启动按键分发。 ---- */
     const EventBits_t bits = xEventGroupWaitBits(s_boot_events, BOOT_DISPLAY_READY_BIT, pdFALSE,

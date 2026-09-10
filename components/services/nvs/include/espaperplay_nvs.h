@@ -27,6 +27,7 @@ extern "C" {
 #define ESPAPERPLAY_NVS_NS_AUTH "auth"
 #define ESPAPERPLAY_NVS_NS_CLOCK "clock"
 #define ESPAPERPLAY_NVS_NS_TLS "tls"
+#define ESPAPERPLAY_NVS_NS_HITOKOTO "hitokoto"
 
 /**
  * @brief 初始化 NVS 分区（幂等）；分区满或格式版本变化时先擦除重建。

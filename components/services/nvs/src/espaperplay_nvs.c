@@ -20,6 +20,7 @@ static const char *const s_app_namespaces[] = {
     ESPAPERPLAY_NVS_NS_AUTH,
     ESPAPERPLAY_NVS_NS_CLOCK,
     ESPAPERPLAY_NVS_NS_TLS,
+    ESPAPERPLAY_NVS_NS_HITOKOTO,
 };
 
 esp_err_t espaperplay_nvs_flash_init_once(void) {
