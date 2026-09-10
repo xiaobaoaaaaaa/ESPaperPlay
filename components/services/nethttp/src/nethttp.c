@@ -104,8 +104,14 @@ esp_err_t nethttp_get(const nethttp_cfg_t *cfg, char **out_body, size_t *out_len
             .disable_auto_redirect = true,
             .event_handler = nethttp_event_handler,
             .user_data = &resp,
-            .crt_bundle_attach = esp_crt_bundle_attach,
         };
+        if (cfg->cert_pem != NULL) {
+            /* 站点专用 CA：目标链不被全局证书包收录时以它校验
+             * （esp_tls 中 cert_pem 与 crt_bundle_attach 互斥）。 */
+            http_cfg.cert_pem = cfg->cert_pem;
+        } else {
+            http_cfg.crt_bundle_attach = esp_crt_bundle_attach;
+        }
 
         esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
         if (client == NULL) {

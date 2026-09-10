@@ -39,6 +39,9 @@ typedef struct {
                                       false=512B 起倍增增长（小响应省内存） */
     const char *const *headers;  /*!< 附加请求头 {"K","V",...}，NULL 结尾；可 NULL */
     int max_retries;             /*!< 瞬时失败最大重试次数（0=不重试；退避 300ms<<n） */
+    const char *cert_pem;        /*!< 指定站点专用 CA 证书（PEM，NUL 结尾；可 NULL）。
+                                      设置时用它替代全局证书包校验——目标站的证书链
+                                      不被内置包收录时（如包缺其交叉签名根）以此兜底 */
 } nethttp_cfg_t;
 
 /**
