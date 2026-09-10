@@ -110,6 +110,20 @@ esp_err_t espaperplay_clock_ntp_wait_sync(uint32_t timeout_ms);
 esp_err_t espaperplay_clock_get_local_time(struct tm *local_time);
 
 /**
+ * @brief 公历 -> 农历月日文本（如 "六月十九"、"闰四月十四"）。
+ *
+ * 纯历法换算（年编码表法，表由 sxtwl 逐日扫描生成并逐日对拍验证），
+ * 不依赖网络 / NTP / 时区。月日名采用传统记法（冬月 / 腊月、初X / 廿X）。
+ *
+ * @param solar 公历日期（只用年月日字段；非空）。
+ * @param buf   输出缓冲（非空；建议 >= 16 字节）。
+ * @param n     缓冲大小。
+ * @return ESP_OK 成功；参数非法返回 ESP_ERR_INVALID_ARG；超出编码表
+ *         覆盖范围（农历 2020..2077 年）返回 ESP_ERR_NOT_SUPPORTED。
+ */
+esp_err_t espaperplay_clock_lunar_text(const struct tm *solar, char *buf, size_t n);
+
+/**
  * @brief 强制立即通过 NTP 重新对时。
  *
  * 重启 SNTP 轮询（立即发起新一轮同步采样）后阻塞等待一次同步（用于用户
