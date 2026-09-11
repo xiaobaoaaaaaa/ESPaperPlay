@@ -48,6 +48,7 @@ Detailed design & implementation notes live in [docs/](docs/) (each bilingual):
 | Document | Contents |
 | -------- | -------- |
 | [Architecture](docs/architecture.md) | Directory structure, layered dependencies, naming & logging conventions |
+| [Hardware](docs/hardware.md) | Board design: EPD boost / touch / SD schematic pages, BOM, verification status, open items |
 | [Display](docs/display.md) | EPD driver (4 refresh modes), RGB565 rendering backend, icons |
 | [Fonts](docs/fonts.md) | `fonts` partition assets, SD full font, FreeType rendering pipeline |
 | [UI & Input](docs/ui.md) | Launcher screens, input events (keys / touch), device settings page |
@@ -173,6 +174,7 @@ GPIO 与总线默认参数统一在 `components/board/include/espaperplay_config
 | 文档 | 内容 |
 | ---- | ---- |
 | [软件架构](docs/architecture.md) | 目录结构、分层依赖、命名与日志规范 |
+| [硬件设计](docs/hardware.md) | 板卡原理图（EPD 升压 / 触摸 / SD 页）、BOM、验证状态与待办 |
 | [显示](docs/display.md) | EPD 驱动（四种刷新模式）、RGB565 渲染后端、图标生成 |
 | [字体](docs/fonts.md) | `fonts` 分区资产、SD 完整字库、FreeType 渲染链路 |
 | [界面与输入](docs/ui.md) | 桌面页面、输入事件（按键 / 触摸）、设备端设置页 |
