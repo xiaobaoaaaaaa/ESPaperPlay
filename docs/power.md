@@ -57,11 +57,15 @@ trigger it in the field. The touch driver therefore:
 
 ### Diagnostics Logging
 
-The `diaglog` service appends diagnostic records to a file on the SD card
-(stack-safe write API usable from small-stack tasks): boot / sleep / wake /
-touch-recovery lifecycle events build a failure timeline across reboots, and a
-periodic heartbeat log carries internal-RAM and DMA-capable heap statistics,
-so field failures can be reconstructed from the card afterwards.
+The `diaglog` service appends diagnostic records to files on the SD card
+(writes go through a dedicated big-stack flush task; small-stack tasks only
+pay formatting + enqueue): besides the curated lifecycle events (boot /
+sleep / wake / touch recovery) it captures the *entire* `esp_log` stream
+level-filtered (Warning and above by default, adjustable from the Web
+console or on-device settings). Logs are split into daily files
+(`system/diag-YYYYMMDD.log`, plus `diag-boot.log` before NTP sync), rotate
+at 1 MB, and files older than 7 days are cleaned up automatically, so field
+failures can be reconstructed from the card afterwards.
 
 ---
 
@@ -100,7 +104,9 @@ I2C 地址锁存为 `0x14` 而非 `0x5D`；共轨的 EPD 刷新可能诱发内�
 
 ### 诊断日志
 
-`diaglog` 服务把诊断记录追加到 SD 卡文件（写入 API 小栈安全，小栈任务
-可放心调用）：开机 / 睡眠 / 唤醒 / 触摸自愈等生命周期事件跨重启构建
-失效时间线；周期心跳日志附带内部 RAM 与 DMA 可用堆统计——现场故障事后
-可凭卡内日志复盘。
+`diaglog` 服务把日志记录写入 SD 卡文件（落盘走专用大栈任务，小栈任务
+只承担格式化 + 入队成本）：除开机 / 睡眠 / 唤醒 / 触摸自愈等显式生命周期
+事件外，还按等级过滤捕获全部 `esp_log` 输出（默认 Warning 及以上，Web
+管理页 / 设备设置页可调）。日志按天分文件（`system/diag-YYYYMMDD.log`，
+NTP 对时前记入 `diag-boot.log`），单文件超 1MB 自动轮转，超过 7 天的旧
+日志自动清理——现场故障事后可凭卡内日志复盘。

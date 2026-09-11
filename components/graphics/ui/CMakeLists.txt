@@ -21,7 +21,7 @@ idf_component_register(
          "src/ui_modal.c"
          "src/ui_key_input.c"
     INCLUDE_DIRS "include"
-    REQUIRES board clock epd fonts touch lvgl input weather wifi system storage power reader hitokoto
+    REQUIRES board clock diaglog epd fonts touch lvgl input weather wifi system storage power reader hitokoto
     PRIV_REQUIRES freertos heap esp_timer
     # lv_malloc_core 等（espaperplay_lv_mem_psram.c）被 liblvgl 的 lv_mem.c 后置
     # 引用：链接单遍扫描会错过 libui 归档成员，须整库编入保证可见

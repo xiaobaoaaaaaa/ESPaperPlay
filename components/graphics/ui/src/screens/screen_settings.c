@@ -21,6 +21,7 @@
 #include "espaperplay_ui_util.h"
 #include "espaperplay_ui_gesture.h"
 #include "espaperplay_ui_modal.h"
+#include "espaperplay_diaglog.h"
 #include "espaperplay_sd_fonts.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_fonts.h"
@@ -309,6 +310,36 @@ static void settings_fmt_version(int32_t v, char *buf, size_t size) {
     snprintf(buf, size, "v%s", ESPAPERPLAY_VERSION);
 }
 
+/* ---- 系统组：SD 卡日志等级 ---- */
+
+static const char *const s_sd_log_level_options[] = {"错误", "警告", "信息"};
+
+static int32_t settings_get_sd_log_level(void) {
+    const int32_t v = (int32_t)espaperplay_diaglog_get_level() - ESP_LOG_ERROR;
+    if (v < 0 || v >= (int32_t)(sizeof(s_sd_log_level_options) / sizeof(s_sd_log_level_options[0]))) {
+        return (int32_t)ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL - ESP_LOG_ERROR;
+    }
+    return v;
+}
+
+static esp_err_t settings_set_sd_log_level(int32_t v) {
+    const esp_log_level_t level = (esp_log_level_t)(v + ESP_LOG_ERROR);
+    esp_err_t err = espaperplay_system_set_sd_log_level(level);
+    if (err == ESP_OK) {
+        /* 立即应用到日志捕获（不必等重启）。 */
+        espaperplay_diaglog_set_level(level);
+    }
+    return err;
+}
+
+static void settings_fmt_sd_log_level(int32_t v, char *buf, size_t size) {
+    if (v >= 0 && v < (int32_t)(sizeof(s_sd_log_level_options) / sizeof(s_sd_log_level_options[0]))) {
+        snprintf(buf, size, "%s 及以上", s_sd_log_level_options[v]);
+    } else {
+        snprintf(buf, size, "未知");
+    }
+}
+
 static void settings_open_test(void) {
     ESP_LOGI(TAG, "settings: open test page");
     espaperplay_ui_page_push_lv(&espaperplay_ui_page_test);
@@ -406,6 +437,13 @@ static settings_row_t s_rows[] = {
     /* 系统：字体 / 版本 / 开发者 */
     {.name = "当前字体", .type = SETTINGS_ROW_FONT, .fmt_value = settings_fmt_font},
     {.name = "软件版本", .type = SETTINGS_ROW_INFO, .fmt_value = settings_fmt_version},
+    {.name = "SD 日志等级",
+     .type = SETTINGS_ROW_CYCLE,
+     .get_value = settings_get_sd_log_level,
+     .set_value = settings_set_sd_log_level,
+     .fmt_value = settings_fmt_sd_log_level,
+     .options = s_sd_log_level_options,
+     .option_count = (int)(sizeof(s_sd_log_level_options) / sizeof(s_sd_log_level_options[0]))},
     {.name = "测试页", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_test},
     /* 服务：天气 */
     {.name = "天气 API Key", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_weather_key},
@@ -439,11 +477,11 @@ static const settings_subgroup_t s_dev_subgroups[] = {
 static const settings_subgroup_t s_sys_subgroups[] = {
     {"网络", 5, 4},
     {"字体", 9, 1},
-    {"开发者", 10, 2},
+    {"开发者", 10, 3},
 };
 
 static const settings_subgroup_t s_svc_subgroups[] = {
-    {"天气", 12, 3},
+    {"天气", 13, 3},
 };
 
 /* 全部大类（顺序即显示顺序）。 */

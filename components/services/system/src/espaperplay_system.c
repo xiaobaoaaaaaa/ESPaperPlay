@@ -32,6 +32,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_BOOT_LP_TIME_MS "boot_lp_time_ms"
 #define NVS_KEY_SETUP_DONE "setup_done"
 #define NVS_KEY_READER_IMG_GRAY4 "rd_img_gray4"
+#define NVS_KEY_SD_LOG_LEVEL "sd_log_level"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -56,6 +57,7 @@ static espaperplay_system_config_t s_config = {
     .weather_api_host = ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_HOST,
     .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
     .reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4,
+    .sd_log_level = ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL,
     .setup_done = false, /* 出厂状态：首次开机进入引导页 */
 };
 
@@ -177,6 +179,9 @@ static esp_err_t system_save_all(void) {
     if (err == ESP_OK) {
         err = nvs_set_u8(handle, NVS_KEY_READER_IMG_GRAY4,
                          s_config.reader_img_gray4 ? 1 : 0);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_SD_LOG_LEVEL, (uint8_t)s_config.sd_log_level);
     }
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -302,6 +307,19 @@ static esp_err_t system_load(void) {
                      esp_err_to_name(err));
         }
         s_config.reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4;
+        missing = true;
+    }
+
+    uint8_t sd_log_level = 0;
+    err = nvs_get_u8(handle, NVS_KEY_SD_LOG_LEVEL, &sd_log_level);
+    if (err == ESP_OK && sd_log_level >= ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MIN &&
+        sd_log_level <= ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MAX) {
+        s_config.sd_log_level = (esp_log_level_t)sd_log_level;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_SD_LOG_LEVEL, esp_err_to_name(err));
+        }
+        s_config.sd_log_level = ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL;
         missing = true;
     }
 
@@ -459,6 +477,15 @@ esp_err_t espaperplay_system_set_reader_img_gray4(bool enable) {
 
 bool espaperplay_system_get_reader_img_gray4(void) { return s_config.reader_img_gray4; }
 
+esp_err_t espaperplay_system_set_sd_log_level(esp_log_level_t level) {
+    if (level < ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MIN ||
+        level > ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_config.sd_log_level = level;
+    return save_u8_field(NVS_KEY_SD_LOG_LEVEL, (uint8_t)level);
+}
+
 bool espaperplay_system_is_setup_done(void) { return s_config.setup_done; }
 
 esp_err_t espaperplay_system_mark_setup_done(void) {
@@ -543,6 +570,7 @@ esp_err_t espaperplay_system_reset_defaults(void) {
     s_config.gui_full_force_after = ESPAPERPLAY_SYSTEM_DEFAULT_GUI_FULL_FORCE_AFTER;
     s_config.boot_long_press_action = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_ACTION;
     s_config.boot_long_press_time_ms = ESPAPERPLAY_SYSTEM_DEFAULT_BOOT_LONG_PRESS_TIME_MS;
+    s_config.sd_log_level = ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL;
     strlcpy(s_config.weather_api_key, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_API_KEY,
             sizeof(s_config.weather_api_key));
     strlcpy(s_config.weather_location, ESPAPERPLAY_SYSTEM_DEFAULT_WEATHER_LOCATION,

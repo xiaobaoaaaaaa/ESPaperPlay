@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 
+#include "espaperplay_diaglog.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_input.h"
@@ -59,6 +60,37 @@ static bool boot_long_press_action_parse(const char *s, espaperplay_boot_long_pr
 }
 
 /* ------------------------------------------------------------------ */
+/* SD 卡日志等级 <-> 字符串                                              */
+/* ------------------------------------------------------------------ */
+
+/** SD 日志等级序列化为 Web 表单值（GET /api/config 回传）。 */
+static const char *sd_log_level_str(esp_log_level_t level) {
+    switch (level) {
+    case ESP_LOG_ERROR:
+        return "error";
+    case ESP_LOG_INFO:
+        return "info";
+    case ESP_LOG_WARN:
+    default:
+        return "warning";
+    }
+}
+
+/** 解析 Web 表单值；非法返回 false。 */
+static bool sd_log_level_parse(const char *s, esp_log_level_t *out) {
+    if (strcmp(s, "error") == 0) {
+        *out = ESP_LOG_ERROR;
+    } else if (strcmp(s, "warning") == 0) {
+        *out = ESP_LOG_WARN;
+    } else if (strcmp(s, "info") == 0) {
+        *out = ESP_LOG_INFO;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* 配置域路由处理器                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -96,6 +128,8 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     /* BOOT 键长按判定时间（毫秒）。 */
     cJSON_AddNumberToObject(root, "boot_long_press_time_ms", (double)cfg->boot_long_press_time_ms);
     cJSON_AddBoolToObject(root, "reader_img_gray4", cfg->reader_img_gray4);
+    /* SD 卡日志捕获最低等级（error / warning / info）。 */
+    cJSON_AddStringToObject(root, "sd_log_level", sd_log_level_str(cfg->sd_log_level));
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -152,6 +186,9 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char reader_img_gray4_s[8] = {0};
     const bool has_reader_img_gray4 = webserver_form_get_field(
         body, "reader_img_gray4", reader_img_gray4_s, sizeof(reader_img_gray4_s));
+    char sd_log_level_s[12] = {0}; /* SD 卡日志捕获最低等级（error / warning / info） */
+    const bool has_sd_log_level =
+        webserver_form_get_field(body, "sd_log_level", sd_log_level_s, sizeof(sd_log_level_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -325,6 +362,19 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         } else {
             webserver_send_json_err(req, "无效的 reader_img_gray4（1/0）");
             return ESP_FAIL;
+        }
+    }
+
+    /* SD 卡日志捕获最低等级（字段出现时校验并应用，立即生效不必等重启）。 */
+    if (err == ESP_OK && has_sd_log_level) {
+        esp_log_level_t level;
+        if (!sd_log_level_parse(sd_log_level_s, &level)) {
+            webserver_send_json_err(req, "无效的 sd_log_level（error / warning / info）");
+            return ESP_FAIL;
+        }
+        err = espaperplay_system_set_sd_log_level(level);
+        if (err == ESP_OK) {
+            espaperplay_diaglog_set_level(level);
         }
     }
 

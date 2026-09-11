@@ -29,7 +29,7 @@ ESPaperPlay
     ├── services/          # System service layer
     │   ├── auth/          # Device auth: secure password storage & verification
     │   ├── clock/         # System clock: timezone (persisted) + NTP sync
-    │   ├── diaglog/       # SD diagnostic log: stack-safe writes + lifecycle timeline
+    │   ├── diaglog/       # SD log: level-filtered global esp_log capture + curated diagnostic events, daily files + auto cleanup
     │   ├── geoip/         # IP geolocation via UAPI (uapis.cn), incl. timezone
     │   ├── input/         # Input event management: touch + physical buttons + activity tracking
     │   ├── netip/         # Public IP query via UAPI (uapis.cn)
@@ -131,7 +131,7 @@ ESPaperPlay
     ├── services/          # 系统服务层
     │   ├── auth/          # 设备鉴权：密码安全存储 / 校验 / 更改
     │   ├── clock/         # 系统时钟：时区设置（NVS 持久化）+ NTP 同步
-    │   ├── diaglog/       # SD 诊断日志：小栈安全写入 + 生命周期时间线
+    │   ├── diaglog/       # SD 日志：全局日志捕获（等级可配）+ 关键诊断事件，按天分文件 + 自动清理
     │   ├── geoip/         # IP 地理位置查询（uapis.cn，含时区）
     │   ├── input/         # 输入事件管理：触摸 + 物理按键 + 用户活动追踪
     │   ├── netip/         # 本机公网 IP 查询（uapis.cn）

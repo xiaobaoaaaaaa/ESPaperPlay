@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "esp_log_level.h"
 #include "espaperplay_nvs.h"
 
 #ifdef __cplusplus
@@ -80,6 +81,14 @@ extern "C" {
 /** 出厂默认选用字体文件名（Flash 字体分区内的裁剪子集；SD 卡缺所选字体时回退）。 */
 #define ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME "NotoSansSC_Regular.ttf"
 
+/** 出厂默认 SD 卡日志捕获最低等级（Warning 及以上；可捕获上限受固件
+ *  CONFIG_LOG_MAXIMUM_LEVEL=Info 编译限制，配置项只开放 Error/Warning/Info）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL ESP_LOG_WARN
+
+/** SD 卡日志等级的合法取值范围（Error..Info；受编译期最大等级裁剪约束）。 */
+#define ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MIN ESP_LOG_ERROR
+#define ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MAX ESP_LOG_INFO
+
 /**
  * @brief BOOT 键长按的全局默认动作（Web 管理页可配置，NVS 持久化）。
  *
@@ -138,6 +147,7 @@ typedef struct {
     char selected_font[ESPAPERPLAY_SYSTEM_FONT_NAME_MAX_LEN]; /*!< 当前选用字体文件名（空=出厂默认）
                                                                */
     bool reader_img_gray4; /*!< 阅读器：插图页自动触发一次灰度（GRAY4）刷新 */
+    esp_log_level_t sd_log_level; /*!< SD 卡日志捕获最低等级（仅捕获通道；显式诊断事件不受限） */
     bool setup_done; /*!< 首次开机引导是否已完成（false=下次开机仍进入引导页） */
 } espaperplay_system_config_t;
 
@@ -321,6 +331,17 @@ esp_err_t espaperplay_system_set_reader_img_gray4(bool enable);
  * @return 当前开关状态。
  */
 bool espaperplay_system_get_reader_img_gray4(void);
+
+/**
+ * @brief 设置 SD 卡日志捕获最低等级并持久化。
+ *
+ * 只影响捕获通道（Warning 及以上 / Info / Error），显式诊断事件始终落盘。
+ * 修改后可调用 espaperplay_diaglog_set_level() 立即生效（无需重启）。
+ *
+ * @param level 最低等级（ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MIN .. MAX）。
+ * @return 成功返回 ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_sd_log_level(esp_log_level_t level);
 
 bool espaperplay_system_is_setup_done(void);
 

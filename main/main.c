@@ -170,6 +170,11 @@ void app_main(void) {
     ESP_ERROR_CHECK(espaperplay_auth_init());
     /* 会话管理：登录态与失败限速锁定（纯内存）。 */
     ESP_ERROR_CHECK(espaperplay_session_init());
+    /* SD 日志：尽早接管 esp_log 输出开始捕获（SD 未挂载前进 PSRAM 环形
+     * 缓冲，挂载后自动补写）；等级来自系统配置（默认 Warning 及以上）。
+     * 显式诊断事件通道同时就绪。 */
+    (void)espaperplay_diaglog_init();
+    espaperplay_diaglog_set_level(espaperplay_system_get_config()->sd_log_level);
 
     /* 板级 GPIO / SPI 总线（EPD 与触摸初始化的前置）。 */
     ESP_ERROR_CHECK(espaperplay_board_init());
@@ -200,10 +205,11 @@ void app_main(void) {
         BOOT_LOGF("SD 卡已挂载");
     }
 
-    /* 诊断日志：SD 可用时把触摸/电源关键事件落到
-     * /sdcard/system/diag.log，供长时间无人值守监测（失效后回看现场；
-     * Web 文件管理器可直接下载）。SD 不可用时静默停用，不影响其余功能。 */
-    (void)espaperplay_diaglog_init();
+    /* 显式诊断事件：SD 可用时把开机 / 触摸 / 电源关键事件落到
+     * /sdcard/system/diag-YYYYMMDD.log（全局日志捕获已在启动早期接管
+     * esp_log 输出，按配置等级过滤落盘，旧日志超 7 天自动清理），
+     * 供长时间无人值守监测；Web 文件管理器可直接下载。SD 不可用时
+     * 静默停用，不影响其余功能。 */
     espaperplay_diaglog_write("BOOT", "firmware v%s started (reset_reason=%d, storage=%s)",
                               ESPAPERPLAY_VERSION, (int)esp_reset_reason(),
                               (storage_err == ESP_OK) ? "mounted" : "unavailable");
