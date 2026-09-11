@@ -34,7 +34,7 @@ pages are still to be drawn.
 | `TOUCH` | ✅ complete | GT911 capacitive touch FPC + I²C pull-ups + decoupling |
 | `SD` | ✅ complete | microSD (push) socket, 4-bit SDMMC wiring with pull-ups |
 | `MCU` | ⬜ empty | ESP32-S3 minimal system — to be drawn |
-| `POWER` | ⬜ empty | battery input / charging / 3V3 rail — to be drawn |
+| `POWER` | 🔶 drawn, gate pending | Battery power page (see below) — full circuit drawn, layout re-fit into the A4 frame pending |
 
 Verification state of the three completed pages: per-page design check passes
 with **0 findings**; the official schematic DRC returns **0 fatal / 0 error**
@@ -158,6 +158,40 @@ wired for **SDMMC 4-bit**: `CLK` / `CMD` / `DAT0`…`DAT3` as `SD_CLK`,
 All passives are 0603. Generic placeholders (`C14`, `R1`, `R2`, `R3`–`R10`)
 still need an MPN/LCSC assignment before fab.
 
+### Power Page (drawn 2026-09-12, gate pending)
+
+Circuit per the agreed power proposal — **39 parts, six functional blocks**,
+wired in the same style as the other pages (real wires inside blocks, net
+flags for rails and MCU-facing signals):
+
+- **TYPEC_IN** — `J1` 16P Type-C (CC1/CC2 5.1 kΩ Rd each via `R11`/`R12`),
+  `U3` USBLC6-2SC6 ESD on VBUS + D±; `USB_DP`/`USB_DM` reserved for the MCU's
+  native USB.
+- **CHARGER** — `U1` TP4056 (PROG 2 kΩ → 580 mA), LEDs on VBUS (indicate
+  while charging with system off), `R21`/`R22` 10 kΩ pull CHRG#/STDBY# to 3V3
+  → `CHRG_STS`/`STDBY_STS` to MCU.
+- **LOAD_SHARE** — `Q2` AO3401A (D→VBAT, S→VSYS), `D4` SS34 (VBUS→VSYS),
+  `D5`+`R16` gate network: USB present isolates the battery; unplugged, the
+  battery takes over.
+- **SOFT_SWITCH** — SW1 power key, `R25`/`R26`/`R27` sense divider
+  (`PWR_BTN_SNS`), `Q5`+`Q6` latch driven by `PWR_HOLD`, `R28` 1 MΩ + `C23`
+  10 µF hold capacitor (RST-safe, ≥3 s = force-off), `R23`/`R24`/`C22`.
+- **LDO_3V3** — `U2` XC6220D331 (1 A, CE driven at full VSYS via PWR_EN).
+- **MONITOR** — `R17`/`R18` 1 MΩ VBAT divider → `VBAT_SNS` (ADC),
+  `R19`/`R20` 100 kΩ VBUS detect → `VBUS_SNS`.
+
+Six zone frames + per-block notes are on the page. The EasyEDA **native DRC
+passes with 0 fatal / 0 error** (15 item-less warnings, same profile as the
+blank pages). **The strict agent gate does not pass yet**: the whole layout
+was drawn against a 2970×2100 canvas while the project's A4 frame is
+1170×825 usable (all 39 parts sit out-of-frame), and `bridge-check` flags 15
+collinear-merge warnings that the native DRC does not confirm. **Next step**:
+re-fit the layout into the A4 frame (compact re-placement, re-run the wire
+topology at the new coordinates), then re-run `sch gate --strict`.
+
+MCU-facing nets to terminate on the MCU page: `USB_DP`, `USB_DM`,
+`VBAT_SNS`, `VBUS_SNS`, `CHRG_STS`, `STDBY_STS`, `PWR_BTN_SNS`, `PWR_HOLD`.
+
 ### Open Items
 
 1. **MCU page** — draw the ESP32-S3 minimal system (strapping, flash/PSRAM,
@@ -187,7 +221,7 @@ still need an MPN/LCSC assignment before fab.
 | `TOUCH` | ✅ 完成 | GT911 电容触摸 FPC + I²C 上拉 + 去耦 |
 | `SD` | ✅ 完成 | TF（自弹）卡座，SDMMC 4-bit 接法 + 上拉 |
 | `MCU` | ⬜ 空页 | ESP32-S3 最小系统——待绘制 |
-| `POWER` | ⬜ 空页 | 电池输入 / 充电 / 3V3 轨——待绘制 |
+| `POWER` | 🔶 已画、门禁未过 | 电池供电页（见下）——电路全部画完，待整体收进 A4 图框 |
 
 三个已完成页的验证状态：逐页设计检查 **0 findings** 通过；官方原理图 DRC
 **0 fatal / 0 error**（每页 8 条无法细化到条目的 WARN——空白页同样是 8 条，
@@ -298,6 +332,33 @@ LCSC C55172961），对插 GT911 触摸排线：
 
 阻容全部 0603。通用占位件（`C14`、`R1`、`R2`、`R3`–`R10`）打板前需补
 型号/LCSC 编号。
+
+### 电源页（2026-09-12 已画，门禁未过）
+
+按定稿方案落地——**39 器件、六个功能块**，画法与其余三页一致（块内真导线、
+电源轨与 MCU 信号用网络旗标）：
+
+- **TYPEC_IN**——`J1` 16P Type-C（CC1/CC2 各 5.1 kΩ Rd，`R11`/`R12`）、
+  `U3` USBLC6-2SC6 护 VBUS+D±；`USB_DP`/`USB_DM` 预留 MCU 原生 USB。
+- **CHARGER**——`U1` TP4056（PROG 2 kΩ→580 mA），LED 挂 VBUS（关机充电仍指示），
+  `R21`/`R22` 10 kΩ 把 CHRG#/STDBY# 上拉到 3V3→`CHRG_STS`/`STDBY_STS` 回读。
+- **LOAD_SHARE**——`Q2` AO3401A（D→VBAT、S→VSYS）、`D4` SS34（VBUS→VSYS）、
+  `D5`+`R16` 栅极网络：USB 在时电池隔离、拔出后电池接管。
+- **SOFT_SWITCH**——SW1 电源键、`R25`/`R26`/`R27` 分压回读（`PWR_BTN_SNS`）、
+  `Q5`+`Q6` 锁存（固件 `PWR_HOLD` 保持）、`R28` 1 MΩ+`C23` 10 µF 保持电容
+  （RST 复位不掉电、≥3 s 强制断电）、`R23`/`R24`/`C22`。
+- **LDO_3V3**——`U2` XC6220D331（1 A，CE 由 PWR_EN 全压驱动）。
+- **MONITOR**——`R17`/`R18` 1 MΩ 电池分压→`VBAT_SNS`（ADC）、
+  `R19`/`R20` 100 kΩ VBUS 检测→`VBUS_SNS`。
+
+分区框与逐块电路说明已放。EasyEDA **原生 DRC 0 fatal / 0 error**（15 条无明细
+WARN，与空白页同型）。**agent 严格门禁尚未通过**：整版按 2970×2100 画布布的，
+而工程 A4 图框可用区只有 1170×825（39 件全部在框外），另有 15 条共线合并类
+警告（原生 DRC 未证实）。**下一步**：把布局整体收进 A4 框（紧凑重排 + 按新
+坐标重放连线拓扑），再跑 `sch gate --strict`。
+
+待 MCU 页接入的网络：`USB_DP`、`USB_DM`、`VBAT_SNS`、`VBUS_SNS`、`CHRG_STS`、
+`STDBY_STS`、`PWR_BTN_SNS`、`PWR_HOLD`。
 
 ### 待办与风险
 
