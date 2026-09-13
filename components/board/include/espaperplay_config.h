@@ -114,8 +114,9 @@ extern "C" {
  * （SDMMC_SLOT_FLAG_INTERNAL_PULLUP）作为补充。上电前请务必对照原理图
  * 核对引脚。
  *
- * @note TOUCH / EPD / SD 三个部件的供电为常供电（板上无 MOS 电源轨控制，
- *       历史上的 *_PWR 电源轨配置已移除），固件不负责其上下电。
+ * @note v2.0 板：TOUCH / EPD / SD 三个部件的供电挂在可控外设轨 3V3_PER 上
+ *       （由 POWER_EN 控制通断，见下方定义；驱动接入待后续版本），深睡
+ *       关机时随轨断电。
  * ==================================================================== */
 
 #define ESPAPERPLAY_PIN_SD_CLK 14 /*!< SDMMC 时钟线（CLK） */
@@ -175,6 +176,16 @@ extern "C" {
 
 #define ESPAPERPLAY_PIN_KEY_BOOT 0          /*!< BOOT 按键（板载，按下为低电平） */
 #define ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL 0 /*!< BOOT 按键按下时的电平 */
+
+/* ====================================================================
+ * 电源控制与监测（v2.0 板：主控常供电，"关机"= 深睡 + 外设轨关断）
+ * ==================================================================== */
+
+#define ESPAPERPLAY_PIN_POWER_EN 41 /*!< 外设电源轨 3V3_PER 使能（低电平开轨；复位默认悬空=关，由板上 R20 上拉关断） */
+#define ESPAPERPLAY_PIN_BAT_SENSE 1 /*!< 电池电压分压（ADC1_CH0；板上 10M/3.3M 分压，比例 0.248） */
+#define ESPAPERPLAY_PIN_USB_PRES 6  /*!< VBUS 在位检测（板上 1M/1.5M 分压，比例 0.6，高=在位） */
+#define ESPAPERPLAY_PIN_CHRG_STAT 39    /*!< 充电中回读（TP4056 CHRG#，开漏输出，低=充电中；板上 100K 上拉 3V3） */
+#define ESPAPERPLAY_PIN_STANDBY_STAT 40 /*!< 充电完成回读（TP4056 STDBY#，开漏输出，低=充满待机；板上 100K 上拉 3V3） */
 
 /* ====================================================================
  * 默认总线参数
