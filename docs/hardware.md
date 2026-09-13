@@ -10,364 +10,330 @@
 
 ---
 
-> Snapshot taken 2026-09-12 from the live EasyEDA Pro project *ESPaperPlay*
-> (EasyEDA 3.2.149, easyeda-agent v1.3.0). The schematic is the source of
-> truth; this page summarizes it and will be re-synced as pages land.
+> This page documents the hardware **as designed and verified** — schematic
+> v2.0 of the five-page EasyEDA Pro project (POWER / MCU / EPD / TOUCH / SD).
+> It records the power architecture, the parts on each page, and the MCU pin
+> allocation the firmware depends on. The EasyEDA project (*ESPaperPlay*)
+> remains the single source of truth for the schematic, PCB and BOM; this page
+> is a derived overview kept in sync with it.
 >
-> 本文为 2026-09-12 从嘉立创 EDA Pro 工程 *ESPaperPlay* 活体快照（原理图是
-> 唯一事实源，页面推进后本文随之更新）。
+> 本文记录**已设计并验证完成的硬件**——嘉立创 EDA Pro 五页工程（POWER / MCU /
+> EPD / TOUCH / SD）的 v2.0 原理图：电源架构、各页器件构成、以及固件依赖的
+> 主控引脚分配。原理图 / PCB / BOM 的编辑以嘉立创 EDA 工程（*ESPaperPlay*）
+> 为唯一事实源，本页是其保持同步的概览。
 
 ---
 
 <a id="en"></a>
 ## English
 
-### Overview
+### System Overview
 
-The board is a custom carrier for the ESPaperPlay e-paper player firmware
-(target: **ESP32-S3**). Peripheral pages are complete; the MCU and power
-pages are still to be drawn.
+A custom carrier board for the ESPaperPlay firmware:
 
-| Schematic page | Status | Contents |
-| -------------- | ------ | -------- |
-| `EPD` | ✅ complete | 7.5″ e-paper (GDEY075T7-T01 / UC8179) FPC + boost/charge-pump circuit |
-| `TOUCH` | ✅ complete | GT911 capacitive touch FPC + I²C pull-ups + decoupling |
-| `SD` | ✅ complete | microSD (push) socket, 4-bit SDMMC wiring with pull-ups |
-| `MCU` | ⬜ empty | ESP32-S3 minimal system — to be drawn |
-| `POWER` | 🔶 drawn, gate pending | Battery power page (see below) — full circuit drawn, layout re-fit into the A4 frame pending |
+- **SoC** — ESP32-S3-WROOM-1-N16R8 (16 MB flash + 8 MB octal PSRAM, LCSC
+  C2913202).
+- **Display** — 7.5″ 800×480 e-paper **GDEY075T7-T01** (UC8179), 24-pin FPC,
+  with **GT911** capacitive touch on its separate 6-pin FPC.
+- **Storage** — push-push **microSD** slot, 4-bit SDMMC.
+- **Power** — USB-C 5 V input, single-cell Li-ion on a PH2.0 header; an
+  always-on 3.3 V main rail plus a firmware-switched 3.3 V peripheral rail.
 
-Verification state of the three completed pages: per-page design check passes
-with **0 findings**; the official schematic DRC returns **0 fatal / 0 error**
-(8 warnings per page without per-item detail — the identical count appears on
-the empty pages, so they are frame-level noise; still listed for review).
-`PCB1` exists but is empty; PCB work has not started.
+The core idea of the v2.0 board: **the MCU is always powered**. "Off" means
+deep sleep with the peripheral rail cut — so flashing, resets and crashes
+never lose power, and the shutdown path is purely software.
 
-### System Architecture
+### Power Architecture
 
-A single **3V3** rail (from the future POWER page) feeds the MCU, the e-paper
-logic supply and the touch controller; GND is the only other shared rail.
-Every board-to-board signal is a named net waiting on the MCU page:
+```
+USB-C 5 V (VBUS) ─┬─ TP4056 ────────────────► VBAT (Li-ion, PH2.0)
+                  ├─ SS34 ────────► VRAW ◄──── AO3401A (Q3) ◄── VBAT
+                  │                    │        (battery load switch)
+                  │                    ▼
+                  │            TPS62840 buck ──► 3V3  (main rail, always on)
+                  │            (L2 2.2 µH)
+                  └─ LED charge indicator
+3V3 ── AO3401A (Q2, gate ← POWER_EN) ──► 3V3_PER  (EPD / touch / SD)
+```
 
-- **EPD → SPI**: `SCLK`, `SDI`, `CS`, `D/C`, `RES`, `BUSY`
-- **Touch → I²C**: `SDA`, `SCL`, plus `INT`, `RST`
-- **SD → SDMMC 4-bit**: `SD_CLK`, `SD_CMD`, `SD_D0`…`SD_D3`
+- **Input & protection** — Type-C 16-pin receptacle (C2765186) with 5.1 kΩ
+  CC pull-downs (R11/R12) per UFP requirements; VBUS ESD PESD5V0S1UB (D4);
+  USB data-line ESD USBLC6-2SC6 (D5) in straight-through flow-through wiring.
+- **Charging** — TP4056 (C725790), PROG = 1.2 kΩ (≈1 A), CE pulled to VBUS
+  via 10 kΩ (always enabled when USB is present). CHRG#/STDBY# are
+  open-drain with 100 kΩ pull-ups to 3V3 and are read by the MCU; the charge
+  LED hangs off VBUS, so charging remains visible while the system is "off".
+  Battery connects through a PH2.0-2P header (H1, C3029440).
+- **Load sharing** — while VBUS is present, Q3's gate is lifted toward VBUS
+  (R18/R19), turning the battery path off; VRAW is fed from VBUS through
+  SS34 (D6). When USB is unplugged Q3 conducts seamlessly — the system never
+  resets.
+- **Main rail** — TPS62840DLCR (C2071859): EN tied to VIN (always on),
+  MODE/STOP to GND, VSET = 267 kΩ → 3.3 V, 750 mA. Power inductor
+  **PNR4030-2R2-N** (L2, 2.2 µH, Isat 3.8 A, C55381752). Combined output
+  capacitance on 3V3 + 3V3_PER sits inside the part's allowed COUT window.
+- **Peripheral rail** — Q2 (AO3401A) high-side switch, 3V3 → 3V3_PER. Gate
+  network: 4.7 kΩ from **POWER_EN** (GPIO41, low = rail on), 100 kΩ pull-up
+  to 3V3 (off at reset — safe default), 1 µF gate capacitor for a ~5 ms
+  soft start.
+- **Monitoring** — battery divider R23/R24 = 10 M/3.3 M (ratio 0.248, with
+  100 nF filter) → **BAT_SENSE** (GPIO1, ADC1_CH0); VBUS divider R25/R26 =
+  1 M/1.5 M (ratio 0.6, high = present) → **USB_PRES** (GPIO6); charge state
+  → **CHRG_STAT** (GPIO39) / **STANDBY_STAT** (GPIO40).
+- **Shutdown floor** — ≈14 µA with the battery in place (MCU deep sleep
+  ≈8 µA, charger sleep, divider leakage ≈0.3 µA).
 
-Net audit: 29 unique nets project-wide; `GND`/`3V3` are consistently named
-across all three drawn pages. 8 nets are currently single-pin (the MCU-facing
-signals above) — expected until the MCU page lands, but each must terminate on
-an MCU pin (or a net port) before the schematic gate can pass.
+### Soft Power & Buttons
 
-Note carried over from the current dev board: **touch and EPD share the 3V3
-rail**, so the EPD boost inrush and WiFi burst currents ride one rail — the
-POWER page should budget for this (rail impedance / decoupling), and layout
-should keep the boost loop away from the touch FPC.
+Both buttons are side-push tact switches (TS24CA, C393942):
 
-### EPD Page (complete)
+- **BOOT (SW2)** — GPIO0 with 10 kΩ pull-up. Short press wakes the device
+  from deep sleep; a long press (≥3 s, firmware-defined) is the graceful
+  "off" command (unmount SD, save state, cut 3V3_PER, deep sleep).
+- **RESET (SW1)** — on the EN pin with 10 kΩ pull-up (R27) and 1 µF (C27)
+  for a clean ~10 ms power-up ramp; resets the MCU without ever cutting
+  power.
+- Because the MCU supply is never interrupted, reset and flashing sessions
+  never lose the "on" state.
 
-**Connector** — `FPC1`: 24-pin, 0.5 mm FPC socket (HYCW3D-05FPC24-200B,
-LCSC C53436608) for the panel's FPC tail.
+### MCU Page — Pin Allocation
 
-**Power train** (per the GoodDisplay reference design):
+The allocation below is what the firmware depends on
+(`components/board/include/espaperplay_config.h` is kept in sync):
 
-- `Q1` SI1308EDL (SOT-323, C7603347) — low-side boost switch: gate = `GDR`
-  (driven by the panel controller), source = `RESE`, drain = switch node.
-- `L1` 10 µH (FHD252012S-100MT, C602018) from `3V3` to the switch node.
-- `R2` 0.47 Ω from `RESE` to GND — current-sense resistor the controller
-  uses to set drive strength.
-- `R1` 1 MΩ from `GDR` to GND — bleeds the gate so the boost stays off while
-  the controller's GDR output is high-Z.
+| Function | GPIO | Module pin | Net | Remote end |
+|---|---|---|---|---|
+| BOOT key | IO0 | 27 | BOOT_BTN | SW2 + R28 10 kΩ |
+| Battery sense (ADC1_CH0) | IO1 | 39 | BAT_SENSE | R23/R24 divider + C24 |
+| Touch reset | IO2 | 38 | RST | FPC2.3 + R5 10 kΩ pull-up |
+| Touch interrupt | IO3 | 15 | INT | FPC2.4 |
+| Touch I²C data | IO4 | 4 | SDA | FPC2.5 + R3 10 kΩ |
+| Touch I²C clock | IO5 | 5 | SCL | FPC2.6 + R4 10 kΩ |
+| VBUS presence | IO6 | 6 | USB_PRES | R25/R26 divider |
+| EPD busy | IO7 | 7 | BUSY | FPC1.9 |
+| EPD reset | IO8 | 12 | RES | FPC1.10 |
+| EPD data/command | IO9 | 17 | D/C | FPC1.11 |
+| EPD chip select | IO10 | 18 | CS | FPC1.12 |
+| EPD SPI MOSI | IO11 | 19 | SDI | FPC1.14 |
+| EPD SPI clock | IO12 | 20 | SCLK | FPC1.13 |
+| SD clock | IO14 | 22 | SD_CLK | CARD1.5 |
+| SD command | IO15 | 8 | SD_CMD | CARD1.3 + R8 10 kΩ |
+| SD data 0 | IO16 | 9 | SD_D0 | CARD1.7 + R9 10 kΩ |
+| SD data 1 | IO17 | 10 | SD_D1 | CARD1.8 + R10 10 kΩ |
+| SD data 2 | IO18 | 11 | SD_D2 | CARD1.1 + R6 10 kΩ |
+| USB D− | IO19 | 13 | USB_DM | D5.4 → USB1 |
+| USB D+ | IO20 | 14 | USB_DP | D5.6 → USB1 |
+| SD data 3 | IO21 | 23 | SD_D3 | CARD1.2 + R7 10 kΩ |
+| Charging indicator | IO39 | 32 | CHRG_STAT | U1.7 (TP4056 CHRG#) |
+| Charge-done indicator | IO40 | 33 | STANDBY_STAT | U1.6 (TP4056 STDBY#) |
+| Peripheral-rail enable | IO41 | 34 | POWER_EN | R22 → Q2 gate |
 
-**Charge pumps** (all diodes MBR0530 Schottky, C55068180):
+- **EN** (pin 3) — R27 10 kΩ pull-up + C27 1 µF + SW1 (reset).
+- **Deliberately unconnected** — IO35/36/37 (pins 28–30) belong to the
+  octal PSRAM inside the module and must stay open; RXD0/TXD0 (36/37 pins)
+  are reserved for UART0 debugging; IO13/38/42/45/46/47/48 are spare.
+- Module power: GND (1/40/41), 3V3 (2) with C25 10 µF + C26 100 nF
+  decoupling.
 
-- `+V`: `D3` half-wave rectifies the switch node into `PREVGH`
-  (reservoir `C4` 4.7 µF) → FPC pin 21.
-- `−V`: flying cap `C2` 4.7 µF couples the switch node onto the pump node;
-  `D2` clamps the pump node to GND, `D1` rectifies it into `PREVGL`
-  (reservoir `C8` 4.7 µF) → FPC pin 23.
+### EPD Page
 
-**Panel rail reservoirs** — FPC pins 5 (`C1` 4.7 µF), 18 (`C6` 1 µF),
-20 (`C7` 1 µF), 22 (`C9` 1 µF) and `VCOM` pin 24 (`C10` 1 µF), each to GND.
-Their net names are auto-generated (`$3N50`, `$3N63`, `$3N64`, `$3N67`) —
-cosmetic rename candidates.
+24-pin FPC connector FPC1 (HOAUC C53436608) — pinout verified against the
+official Good Display GDEY075T7-T01 specification and CAD drawing:
 
-**3V3 decoupling** — `C3` 4.7 µF + `C5` 1 µF at the connector.
+- Logic pins 9–14 map 1:1 to BUSY / RES / D/C / CS / SCLK / SDI.
+- **BS1 (pin 8) → GND** selects 4-wire SPI.
+- VDDIO/VCI (pins 15/16) come from **3V3_PER**; VDD (18) carries its 1 µF
+  to GND; VPP (19) and the temperature-sensor pins TSCL/TSDA (6/7) are open.
+- The positive/negative gate and VCOM rails are generated by the discrete
+  booster on this page — L1 10 µH (FHD252012S-100MT, C602018) from 3V3_PER
+  into Q1 (SI1308EDL, C7603347), a gate-drive switch driven by the panel's
+  GDR output (pin 2) with RESE current sense (pin 3, R2 0.47 Ω); MBR0530
+  Schottkys (D1–D3) and pump caps produce VGH (21) / VGL (23); VCOM (24),
+  VSHR/VSH1/VSL (5/20/22) carry their decoupling caps.
 
-**Signal pin map**
+### TOUCH Page
 
-| FPC pin | Net | FPC pin | Net |
-| ------- | --- | ------- | --- |
-| 2 | GDR | 12 | CS |
-| 3 | RESE | 13 | SCLK |
-| 8 / 17 / 25 / 26 | GND | 14 | SDI |
-| 9 | BUSY | 15 / 16 | 3V3 |
-| 10 | RES | 21 | PREVGH |
-| 11 | D/C | 23 / 24 | PREVGL / VCOM |
+6-pin FPC connector FPC2 (LAILAN C55172961) — pin order matches the official
+GDEY075T7-T01 CAD drawing exactly: **GND / VCC / RESET / INT / SDA / SCL**.
+VCC hangs on 3V3_PER; I²C pull-ups (R3/R4, 10 kΩ) are on the same rail; RST
+has a 10 kΩ pull-up (R5) so the GT911 comes out of reset whenever the MCU
+pin is high-Z — this protects the controller's I²C address latch (a known
+failure mode handled by the driver's self-healing loop, see
+[Power & Reliability](power.md)).
 
-**Floating pins**: FPC 1, 4, 6, 7, 19 are unconnected and have no no-connect
-markers yet (open item).
+### SD Page
 
-### Touch Page (complete)
+Push-push microSD slot CARD1 (SHOU HAN C393941) in standard pin order,
+4-bit SDMMC on GPIO14–18 + 21. VDD is on 3V3_PER with 10 µF + 100 nF; CMD
+and DAT0–DAT3 carry 10 kΩ pull-ups to 3V3_PER (CLK intentionally has none);
+the card-detect switch is unused.
 
-**Connector** — `FPC2`: 6-pin, 0.5 mm FPC (LAIL-FPC-CDX01-6P0.5-GW,
-LCSC C55172961) for the GT911 touch tail:
+### Verification Status
 
-| FPC pin | Net | FPC pin | Net |
-| ------- | --- | ------- | --- |
-| 1 / 7 / 8 | GND | 4 | INT |
-| 2 | 3V3 | 5 | SDA |
-| 3 | RST | 6 | SCL |
+- Whole-project strict **DRC: 0 errors**; every net has both ends (no
+  dangling nets, no duplicate designators, all 77 components verified in the
+  netlist).
+- Cross-page nets (EPD/TOUCH/SD signals, USB pair, POWER_EN, dividers,
+  charge status) verified closed by netlist extraction.
+- FPC1/FPC2 pin maps verified against official Good Display documentation;
+  charger/DCDC/load-switch pinouts verified against datasheets.
+- USB ESD channel pairing verified against the ST pin-configuration figure
+  (D5: I/O1 = pins 1/6, I/O2 = pins 3/4) — D+/D− pass straight through.
+- Firmware pin map synced in `espaperplay_config.h`; octal PSRAM enabled
+  (`sdkconfig.defaults`) with its reserved pins untouched.
 
-- `R3`, `R4` 10 kΩ — I²C pull-ups (SDA/SCL → 3V3). Final value: an earlier
-  review proposed 4.7 kΩ, but 10 kΩ was confirmed as the design of record
-  (decision 2026-09-12).
-- `R5` 10 kΩ — `RST` pull-up to 3V3 (keeps the controller out of reset while
-  the MCU pin is high-Z; part of the GT911 address-latch self-healing story).
-- `INT` deliberately has **no** pull-up (per design decision 2026-09).
-- Decoupling at the connector: `C11` 100 nF + `C12`/`C13` 4.7 µF.
+**Before ordering PCBs** — remaining manual check:
 
-### SD Card Page (complete)
-
-**Connector** — `CARD1`: push-push microSD socket (TF PUSH, LCSC C393941),
-wired for **SDMMC 4-bit**: `CLK` / `CMD` / `DAT0`…`DAT3` as `SD_CLK`,
-`SD_CMD`, `SD_D0`…`SD_D3`.
-
-- Pull-ups `R6`–`R10` 10 kΩ on CMD and all four data lines → 3V3 (CLK: none).
-- Decoupling: `C15` 100 nF + `C14` 10 µF.
-- The card-detect switch pin (`CD`) is unused and unmarked (open item).
-
-### Bill of Materials
-
-13 line items; full list from the live BOM export:
-
-| Qty | Value | Parts | MPN | LCSC |
-| --- | ----- | ----- | --- | ---- |
-| 9 | 4.7 µF | C1–C4, C7–C9, C12, C13 | CL10A475KA8NQNC (Samsung) | C69335 |
-| 3 | 1 µF | C5, C6, C10 | CC0603KRX5R8BB105 (YAGEO) | C14664 |
-| 2 | 100 nF | C11, C15 | CL10B104KB8NNNC (Samsung) | C1591 |
-| 1 | 10 µF | C14 | *(generic — no MPN)* | — |
-| 1 | TF socket | CARD1 | TF PUSH (SHOU HAN) | C393941 |
-| 3 | MBR0530 | D1–D3 | MBR0530 (R+O) | C55068180 |
-| 1 | 24P FPC 0.5 mm | FPC1 | HYCW3D-05FPC24-200B (HOAUC) | C53436608 |
-| 1 | 6P FPC 0.5 mm | FPC2 | LAIL-FPC-CDX01-6P0.5-GW (LAILAN) | C55172961 |
-| 1 | 10 µH | L1 | FHD252012S-100MT (cjiang) | C602018 |
-| 1 | MOSFET | Q1 | SI1308EDL (TECH PUBLIC) | C7603347 |
-| 1 | 1 MΩ | R1 | *(generic)* | — |
-| 1 | 0.47 Ω | R2 | *(generic)* | — |
-| 8 | 10 kΩ | R3–R10 | *(generic)* | — |
-
-All passives are 0603. Generic placeholders (`C14`, `R1`, `R2`, `R3`–`R10`)
-still need an MPN/LCSC assignment before fab.
-
-### Power Page (drawn 2026-09-12, gate pending)
-
-Circuit per the agreed power proposal — **39 parts, six functional blocks**,
-wired in the same style as the other pages (real wires inside blocks, net
-flags for rails and MCU-facing signals):
-
-- **TYPEC_IN** — `J1` 16P Type-C (CC1/CC2 5.1 kΩ Rd each via `R11`/`R12`),
-  `U3` USBLC6-2SC6 ESD on VBUS + D±; `USB_DP`/`USB_DM` reserved for the MCU's
-  native USB.
-- **CHARGER** — `U1` TP4056 (PROG 2 kΩ → 580 mA), LEDs on VBUS (indicate
-  while charging with system off), `R21`/`R22` 10 kΩ pull CHRG#/STDBY# to 3V3
-  → `CHRG_STS`/`STDBY_STS` to MCU.
-- **LOAD_SHARE** — `Q2` AO3401A (D→VBAT, S→VSYS), `D4` SS34 (VBUS→VSYS),
-  `D5`+`R16` gate network: USB present isolates the battery; unplugged, the
-  battery takes over.
-- **SOFT_SWITCH** — SW1 power key, `R25`/`R26`/`R27` sense divider
-  (`PWR_BTN_SNS`), `Q5`+`Q6` latch driven by `PWR_HOLD`, `R28` 1 MΩ + `C23`
-  10 µF hold capacitor (RST-safe, ≥3 s = force-off), `R23`/`R24`/`C22`.
-- **LDO_3V3** — `U2` XC6220D331 (1 A, CE driven at full VSYS via PWR_EN).
-- **MONITOR** — `R17`/`R18` 1 MΩ VBAT divider → `VBAT_SNS` (ADC),
-  `R19`/`R20` 100 kΩ VBUS detect → `VBUS_SNS`.
-
-Six zone frames + per-block notes are on the page. The EasyEDA **native DRC
-passes with 0 fatal / 0 error** (15 item-less warnings, same profile as the
-blank pages). **The strict agent gate does not pass yet**: the whole layout
-was drawn against a 2970×2100 canvas while the project's A4 frame is
-1170×825 usable (all 39 parts sit out-of-frame), and `bridge-check` flags 15
-collinear-merge warnings that the native DRC does not confirm. **Next step**:
-re-fit the layout into the A4 frame (compact re-placement, re-run the wire
-topology at the new coordinates), then re-run `sch gate --strict`.
-
-MCU-facing nets to terminate on the MCU page: `USB_DP`, `USB_DM`,
-`VBAT_SNS`, `VBUS_SNS`, `CHRG_STS`, `STDBY_STS`, `PWR_BTN_SNS`, `PWR_HOLD`.
-
-### Open Items
-
-1. **MCU page** — draw the ESP32-S3 minimal system (strapping, flash/PSRAM,
-   USB, boot/UART) and terminate the 8 single-pin nets listed above.
-2. **POWER page** — battery input, charging, 3V3 regulator; budget for EPD
-   boost + WiFi bursts on the shared rail.
-3. **NC markers** — FPC1 pins 1/4/6/7/19 and `CARD1.CD` float without
-   no-connect flags (the schematic check counts them as floating pins).
-4. **Generic BOM rows** — assign MPN/LCSC to C14, R1, R2, R3–R10.
-5. **Cosmetics before the schematic gate** — no functional-zone frames or
-   per-module circuit notes have been drawn on any page yet, and the four
-   `$3Nxx` panel-rail nets could take descriptive names.
+1. TS24CA button pin grouping: with a multimeter, unpressed, the signal pin
+   must be open against all three grounded pins; pressed, it must conduct
+   (the datasheet does not show the internal grouping).
 
 ---
 
 <a id="zh"></a>
 ## 简体中文
 
-### 概览
+### 系统概览
 
-这块板是 ESPaperPlay 电子纸阅读器固件（目标芯片 **ESP32-S3**）的自制底板。
-外设页已完成，主控页与电源页尚未绘制。
+ESPaperPlay 固件的自研载板：
 
-| 原理图页 | 状态 | 内容 |
-| -------- | ---- | ---- |
-| `EPD` | ✅ 完成 | 7.5″ 电子纸（GDEY075T7-T01 / UC8179）FPC + 升压/电荷泵电路 |
-| `TOUCH` | ✅ 完成 | GT911 电容触摸 FPC + I²C 上拉 + 去耦 |
-| `SD` | ✅ 完成 | TF（自弹）卡座，SDMMC 4-bit 接法 + 上拉 |
-| `MCU` | ⬜ 空页 | ESP32-S3 最小系统——待绘制 |
-| `POWER` | 🔶 已画、门禁未过 | 电池供电页（见下）——电路全部画完，待整体收进 A4 图框 |
+- **主控**——ESP32-S3-WROOM-1-N16R8（16 MB Flash + 8 MB 八线 PSRAM，
+  立创 C2913202）。
+- **显示**——7.5″ 800×480 电子纸 **GDEY075T7-T01**（UC8179），24P FPC；
+  **GT911** 电容触摸经独立的 6P FPC 引出。
+- **存储**——自弹式 **microSD** 卡座，4 位 SDMMC。
+- **电源**——Type-C 5V 输入，单节锂电池（PH2.0 座）；常开 3.3V 主轨 +
+  固件开关的 3.3V 外设轨。
 
-三个已完成页的验证状态：逐页设计检查 **0 findings** 通过；官方原理图 DRC
-**0 fatal / 0 error**（每页 8 条无法细化到条目的 WARN——空白页同样是 8 条，
-基本可断定为图框类噪音，仍列入待审阅）。`PCB1` 已存在但为空，PCB 尚未开始。
+v2.0 板的核心思路：**主控永远带电**。"关机"= 深睡 + 外设轨断电——烧录、
+复位、崩溃都不会掉电，关机完全由软件实现。
 
-### 系统架构
+### 电源架构
 
-单一 **3V3** 轨（由未来的 POWER 页产生）同时供给主控、电子纸逻辑电与触摸
-控制器；GND 是唯一另一条共享轨。所有板内互连都是挂在主控页上的命名网络：
+```
+Type-C 5V (VBUS) ─┬─ TP4056 ────────────────► VBAT（锂电池，PH2.0）
+                  ├─ SS34 ────────► VRAW ◄──── AO3401A（Q3）◄── VBAT
+                  │                    │        （电池负载开关）
+                  │                    ▼
+                  │            TPS62840 降压 ──► 3V3（主轨，常开）
+                  │            （L2 2.2µH）
+                  └─ 充电指示灯
+3V3 ── AO3401A（Q2，栅极 ← POWER_EN）──► 3V3_PER（EPD / 触摸 / SD）
+```
 
-- **EPD → SPI**：`SCLK`、`SDI`、`CS`、`D/C`、`RES`、`BUSY`
-- **触摸 → I²C**：`SDA`、`SCL`，另有 `INT`、`RST`
-- **SD → SDMMC 4-bit**：`SD_CLK`、`SD_CMD`、`SD_D0`…`SD_D3`
+- **输入与防护**——Type-C 16P 母座（C2765186），CC 双 5.1K 下拉（R11/R12）
+  符合受电设备要求；VBUS ESD 选用 PESD5V0S1UB（D4）；USB 数据线 ESD 选用
+  USBLC6-2SC6（D5），按 1↔6 / 3↔4 直通方式接线。
+- **充电**——TP4056（C725790），PROG = 1.2K（约 1A），CE 经 10K 上拉至
+  VBUS（USB 在位即使能）。CHRG#/STDBY# 开漏输出、100K 上拉至 3V3 并接入
+  主控回读；充电指示灯挂 VBUS——系统"关机"时充电状态依旧可见。电池经
+  PH2.0-2P 卧贴座（H1，C3029440）接入。
+- **负载共享**——VBUS 在位时 Q3 栅极被拉向 VBUS（R18/R19），电池通路关断，
+  VRAW 由 VBUS 经 SS34（D6）馈入；拔线后 Q3 无缝导通，系统不复位。
+- **主轨**——TPS62840DLCR（C2071859）：EN 接 VIN（常开），MODE/STOP 接地，
+  VSET = 267K → 3.3V，750mA；功率电感 **PNR4030-2R2-N**（L2，2.2µH、
+  Isat 3.8A，C55381752）。3V3 与 3V3_PER 的合计输出电容在器件允许的
+  COUT 窗口内。
+- **外设轨**——Q2（AO3401A）高侧开关，3V3 → 3V3_PER。栅极网络：4.7K 接
+  **POWER_EN**（GPIO41，低电平开轨）、100K 上拉至 3V3（复位默认关，安全）、
+  1µF 栅极电容提供约 5ms 软启动。
+- **监测**——电池分压 R23/R24 = 10M/3.3M（比例 0.248，100nF 滤波）→
+  **BAT_SENSE**（GPIO1，ADC1_CH0）；VBUS 分压 R25/R26 = 1M/1.5M（比例 0.6，
+  高 = 在位）→ **USB_PRES**（GPIO6）；充电状态 → **CHRG_STAT**（GPIO39）/
+  **STANDBY_STAT**（GPIO40）。
+- **关机底电流**——电池在位约 14µA（主控深睡约 8µA + 充电睡眠 + 分压
+  漏电约 0.3µA）。
 
-网络审计：全工程 29 条独立网络；`GND`/`3V3` 三个已绘制页命名一致。当前
-8 条单引脚网（即上述主控侧信号）——主控页落地前属预期，但原理图门禁通过
-前每条都必须落到主控引脚（或网络端口）上。
+### 软开关与按键
 
-从现役开发板带过来的注意事项：**触摸与电子纸共用 3V3 轨**，EPD 升压浪涌
-与 WiFi 突发电流同轨叠加——POWER 页需按此做预算（轨阻抗/去耦），布局上
-升压环路应远离触摸 FPC。
+两颗按键均为侧按轻触开关（TS24CA，C393942）：
 
-### EPD 页（完成）
+- **BOOT（SW2）**——GPIO0、10K 上拉。短按从深睡唤醒；长按（≥3s，固件
+  定义）执行优雅"关机"（卸载 SD、保存状态、断 3V3_PER、进入深睡）。
+- **RESET（SW1）**——接 EN 脚，10K 上拉（R27）+ 1µF（C27）保证上电
+  约 10ms 平滑爬升；只复位主控、绝不断电。
+- 主控供电从不中断，复位与烧录过程不会丢失"开机"状态。
 
-**连接器**——`FPC1`：24P 0.5mm FPC 座（HYCW3D-05FPC24-200B，
-LCSC C53436608），对插屏幕 FPC。
+### MCU 页——引脚分配
 
-**功率链**（按 GoodDisplay 参考设计）：
+下表即固件依赖的分配（`components/board/include/espaperplay_config.h`
+保持同步）：
 
-- `Q1` SI1308EDL（SOT-323，C7603347）——低侧升压开关：栅 = `GDR`（屏内
-  控制器驱动），源 = `RESE`，漏 = 开关节点。
-- `L1` 10 µH（FHD252012S-100MT，C602018），`3V3` → 开关节点。
-- `R2` 0.47 Ω，`RESE` → GND——屏控制器检测电流、设定驱动强度的采样电阻。
-- `R1` 1 MΩ，`GDR` → GND——泄放电阻，控制器 GDR 高阻时保证开关管关断。
+| 功能 | GPIO | 模组脚 | 网络 | 对端 |
+|---|---|---|---|---|
+| BOOT 按键 | IO0 | 27 | BOOT_BTN | SW2 + R28 10K |
+| 电池电压（ADC1_CH0） | IO1 | 39 | BAT_SENSE | R23/R24 分压 + C24 |
+| 触摸复位 | IO2 | 38 | RST | FPC2.3 + R5 10K 上拉 |
+| 触摸中断 | IO3 | 15 | INT | FPC2.4 |
+| 触摸 I²C 数据 | IO4 | 4 | SDA | FPC2.5 + R3 10K |
+| 触摸 I²C 时钟 | IO5 | 5 | SCL | FPC2.6 + R4 10K |
+| VBUS 在位 | IO6 | 6 | USB_PRES | R25/R26 分压 |
+| EPD 忙 | IO7 | 7 | BUSY | FPC1.9 |
+| EPD 复位 | IO8 | 12 | RES | FPC1.10 |
+| EPD 数据/命令 | IO9 | 17 | D/C | FPC1.11 |
+| EPD 片选 | IO10 | 18 | CS | FPC1.12 |
+| EPD SPI MOSI | IO11 | 19 | SDI | FPC1.14 |
+| EPD SPI 时钟 | IO12 | 20 | SCLK | FPC1.13 |
+| SD 时钟 | IO14 | 22 | SD_CLK | CARD1.5 |
+| SD 命令 | IO15 | 8 | SD_CMD | CARD1.3 + R8 10K |
+| SD 数据 0 | IO16 | 9 | SD_D0 | CARD1.7 + R9 10K |
+| SD 数据 1 | IO17 | 10 | SD_D1 | CARD1.8 + R10 10K |
+| SD 数据 2 | IO18 | 11 | SD_D2 | CARD1.1 + R6 10K |
+| USB D− | IO19 | 13 | USB_DM | D5.4 → USB1 |
+| USB D+ | IO20 | 14 | USB_DP | D5.6 → USB1 |
+| SD 数据 3 | IO21 | 23 | SD_D3 | CARD1.2 + R7 10K |
+| 充电中指示 | IO39 | 32 | CHRG_STAT | U1.7（TP4056 CHRG#） |
+| 充满指示 | IO40 | 33 | STANDBY_STAT | U1.6（TP4056 STDBY#） |
+| 外设轨使能 | IO41 | 34 | POWER_EN | R22 → Q2 栅极 |
 
-**电荷泵**（二极管均为 MBR0530 肖特基，C55068180）：
+- **EN**（3 脚）——R27 10K 上拉 + C27 1µF + SW1（复位）。
+- **有意悬空**——IO35/36/37（28–30 脚）属于模组内八线 PSRAM，必须悬空；
+  RXD0/TXD0（36/37 脚）预留给 UART0 调试；IO13/38/42/45/46/47/48 为空闲。
+- 模组供电：GND（1/40/41）、3V3（2）配 C25 10µF + C26 100nF 去耦。
 
-- `+V`：`D3` 对开关节点半波整流 → `PREVGH`（储能 `C4` 4.7 µF）→ FPC 21 脚。
-- `−V`：飞跨电容 `C2` 4.7 µF 把开关节点耦合到泵节点；`D2` 把泵节点钳到
-  GND，`D1` 整流进 `PREVGL`（储能 `C8` 4.7 µF）→ FPC 23 脚。
+### EPD 页
 
-**屏侧轨储能**——FPC 5 脚（`C1` 4.7 µF）、18 脚（`C6` 1 µF）、
-20 脚（`C7` 1 µF）、22 脚（`C9` 1 µF）与 `VCOM` 24 脚（`C10` 1 µF），
-各自对 GND。这几条网络名是自动生成的（`$3N50` 等）——可改成语义名。
+24P FPC 连接器 FPC1（华宇创 C53436608）——引脚序已对照 Good Display
+GDEY075T7-T01 官方规格书与 CAD 图纸核验：
 
-**3V3 去耦**——连接器旁 `C3` 4.7 µF + `C5` 1 µF。
+- 逻辑脚 9–14 与 BUSY / RES / D/C / CS / SCLK / SDI 一一对应。
+- **BS1（8 脚）接 GND**，选择 4 线 SPI。
+- VDDIO/VCI（15/16 脚）由 **3V3_PER** 供电；VDD（18 脚）对地 1µF；VPP
+  （19 脚）与温度传感器脚 TSCL/TSDA（6/7 脚）悬空。
+- 正/负栅极与 VCOM 轨由本页分立升压电路产生——L1 10µH（FHD252012S-100MT，
+  C602018）自 3V3_PER 接入 Q1（SI1308EDL，C7603347），栅极由面板 GDR 输出
+  （2 脚）驱动、RESE（3 脚）做电流检测（R2 0.47Ω）；MBR0530 肖特基
+  （D1–D3）与泵电容产生 VGH（21 脚）/ VGL（23 脚）；VCOM（24 脚）与
+  VSHR/VSH1/VSL（5/20/22 脚）各配去耦电容。
 
-**信号引脚表**
+### TOUCH 页
 
-| FPC 脚 | 网络 | FPC 脚 | 网络 |
-| ------ | ---- | ------ | ---- |
-| 2 | GDR | 12 | CS |
-| 3 | RESE | 13 | SCLK |
-| 8 / 17 / 25 / 26 | GND | 14 | SDI |
-| 9 | BUSY | 15 / 16 | 3V3 |
-| 10 | RES | 21 | PREVGH |
-| 11 | D/C | 23 / 24 | PREVGL / VCOM |
+6P FPC 连接器 FPC2（莱联 C55172961）——引脚序与官方 GDEY075T7-T01 CAD
+图纸完全一致：**GND / VCC / RESET / INT / SDA / SCL**。VCC 挂 3V3_PER；
+I²C 上拉（R3/R4，10K）在同一轨上；RST 配 10K 上拉（R5），主控引脚高阻时
+GT911 也能正常出复位——保护控制器的 I²C 地址锁存（已知失效模式，由驱动
+自愈流程处理，见[电源与可靠性](power.md)）。
 
-**悬空引脚**：FPC 1、4、6、7、19 未连接且尚未放非连接标记（待办）。
+### SD 页
 
-### 触摸页（完成）
+自弹式 microSD 卡座 CARD1（首韩 C393941），标准引脚序，4 位 SDMMC 走
+GPIO14–18 + 21。VDD 挂 3V3_PER（10µF + 100nF）；CMD 与 DAT0–DAT3 各配
+10K 上拉至 3V3_PER（CLK 有意不加）；卡检测开关未使用。
 
-**连接器**——`FPC2`：6P 0.5mm FPC（LAIL-FPC-CDX01-6P0.5-GW，
-LCSC C55172961），对插 GT911 触摸排线：
+### 验证状态
 
-| FPC 脚 | 网络 | FPC 脚 | 网络 |
-| ------ | ---- | ------ | ---- |
-| 1 / 7 / 8 | GND | 4 | INT |
-| 2 | 3V3 | 5 | SDA |
-| 3 | RST | 6 | SCL |
+- 全工程严格模式 **DRC：0 错误**；全部网络双端闭合（无悬空、无重复位号，
+  77 个器件全部经网表核对）。
+- 跨页网络（EPD/TOUCH/SD 信号、USB 差对、POWER_EN、分压、充电状态）经
+  网表提取验证闭合。
+- FPC1/FPC2 引脚序对照 Good Display 官方文档核验；充电 / 降压 / 负载开关
+  引脚对照数据手册核验。
+- USB ESD 通道配对已对照 ST 引脚配置图核实（D5：I/O1 = 1/6 脚、I/O2 =
+  3/4 脚）——D+/D− 直通无交叉。
+- 固件引脚表同步于 `espaperplay_config.h`；八线 PSRAM 已启用
+  （`sdkconfig.defaults`），保留脚未动。
 
-- `R3`、`R4` 10 kΩ——I²C 上拉（SDA/SCL → 3V3）。定案值：早期评审曾提议
-  4.7 kΩ，2026-09-12 确认维持 10 kΩ 为最终设计。
-- `R5` 10 kΩ——`RST` 上拉到 3V3（主控引脚高阻时保持控制器不进复位，
-  属 GT911 地址锁存自愈方案的一部分）。
-- `INT` 按设计决策（2026-09）**不上拉**。
-- 连接器去耦：`C11` 100 nF + `C12`/`C13` 4.7 µF。
+**打板前**——剩余人工检查项：
 
-### SD 卡页（完成）
-
-**连接器**——`CARD1`：自弹式 TF 卡座（TF PUSH，LCSC C393941），
-按 **SDMMC 4-bit** 接线：`CLK`/`CMD`/`DAT0`…`DAT3` 对应
-`SD_CLK`、`SD_CMD`、`SD_D0`…`SD_D3`。
-
-- 上拉 `R6`–`R10` 10 kΩ：CMD 与四根数据线全部上拉到 3V3（CLK 不上拉）。
-- 去耦：`C15` 100 nF + `C14` 10 µF。
-- 卡检测开关脚（`CD`）未使用且未标记（待办）。
-
-### 物料清单
-
-共 13 行；以下为活体 BOM 导出结果：
-
-| 数量 | 值 | 器件 | 型号 | LCSC |
-| ---- | -- | ---- | ---- | ---- |
-| 9 | 4.7 µF | C1–C4, C7–C9, C12, C13 | CL10A475KA8NQNC（三星） | C69335 |
-| 3 | 1 µF | C5, C6, C10 | CC0603KRX5R8BB105（国巨） | C14664 |
-| 2 | 100 nF | C11, C15 | CL10B104KB8NNNC（三星） | C1591 |
-| 1 | 10 µF | C14 | *（通用件，无型号）* | — |
-| 1 | TF 卡座 | CARD1 | TF PUSH（首韩） | C393941 |
-| 3 | MBR0530 | D1–D3 | MBR0530（宏嘉诚） | C55068180 |
-| 1 | 24P FPC 0.5mm | FPC1 | HYCW3D-05FPC24-200B（华宇创） | C53436608 |
-| 1 | 6P FPC 0.5mm | FPC2 | LAIL-FPC-CDX01-6P0.5-GW（莱联） | C55172961 |
-| 1 | 10 µH | L1 | FHD252012S-100MT（长江微电） | C602018 |
-| 1 | MOS 管 | Q1 | SI1308EDL（台舟） | C7603347 |
-| 1 | 1 MΩ | R1 | *（通用件）* | — |
-| 1 | 0.47 Ω | R2 | *（通用件）* | — |
-| 8 | 10 kΩ | R3–R10 | *（通用件）* | — |
-
-阻容全部 0603。通用占位件（`C14`、`R1`、`R2`、`R3`–`R10`）打板前需补
-型号/LCSC 编号。
-
-### 电源页（2026-09-12 已画，门禁未过）
-
-按定稿方案落地——**39 器件、六个功能块**，画法与其余三页一致（块内真导线、
-电源轨与 MCU 信号用网络旗标）：
-
-- **TYPEC_IN**——`J1` 16P Type-C（CC1/CC2 各 5.1 kΩ Rd，`R11`/`R12`）、
-  `U3` USBLC6-2SC6 护 VBUS+D±；`USB_DP`/`USB_DM` 预留 MCU 原生 USB。
-- **CHARGER**——`U1` TP4056（PROG 2 kΩ→580 mA），LED 挂 VBUS（关机充电仍指示），
-  `R21`/`R22` 10 kΩ 把 CHRG#/STDBY# 上拉到 3V3→`CHRG_STS`/`STDBY_STS` 回读。
-- **LOAD_SHARE**——`Q2` AO3401A（D→VBAT、S→VSYS）、`D4` SS34（VBUS→VSYS）、
-  `D5`+`R16` 栅极网络：USB 在时电池隔离、拔出后电池接管。
-- **SOFT_SWITCH**——SW1 电源键、`R25`/`R26`/`R27` 分压回读（`PWR_BTN_SNS`）、
-  `Q5`+`Q6` 锁存（固件 `PWR_HOLD` 保持）、`R28` 1 MΩ+`C23` 10 µF 保持电容
-  （RST 复位不掉电、≥3 s 强制断电）、`R23`/`R24`/`C22`。
-- **LDO_3V3**——`U2` XC6220D331（1 A，CE 由 PWR_EN 全压驱动）。
-- **MONITOR**——`R17`/`R18` 1 MΩ 电池分压→`VBAT_SNS`（ADC）、
-  `R19`/`R20` 100 kΩ VBUS 检测→`VBUS_SNS`。
-
-分区框与逐块电路说明已放。EasyEDA **原生 DRC 0 fatal / 0 error**（15 条无明细
-WARN，与空白页同型）。**agent 严格门禁尚未通过**：整版按 2970×2100 画布布的，
-而工程 A4 图框可用区只有 1170×825（39 件全部在框外），另有 15 条共线合并类
-警告（原生 DRC 未证实）。**下一步**：把布局整体收进 A4 框（紧凑重排 + 按新
-坐标重放连线拓扑），再跑 `sch gate --strict`。
-
-待 MCU 页接入的网络：`USB_DP`、`USB_DM`、`VBAT_SNS`、`VBUS_SNS`、`CHRG_STS`、
-`STDBY_STS`、`PWR_BTN_SNS`、`PWR_HOLD`。
-
-### 待办与风险
-
-1. **主控页**——绘制 ESP32-S3 最小系统（strapping、flash/PSRAM、USB、
-   BOOT/串口），并把上列 8 条单引脚网接到引脚上。
-2. **电源页**——电池输入、充电、3V3 稳压；按共轨上的 EPD 升压浪涌 +
-   WiFi 突发电流做预算。
-3. **非连接标记**——FPC1 的 1/4/6/7/19 脚与 `CARD1.CD` 悬空无 NC 标记
-   （设计检查把它们计为悬空引脚）。
-4. **通用 BOM 行**——给 C14、R1、R2、R3–R10 补型号/LCSC 编号。
-5. **门禁前整饰**——各页尚未画功能区框与逐模块电路说明；四条 `$3Nxx`
-   屏侧轨网络可改成语义名。
+1. TS24CA 按键引脚分组：万用表实测，不按时信号脚对其余三个接地脚应全部
+   开路、按下导通（规格书未标注内部分组）。
