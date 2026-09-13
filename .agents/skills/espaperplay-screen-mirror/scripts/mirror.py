@@ -34,6 +34,8 @@ FMT_G4 = 1
 GRAY4_SHADE = (255, 170, 85, 0)  # 2bpp: 0=白 1=浅灰 2=深灰 3=黑
 
 TOKEN_CACHE = "/tmp/espaperplay_mirror_token_{host}.json"
+HOLD_PIDFILE = "/tmp/espaperplay_mirror_hold_{host}.pid"
+HOLD_INTERVAL_S = 15  # 与 WebUI 前端心跳周期一致（设备保持唤醒窗口 70s）
 DISPLAY_W = 800
 DISPLAY_H = 480
 
@@ -58,7 +60,7 @@ def split_host(host_arg):
 
 # ---------------------------------------------------------------- HTTP ----
 
-def http_request(host_arg, path, token=None, form=None, binary=False, timeout=8):
+def http_request(host_arg, path, token=None, form=None, binary=False, timeout=8, method=None):
     host, port = split_host(host_arg)
     url = "https://%s:%d%s" % (host, port, path)
     data = None
@@ -68,7 +70,7 @@ def http_request(host_arg, path, token=None, form=None, binary=False, timeout=8)
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     if token:
         headers["Authorization"] = "Bearer " + token
-    req = urllib.request.Request(url, data=data, headers=headers)
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=http_context()) as resp:
             body = resp.read()
@@ -77,7 +79,7 @@ def http_request(host_arg, path, token=None, form=None, binary=False, timeout=8)
         detail = e.read().decode(errors="replace")[:200]
         die("HTTP %d %s%s（%s）" % (e.code, e.reason, ("：" + detail) if detail else "", url),
             2 if e.code == 401 else 3)
-    except (urllib.error.URLError, socket.timeout, OSError) as e:
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as e:
         die("无法连接设备 %s：%s（设备可能正在浅睡眠，稍后重试或先唤醒）" % (url, e), 4)
 
 
@@ -289,7 +291,8 @@ def cmd_watch(args):
     last_seq = None
     saved = 0
     for i in range(args.count):
-        status, data = http_request(args.host, "/api/auth/status", token=tok)  # 顺带心跳保活
+        # 每轮先发心跳：轮询会话视同控制台在线，抑制设备自动浅睡眠。
+        http_request(args.host, "/api/heartbeat", token=tok, method="POST")
         status, body = http_request(args.host, "/api/screen/snapshot", token=tok, binary=True)
         meta, _ = parse_frame(body)
         if meta["seq"] != last_seq:
@@ -390,6 +393,97 @@ def cmd_refresh(args):
     print("已请求强制全刷（FULL_FORCE 约 1.7s 或四灰约 2.5s）")
 
 
+# ------------------------------------------------------------- 保活 ----
+
+def _hold_pidfile(host_arg):
+    return HOLD_PIDFILE.replace("{host}", host_arg.replace(":", "_"))
+
+
+def _hold_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def cmd_hold(args):
+    """后台心跳进程：等价于 WebUI 打着页面（每 15s POST /api/heartbeat）。
+
+    技能的单条命令都是短连接，命令间隔一旦超过设备空闲睡眠超时（可低至
+    60s），设备进入浅睡眠、后续命令全部不可达。调试会话开始时先 hold，
+    结束时 --stop；进程有 max_minutes 上限兜底，防止忘停把设备焊在常亮。
+    """
+    pf = _hold_pidfile(args.host)
+
+    if args.status:
+        if os.path.exists(pf) and _hold_alive(int(open(pf).read())):
+            print("保活运行中（pid=%s）" % open(pf).read())
+        else:
+            print("保活未运行")
+            sys.exit(1)
+        return
+
+    if args.stop:
+        if os.path.exists(pf):
+            pid = int(open(pf).read())
+            if _hold_alive(pid):
+                os.kill(pid, 15)
+                print("已停止保活（pid=%d）" % pid)
+            else:
+                print("保活已不在运行，清理残留 pidfile")
+            os.remove(pf)
+        else:
+            print("保活本就未运行")
+        return
+
+    if os.path.exists(pf):
+        pid = int(open(pf).read())
+        if _hold_alive(pid):
+            print("保活已在运行（pid=%d），无需重复启动" % pid)
+            return
+        os.remove(pf)
+
+    tok = None
+    connect_deadline = time.time() + 90
+    while True:
+        try:
+            tok = get_token(args.host, args)  # fork 前先确保 token 有效并已缓存
+            break
+        except SystemExit as e:
+            # 设备暂时不可达（code=4，如刚要睡/刚醒的边缘态）时在 90s 内
+            # 重试；其余错误（没密码、401 等）重试无意义，直接抛给调用方。
+            if e.code != 4 or time.time() >= connect_deadline:
+                raise
+            time.sleep(5)
+    deadline = time.time() + args.max_minutes * 60
+
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        try:
+            while time.time() < deadline:
+                # 任何错误（瞬断/token 失效）都静默重试到期限：保活进程的
+                # 职责就是在网络抖动后继续守着，不该一错就退。
+                try:
+                    http_request(args.host, "/api/heartbeat", token=tok, method="POST")
+                except SystemExit:
+                    pass
+                time.sleep(HOLD_INTERVAL_S)
+        finally:
+            os._exit(0)
+    else:
+        with open(pf, "w") as f:
+            f.write(str(pid))
+        print("保活已启动（pid=%d，每 %ds 心跳，%d 分钟后自动退出）" % (
+            pid, HOLD_INTERVAL_S, args.max_minutes))
+        print("调试结束请执行：hold --stop（同一 --host 下）")
+
+
 def cmd_live(args):
     os.makedirs(args.dir, exist_ok=True)
     sock = _ws_session(args)
@@ -455,6 +549,12 @@ def main():
 
     sub.add_parser("refresh", help="请求强制全刷清残影")
 
+    s = sub.add_parser("hold", help="后台心跳保活（等价 WebUI 打着页面），调试会话期间防睡眠")
+    s.add_argument("--stop", action="store_true", help="停止保活进程")
+    s.add_argument("--status", action="store_true", help="查看保活是否运行")
+    s.add_argument("--max-minutes", type=int, default=30,
+                   help="保活最长持续时间（分钟，兜底防忘停；默认 30）")
+
     s = sub.add_parser("live", help="WS 连接连收 N 帧（等待设备刷新）")
     s.add_argument("-n", "--count", type=int, default=3)
     s.add_argument("-d", "--dir", default="espaperplay_live")
@@ -465,6 +565,7 @@ def main():
     fn = {
         "login": cmd_login, "snap": cmd_snap, "watch": cmd_watch, "tap": cmd_tap,
         "touch": cmd_touch, "key": cmd_key, "refresh": cmd_refresh, "live": cmd_live,
+        "hold": cmd_hold,
     }[args.cmd]
     fn(args)
 

@@ -18,6 +18,7 @@
 
 #include "espaperplay_display.h"
 #include "espaperplay_gui.h"
+#include "espaperplay_power.h"
 #include "webserver_internal.h"
 
 /**
@@ -56,6 +57,9 @@ static const char *TAG = "ESPaperPlay_SCREEN_MIRROR";
 
 /*!< 事件位：有待推送的新帧 / 新客户端加入。 */
 #define MIRROR_EV_NEW_FRAME BIT0
+
+/*!< 推送任务等待超时（毫秒）：无新帧时周期醒来，为在线客户端续保持唤醒窗口。 */
+#define MIRROR_KEEPALIVE_POLL_MS 30000
 
 /*!< 像素格式：1bpp 黑白（1=白 / 0=黑）。 */
 #define MIRROR_FORMAT_BW 0u
@@ -211,12 +215,35 @@ static bool mirror_client_send(httpd_handle_t hd, int fd, const uint8_t *buf, si
  *
  * 唤醒后组装一次最新帧（多次刷新自然合并），依次发给 last_seq 落后的
  * 客户端；发送在锁外执行，失败即移除对应客户端。
+ *
+ * 等待带 30s 超时：超时且有客户端在线时续一次保持唤醒窗口（调
+ * espaperplay_power_note_external_activity，与 Web 控制台心跳同一机制），
+ * 使"调试会话在线"即抑制自动浅睡眠——否则设备睡眠会断开 WS，推流与
+ * 远程注入全部失效。最后一个客户端离开后超时唤醒只做一次空检查，
+ * 恢复正常休眠节奏。
  */
 static void mirror_push_task(void *arg) {
     (void)arg;
 
     for (;;) {
-        xEventGroupWaitBits(s_events, MIRROR_EV_NEW_FRAME, pdTRUE, pdFALSE, portMAX_DELAY);
+        const EventBits_t bits = xEventGroupWaitBits(s_events, MIRROR_EV_NEW_FRAME, pdTRUE,
+                                                     pdFALSE,
+                                                     pdMS_TO_TICKS(MIRROR_KEEPALIVE_POLL_MS));
+        if (!(bits & MIRROR_EV_NEW_FRAME)) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            bool have_client = false;
+            for (size_t i = 0; i < MIRROR_MAX_CLIENTS; i++) {
+                if (s_clients[i].in_use) {
+                    have_client = true;
+                    break;
+                }
+            }
+            xSemaphoreGive(s_lock);
+            if (have_client) {
+                espaperplay_power_note_external_activity();
+            }
+            continue;
+        }
 
         size_t len = 0;
         uint32_t msg_seq = 0;
