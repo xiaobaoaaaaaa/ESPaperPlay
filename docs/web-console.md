@@ -52,6 +52,8 @@ private key never leaves the device, so it cannot be extracted from the firmware
 | `/api/auth/logout` | POST | Revoke the current session |
 | `/api/weather` | GET | Weather service status + data snapshot summary (auth) |
 | `/api/weather/refresh` | POST | Request an immediate weather refresh (auth) |
+| `/api/screen/snapshot` | GET | Screen mirror: current e-paper frame (binary, auth) |
+| `/api/screen/ws` | GET | Screen mirror: WebSocket stream + remote touch/key injection (auth) |
 
 > AP mode: connect to the device AP from a phone / laptop and browse to
 > `http://192.168.4.1/` (it redirects to `https://192.168.4.1/`). Your browser
@@ -105,6 +107,19 @@ NVS，重启后指纹不变），私钥永不出设备，无法从固件中提�
 | `/api/auth/logout` | POST | 吊销当前会话 |
 | `/api/weather` | GET | 天气服务状态与数据快照摘要（需登录） |
 | `/api/weather/refresh` | POST | 请求立即刷新天气数据（需登录） |
+| `/api/screen/snapshot` | GET | 屏幕镜像：当前电子纸帧（二进制，需登录） |
+| `/api/screen/ws` | GET | 屏幕镜像：WebSocket 实时推流 + 远程触摸 / 按键注入（需登录） |
+
+> Screen mirror (debug): the web console provides a "屏幕镜像 / Screen Mirror"
+> page. The device pushes the current e-paper frame (1bpp black/white or 2bpp
+> grayscale) over a WebSocket (wss) after every panel refresh, and the page
+> renders it on a canvas. Pointer events on the canvas are injected back into
+> the device as touch events (same path as the physical GT911), and BOOT key
+> actions / forced full refresh can be sent as JSON messages. The WebSocket
+> authenticates via `?token=` query parameter (browsers cannot set custom
+> headers on WebSocket); the snapshot endpoint uses the regular Bearer token.
+> While a mirror client is connected the console heartbeat keeps the device
+> awake (auto light sleep suppressed).
 
 > AP 模式下用手机 / 电脑连接设备热点，浏览器访问 `http://192.168.4.1/`
 >（会自动重定向到 `https://192.168.4.1/`）。浏览器会对自签名证书给出安全

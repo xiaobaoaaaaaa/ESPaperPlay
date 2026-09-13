@@ -162,6 +162,23 @@ esp_err_t webserver_handle_files_mkdir_post(httpd_req_t *req);
 esp_err_t webserver_handle_files_rename_post(httpd_req_t *req);
 esp_err_t webserver_handle_files_delete_post(httpd_req_t *req);
 
+/* 屏幕镜像域（webserver_handler_screen.c）：调试用画面推流与远程注入。 */
+esp_err_t webserver_handle_screen_snapshot_get(httpd_req_t *req);
+esp_err_t webserver_handle_screen_ws(httpd_req_t *req);
+/*!< WebSocket 握手前鉴权（Bearer 头 / ?token= 查询参数）。 */
+esp_err_t webserver_screen_ws_pre_handshake(httpd_req_t *req);
+/*!< WebSocket 握手完成注册（连接此时才进入 WS 状态，勿提前注册）。 */
+esp_err_t webserver_screen_ws_post_handshake(httpd_req_t *req);
+
+/* 屏幕镜像引擎（webserver_screen_mirror.c）：GUI 帧钩子 -> 画布 ->
+ * WebSocket 客户端推送；鉴权 / 注册回调与快照数据源。 */
+void webserver_screen_mirror_init(void);
+void webserver_screen_server_stopping(void);
+esp_err_t webserver_screen_client_add(httpd_handle_t hd, int fd);
+esp_err_t webserver_screen_snapshot(const uint8_t **out_buf, size_t *out_len);
+void webserver_screen_get_info(uint32_t *out_seq, bool *out_gray4, uint16_t *out_w,
+                               uint16_t *out_h);
+
 /* 鉴权守卫（webserver_auth_guard.c）。 */
 esp_err_t webserver_require_auth(httpd_req_t *req);
 bool webserver_get_bearer_token(httpd_req_t *req, char *token, size_t token_size);

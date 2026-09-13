@@ -279,6 +279,54 @@ esp_err_t espaperplay_gui_show_bw(void);
 esp_err_t espaperplay_gui_show_gray4(void);
 
 /**
+ * @brief 帧刷新事件（帧钩子回调的入参）。
+ *
+ * 描述一次已成功执行到面板的刷新：回调上下文为 GUI worker 任务，事件内的
+ * data 指针仅在回调返回前有效（回调返回后该转换暂存即可能被下一帧覆盖）。
+ * 回调必须快速返回（只做内存拷贝 / 事件通知，禁止阻塞或网络收发），否则
+ * 会拖慢刷新管线。
+ */
+typedef struct {
+    espaperplay_gui_color_t color; /*!< 本次刷新的颜色模式（BW / GRAY4） */
+    bool is_clear;                 /*!< 清屏刷新（data 无效，画面为全白） */
+    bool full_screen;              /*!< 是否全屏刷新（GRAY4 恒全屏；BW 的强制全刷 /
+                                        唤醒基线全屏窗口局刷也为 true） */
+    uint16_t x;                    /*!< 刷新区域左上角 X（仅 BW 局部窗口有效，8 对齐） */
+    uint16_t y;                    /*!< 刷新区域左上角 Y（仅 BW 局部窗口有效） */
+    uint16_t w;                    /*!< 刷新区域宽度（像素；仅 BW 局部窗口有效） */
+    uint16_t h;                    /*!< 刷新区域高度（像素；仅 BW 局部窗口有效） */
+    const uint8_t *data;           /*!< 电子纸帧数据（is_clear 时为 NULL）：
+                                        BW = 1bpp（1=白 / 0=黑），全屏时整帧
+                                        w*h/8 字节，局部窗口时按行压缩（每行
+                                        w/8 字节）；GRAY4 = 2bpp 整帧（0=白 /
+                                        1=浅灰 / 2=深灰 / 3=黑，MSB 在前），
+                                        w*h/4 字节 */
+    uint32_t seq;                  /*!< 刷新序号（每成功执行一次递增，从 1 开始） */
+} espaperplay_gui_frame_evt_t;
+
+/**
+ * @brief 帧刷新钩子（每次刷新成功执行后回调）。
+ *
+ * @param evt  刷新事件（勿在回调外持有 evt->data 指针）。
+ * @param user_ctx 注册时传入的用户上下文。
+ */
+typedef void (*espaperplay_gui_frame_hook_t)(const espaperplay_gui_frame_evt_t *evt,
+                                             void *user_ctx);
+
+/**
+ * @brief 注册 / 注销帧刷新钩子（传 NULL 注销）。
+ *
+ * 供调试 / 远程镜像等外部观察者使用：任何一次刷新成功执行（worker 完成，
+ * 面板开始走波形）后回调。仅支持单个观察者，后注册覆盖先注册。
+ *
+ * @param hook      回调函数（NULL 注销）。
+ * @param user_ctx  透传给回调的用户上下文。
+ *
+ * @return 成功返回 ESP_OK；未初始化返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_gui_set_frame_hook(espaperplay_gui_frame_hook_t hook, void *user_ctx);
+
+/**
  * @brief 强制执行一次全屏刷新（清残影 / 手动全刷）。
  *
  * 对当前 RGB565 主帧整帧快照转换后排队一次全屏深刷新，不改变刷新模式：

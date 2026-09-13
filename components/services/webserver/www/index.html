@@ -570,6 +570,64 @@
             font-size: 13px;
             padding: 6px 12px;
         }
+
+        /* ---- 屏幕镜像 ---- */
+        .mirror-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .mirror-bar label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 13px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        .mirror-bar select,
+        .mirror-bar button {
+            font-size: 13px;
+        }
+
+        .mirror-status {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .mirror-status b {
+            font-weight: 600;
+        }
+
+        .mirror-status b.ok {
+            color: var(--ok);
+        }
+
+        .mirror-status b.bad {
+            color: var(--err);
+        }
+
+        #mirrorCanvas {
+            display: block;
+            width: 100%;
+            max-width: 800px;
+            margin: 4px 0 8px;
+            touch-action: none;
+            image-rendering: pixelated;
+            background: #fff;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: crosshair;
+        }
+
+        #mirrorCanvas.mirror-active {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
     </style>
 </head>
 
@@ -608,6 +666,7 @@
                     <div class="menu-group-title">设备</div>
                     <ul>
                         <li><a class="menu-item" data-target="screen" data-title="屏幕设置" data-sub="电子墨水屏参数">屏幕设置</a></li>
+                        <li><a class="menu-item" data-target="mirror" data-title="屏幕镜像" data-sub="墨水屏远程镜像与触控调试">屏幕镜像</a></li>
                         <li><a class="menu-item" data-target="power" data-title="电源设置" data-sub="自动浅睡眠">电源设置</a>
                         </li>
                         <li><a class="menu-item" data-target="boot" data-title="BOOT 键设置" data-sub="物理按键行为">BOOT 键设置</a>
@@ -919,6 +978,34 @@
                         <button type="button" id="reboot" class="danger">重启设备</button>
                     </div>
                 </div>
+            </section>
+
+            <section class="panel" id="panel-mirror">
+                <h2>屏幕镜像</h2>
+                <p class="hint">通过 WebSocket（wss）实时镜像墨水屏画面：设备每次刷新后把电子纸帧
+                    （黑白 1bpp / 四灰 2bpp）推送到本页，下方画布与面板显示一致。
+                    在画布上按下并拖动即可把触摸事件注入设备（与真机触控同路径），
+                    也可模拟 BOOT 键动作或请求强制全刷。页面连接期间设备保持唤醒。</p>
+                <div class="mirror-bar">
+                    <button type="button" id="mirrorConnect" class="primary">连接</button>
+                    <button type="button" id="mirrorSnapshot">载入快照</button>
+                    <button type="button" id="mirrorRefresh" disabled>强制全刷</button>
+                    <label><input type="checkbox" id="mirrorTouchToggle" checked> 触控注入</label>
+                    <label><input type="checkbox" id="mirrorAutoRe" checked> 自动重连</label>
+                </div>
+                <div class="mirror-bar">
+                    <select id="mirrorKeySel">
+                        <option value="click">BOOT 键 · 单击</option>
+                        <option value="double_click">BOOT 键 · 双击</option>
+                        <option value="long_press_start">BOOT 键 · 长按</option>
+                        <option value="press_down">BOOT 键 · 按下</option>
+                        <option value="press_up">BOOT 键 · 松开</option>
+                    </select>
+                    <button type="button" id="mirrorKeySend" disabled>发送按键</button>
+                    <span class="mirror-status" id="mirrorStatus">状态：<b>未连接</b></span>
+                </div>
+                <canvas id="mirrorCanvas" width="800" height="480"></canvas>
+                <p class="hint mirror-status" id="mirrorStats">尚未收到画面。连接后设备每刷新一次推送一帧。</p>
             </section>
         </main>
     </div>
@@ -2094,6 +2181,8 @@
             if (window.innerWidth <= 720) $('.sidebar').classList.remove('open');
             /* 文件管理面板按需加载目录列表。 */
             if (target === 'files') loadFiles();
+            /* 屏幕镜像面板：首次进入初始化并自动连接推流。 */
+            if (target === 'mirror') mirrorEnsureStarted();
         }
 
         document.querySelectorAll('.menu-item').forEach(item => {
@@ -2122,6 +2211,257 @@
             try {
                 await apiFetch('/api/heartbeat', { method: 'POST' });
             } catch (e) { /* 设备可能睡眠/重启，忽略 */ }
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* 屏幕镜像（调试）：WS 推流 + 触摸注入                                  */
+        /* ------------------------------------------------------------------ */
+        /* 设备端协议：
+         *   二进制帧 = 16 字节头 + 像素（'EPM1' | ver | fmt | seq u32le |
+         *   w u16le | h u16le | 保留 2B；fmt 0=1bpp(1=白) 1=2bpp(0=白..3=黑)）。
+         *   文本帧 = JSON：{t:"pong"|"err",...}。
+         * 客户端文本消息：
+         *   {t:"touch", x, y, down}   触摸按下/移动(down=true)或抬起(false)
+         *   {t:"key", action:"click"|"double_click"|"long_press_start"|...}
+         *   {t:"refresh"}             请求强制全刷
+         *   {t:"ping"}                保活（设备回 pong） */
+        const mirror = {
+            ws: null,          /* WebSocket（null = 未连接） */
+            img: null,         /* ImageData（跟随设备分辨率/格式重建） */
+            imgKey: '',        /* 'w x h fmt' 变化检测 */
+            fmt: 0,            /* 当前帧格式 0=1bpp 1=2bpp */
+            frames: 0,         /* 已收到帧数 */
+            seq: 0,            /* 设备端最近刷新序号 */
+            lastMoveMs: 0,     /* 移动事件节流 */
+            pressing: false,   /* 画布按压中 */
+            pingTimer: null,
+            retryTimer: null,
+        };
+
+        function mirrorSetStatus(state, cls) {
+            $('#mirrorStatus').innerHTML = '状态：<b class="' + (cls || '') + '">' + state + '</b>';
+        }
+
+        function mirrorUpdateStats() {
+            $('#mirrorStats').textContent =
+                '已收到 ' + mirror.frames + ' 帧 · 设备刷新序号 ' + mirror.seq +
+                (mirror.fmt === 1 ? ' · 四灰(2bpp)' : ' · 黑白(1bpp)');
+        }
+
+        function mirrorSetButtons(connected) {
+            $('#mirrorConnect').textContent = connected ? '断开' : '连接';
+            $('#mirrorRefresh').disabled = !connected;
+            $('#mirrorKeySend').disabled = !connected;
+            $('#mirrorCanvas').classList.toggle('mirror-active', connected);
+        }
+
+        /** 把一帧（帧头 + 像素）渲染到画布。返回是否成功。 */
+        function mirrorApplyFrame(buf) {
+            if (buf.byteLength < 16) return false;
+            const dv = new DataView(buf);
+            if (dv.getUint8(0) !== 0x45 || dv.getUint8(1) !== 0x50 ||
+                dv.getUint8(2) !== 0x4D || dv.getUint8(3) !== 0x31) return false; /* 'EPM1' */
+            const fmt = dv.getUint8(5);
+            const seq = dv.getUint32(6, true);
+            const w = dv.getUint16(10, true);
+            const h = dv.getUint16(12, true);
+            if (w === 0 || h === 0) return false;
+            const px = new Uint8Array(buf, 16);
+
+            const canvas = $('#mirrorCanvas');
+            const ctx = canvas.getContext('2d');
+            const key = w + 'x' + h + '#' + fmt;
+            if (mirror.imgKey !== key) {
+                canvas.width = w;
+                canvas.height = h;
+                mirror.img = ctx.createImageData(w, h);
+                mirror.imgKey = key;
+                mirror.fmt = fmt;
+            }
+            const d = mirror.img.data;
+            if (fmt === 1) {
+                /* 2bpp 四灰阶：0=白 1=浅灰 2=深灰 3=黑（MSB 在前）。 */
+                const shades = [255, 170, 85, 0];
+                const rowBytes = w >> 2;
+                for (let y = 0; y < h; y++) {
+                    let di = y * w * 4;
+                    for (let xb = 0; xb < rowBytes; xb++) {
+                        const b = px[y * rowBytes + xb];
+                        for (let k = 0; k < 4; k++) {
+                            const g = shades[(b >> (6 - 2 * k)) & 3];
+                            d[di++] = g; d[di++] = g; d[di++] = g; d[di++] = 255;
+                        }
+                    }
+                }
+            } else {
+                /* 1bpp：1=白 0=黑（MSB 在前）。 */
+                const rowBytes = w >> 3;
+                for (let y = 0; y < h; y++) {
+                    let di = y * w * 4;
+                    for (let xb = 0; xb < rowBytes; xb++) {
+                        const b = px[y * rowBytes + xb];
+                        for (let k = 0; k < 8; k++) {
+                            const v = (b & (0x80 >> k)) !== 0 ? 255 : 0;
+                            d[di++] = v; d[di++] = v; d[di++] = v; d[di++] = 255;
+                        }
+                    }
+                }
+            }
+            ctx.putImageData(mirror.img, 0, 0);
+            mirror.frames++;
+            mirror.seq = seq;
+            mirrorUpdateStats();
+            return true;
+        }
+
+        function mirrorSend(obj) {
+            if (mirror.ws && mirror.ws.readyState === WebSocket.OPEN) {
+                mirror.ws.send(JSON.stringify(obj));
+                return true;
+            }
+            return false;
+        }
+
+        function mirrorStopRetry() {
+            if (mirror.retryTimer) { clearTimeout(mirror.retryTimer); mirror.retryTimer = null; }
+        }
+
+        function mirrorDisconnect(userStop) {
+            mirrorStopRetry();
+            if (mirror.pingTimer) { clearInterval(mirror.pingTimer); mirror.pingTimer = null; }
+            if (mirror.ws) {
+                mirror.ws.onclose = null; /* 主动断开不触发自动重连 */
+                try { mirror.ws.close(); } catch (e) { /* 已关闭 */ }
+                mirror.ws = null;
+            }
+            mirrorSetButtons(false);
+            if (userStop) mirrorSetStatus('未连接');
+        }
+
+        function mirrorConnect() {
+            mirrorDisconnect(false);
+            const t = getToken();
+            if (!t) { mirrorSetStatus('未登录', 'bad'); return; }
+            mirrorSetStatus('连接中…');
+            let ws;
+            try {
+                ws = new WebSocket('wss://' + location.host +
+                    '/api/screen/ws?token=' + encodeURIComponent(t));
+            } catch (e) {
+                mirrorSetStatus('连接失败', 'bad');
+                return;
+            }
+            ws.binaryType = 'arraybuffer';
+            mirror.ws = ws;
+            ws.onopen = () => {
+                mirrorSetButtons(true);
+                mirrorSetStatus('已连接', 'ok');
+                /* 应用层保活：防止空闲会话被回收，设备回 pong。 */
+                mirror.pingTimer = setInterval(() => mirrorSend({ t: 'ping' }), 20000);
+            };
+            ws.onmessage = (ev) => {
+                if (ev.data instanceof ArrayBuffer) {
+                    if (!mirrorApplyFrame(ev.data)) console.warn('mirror: bad frame');
+                    return;
+                }
+                try {
+                    const m = JSON.parse(ev.data);
+                    if (m.t === 'err') toast('设备返回错误：' + (m.msg || ''), true);
+                } catch (e) { /* 忽略非 JSON */ }
+            };
+            ws.onclose = () => {
+                if (mirror.ws !== ws) return; /* 已被主动断开取代 */
+                mirror.ws = null;
+                if (mirror.pingTimer) { clearInterval(mirror.pingTimer); mirror.pingTimer = null; }
+                mirrorSetButtons(false);
+                mirrorSetStatus('已断开', 'bad');
+                /* 面板仍打开且勾选自动重连：定时重试（设备可能正在睡眠）。 */
+                if ($('#panel-mirror').classList.contains('active') &&
+                    $('#mirrorAutoRe').checked && getToken()) {
+                    mirror.retryTimer = setTimeout(() => {
+                        mirror.retryTimer = null;
+                        if ($('#panel-mirror').classList.contains('active')) mirrorConnect();
+                    }, 3000);
+                }
+            };
+            ws.onerror = () => { /* onclose 随后触发，统一处理 */ };
+        }
+
+        /** 画布指针坐标 -> 设备像素坐标。 */
+        function mirrorPointerPos(e) {
+            const canvas = $('#mirrorCanvas');
+            const r = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - r.left) * (canvas.width / r.width));
+            const y = Math.round((e.clientY - r.top) * (canvas.height / r.height));
+            return {
+                x: Math.max(0, Math.min(canvas.width - 1, x)),
+                y: Math.max(0, Math.min(canvas.height - 1, y)),
+            };
+        }
+
+        function mirrorSetupEvents() {
+            const canvas = $('#mirrorCanvas');
+
+            canvas.addEventListener('pointerdown', (e) => {
+                if (!$('#mirrorTouchToggle').checked) return;
+                canvas.setPointerCapture(e.pointerId);
+                mirror.pressing = true;
+                const p = mirrorPointerPos(e);
+                mirrorSend({ t: 'touch', x: p.x, y: p.y, down: true });
+                e.preventDefault();
+            });
+            canvas.addEventListener('pointermove', (e) => {
+                if (!mirror.pressing || !$('#mirrorTouchToggle').checked) return;
+                const now = Date.now();
+                if (now - mirror.lastMoveMs < 30) return; /* ~GT911 帧率节流 */
+                mirror.lastMoveMs = now;
+                const p = mirrorPointerPos(e);
+                mirrorSend({ t: 'touch', x: p.x, y: p.y, down: true });
+                e.preventDefault();
+            });
+            const release = (e) => {
+                if (!mirror.pressing) return;
+                mirror.pressing = false;
+                mirrorSend({ t: 'touch', down: false });
+                e.preventDefault();
+            };
+            canvas.addEventListener('pointerup', release);
+            canvas.addEventListener('pointercancel', release);
+        }
+
+        function mirrorBindUI() {
+            $('#mirrorConnect').addEventListener('click', () => {
+                if (mirror.ws) mirrorDisconnect(true);
+                else mirrorConnect();
+            });
+            $('#mirrorSnapshot').addEventListener('click', async () => {
+                try {
+                    const res = await apiFetch('/api/screen/snapshot');
+                    if (!res.ok) throw new Error(await res.text());
+                    mirrorApplyFrame(await res.arrayBuffer());
+                    toast('快照已载入');
+                } catch (e) {
+                    toast('快照获取失败：' + e, true);
+                }
+            });
+            $('#mirrorRefresh').addEventListener('click', () => {
+                if (!mirrorSend({ t: 'refresh' })) toast('未连接设备', true);
+            });
+            $('#mirrorKeySend').addEventListener('click', () => {
+                if (!mirrorSend({ t: 'key', action: $('#mirrorKeySel').value })) {
+                    toast('未连接设备', true);
+                }
+            });
+            mirrorSetupEvents();
+        }
+
+        /** 切到镜像面板时调用（首次初始化并自动连接）。 */
+        function mirrorEnsureStarted() {
+            if (!mirror.uiReady) {
+                mirror.uiReady = true;
+                mirrorBindUI();
+            }
+            if (!mirror.ws && getToken()) mirrorConnect();
         }
 
         /* ------------------------------------------------------------------ */

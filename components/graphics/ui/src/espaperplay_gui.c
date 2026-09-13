@@ -51,6 +51,13 @@ static espaperplay_gui_converter_t s_converter = ESPAPERPLAY_GUI_CONVERTER_THRES
 static espaperplay_gui_gray4_dither_t s_gray4_dither = ESPAPERPLAY_GUI_GRAY4_DITHER_FS;
 static bool s_initialized = false;
 
+/* 帧刷新钩子（调试 / 远程镜像观察者）：worker 每次刷新成功后调用。
+ * 只在 worker 线程写，注册/注销由外部线程调用——单指针读写无撕裂风险，
+ * 无需加锁（与 touch 驱动事件回调同样的弱同步约定）。 */
+static espaperplay_gui_frame_hook_t s_frame_hook = NULL;
+static void *s_frame_hook_arg = NULL;
+static uint32_t s_frame_seq = 0; /*!< 已成功执行的刷新计数（钩子事件序号，从 1 起） */
+
 static SemaphoreHandle_t s_lock = NULL;   /*!< 槽位/脏区状态互斥（渲染任务 vs worker） */
 static TaskHandle_t s_worker_task = NULL; /*!< 异步刷新 worker（NULL=退化同步） */
 
@@ -439,6 +446,25 @@ static void gui_worker_task(void *arg) {
         }
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "worker: refresh failed: %s", esp_err_to_name(ret));
+        } else {
+            /* 帧钩子：刷新已成功执行，槽位仍为 BUSY（转换暂存内容有效），
+             * 观察者可在回调内安全拷贝。回调必须快速返回（见头文件约定）。 */
+            s_frame_seq++;
+            if (s_frame_hook != NULL) {
+                const espaperplay_gui_frame_evt_t evt = {
+                    .color = op.color,
+                    .is_clear = (op.type == GUI_OP_CLEAR),
+                    .full_screen = op.color == ESPAPERPLAY_GUI_COLOR_GRAY4 ||
+                                   op.force_full || op.reset_count,
+                    .x = op.x,
+                    .y = op.y,
+                    .w = op.w,
+                    .h = op.h,
+                    .data = (op.type == GUI_OP_CLEAR) ? NULL : op.stage,
+                    .seq = s_frame_seq,
+                };
+                s_frame_hook(&evt, s_frame_hook_arg);
+            }
         }
 
         /* 执行完毕：释放槽位，渲染端可再次快照写入。 */
@@ -782,6 +808,15 @@ esp_err_t espaperplay_gui_get_framebuffer(espaperplay_gui_framebuffer_t *fb) {
     fb->height = s_disp_h;
     fb->stride = s_stride_rgb;
     fb->color = s_color;
+    return ESP_OK;
+}
+
+esp_err_t espaperplay_gui_set_frame_hook(espaperplay_gui_frame_hook_t hook, void *user_ctx) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_frame_hook = hook;
+    s_frame_hook_arg = user_ctx;
     return ESP_OK;
 }
 

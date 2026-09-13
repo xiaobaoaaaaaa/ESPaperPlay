@@ -19,6 +19,11 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # Web 管理：HTTPS + 运行时生成自签名证书（设备端自产密钥对，私钥永不出设备）
 CONFIG_ESP_HTTPS_SERVER_ENABLE=y
 CONFIG_MBEDTLS_X509_CREATE_C=y
+# 屏幕镜像调试（Web 控制台"屏幕镜像"页）：esp_http_server WebSocket 服务端
+# 支持（wss 帧推流 + 远程触摸/按键注入）；pre/post 握手回调用于鉴权与注册
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT=y
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 # 生成 P-256 密钥对 / 证书需较大栈；main 任务在 app_main 返回后即销毁，无长期开销
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # 编译优化：-O2（默认 -Og 使 GUI 转换循环慢 2-4 倍；-O2 后转换耗时显著下降）

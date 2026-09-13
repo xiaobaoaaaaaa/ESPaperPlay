@@ -10,6 +10,8 @@ idf_component_register(
          "src/webserver_handler_setup.c"
          "src/webserver_auth_guard.c"
          "src/webserver_tls.c"
+         "src/webserver_handler_screen.c"
+         "src/webserver_screen_mirror.c"
     INCLUDE_DIRS "include"
     EMBED_TXTFILES "www/index.html"
     REQUIRES esp_http_server esp_https_server mbedtls nvs_flash nvs esp_event esp_netif system wifi board auth session diaglog epd ui weather input storage fonts power touch

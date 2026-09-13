@@ -29,6 +29,19 @@
   `/sdcard/system/cache/reader/covers/` SD 缓存，负结果也缓存；翻页 / 退出
   作废在途请求）。JPEG/PNG 解码函数输出参数化（原写入图片单槽缓存），阅读
   视图行为不变。
+- **屏幕镜像（调试）**：Web 控制台新增「屏幕镜像」页，支持把墨水屏画面实时
+  推送到浏览器并远程注入操作。GUI 刷新 worker 新增帧钩子
+  （`espaperplay_gui_set_frame_hook`，每次刷新成功后回调 1bpp/2bpp 电子纸帧
+  与刷新区域），webserver 内置镜像引擎维护与面板内容一致的黑白 / 四灰画布，
+  经 WebSocket（wss，复用 443 端口，需启用 `CONFIG_HTTPD_WS_SUPPORT`）在每次
+  刷新后向最多 4 个客户端推送完整帧（16 字节头 + 位图），客户端无需维护
+  增量状态、丢帧自愈。页面画布 1:1 渲染（像素对齐、黑白 / 四灰双层格式），
+  指针按下 / 拖动 / 抬起按 GT911 同路径注入触摸事件（`espaperplay_input_post_event`
+  + 刷新用户活动时间戳），亦可模拟 BOOT 键动作、请求强制全刷；`?token=`
+  查询参数承载 WebSocket 鉴权（pre-handshake 回调校验，浏览器无法自定义
+  WS 请求头），握手后 post-handshake 回调注册连接。另提供
+  `GET /api/screen/snapshot` 二进制快照（Bearer 鉴权）供页面首绘与无
+  WebSocket 场景回退。HTTPS 因 IP 变化重启前自动摘除镜像客户端。
 
 ### 修复
 

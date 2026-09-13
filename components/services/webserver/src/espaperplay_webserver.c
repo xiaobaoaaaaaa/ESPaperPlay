@@ -153,6 +153,25 @@ static esp_err_t register_handlers(httpd_handle_t server) {
          .method = HTTP_POST,
          .handler = webserver_handle_files_delete_post,
          .user_ctx = NULL},
+        {.uri = "/api/screen/snapshot",
+         .method = HTTP_GET,
+         .handler = webserver_handle_screen_snapshot_get,
+         .user_ctx = NULL},
+        {.uri = "/api/screen/ws",
+         .method = HTTP_GET,
+         .handler = webserver_handle_screen_ws,
+         .user_ctx = NULL,
+         /* 必须：声明 WS 端点后框架才会在握手请求上完成 101 升级（handler
+          * 只在握手后的数据帧上被调用），否则升级请求被当普通 GET 直入
+          * handler，httpd_ws_recv_frame 报 "No handshake performed"。 */
+         .is_websocket = true,
+#if CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
+         .ws_pre_handshake_cb = webserver_screen_ws_pre_handshake,
+#endif
+#if CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT
+         .ws_post_handshake_cb = webserver_screen_ws_post_handshake,
+#endif
+        },
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
@@ -185,7 +204,7 @@ static esp_err_t start_https_server(void) {
     /* HTTPS 主服务器（443）：承载全部业务路由。 */
     httpd_ssl_config_t conf = HTTPD_SSL_CONFIG_DEFAULT();
     conf.httpd.stack_size = 10240; /* TLS 握手需要较大栈 */
-    conf.httpd.max_uri_handlers = 32;
+    conf.httpd.max_uri_handlers = 40;
     conf.servercert = cert;
     conf.servercert_len = cert_len;
     conf.prvtkey_pem = key;
@@ -220,6 +239,7 @@ static void webserver_tls_refresh_task(void *arg) {
         ESP_LOGW(TAG, "Failed to refresh TLS cert on IP change");
     } else if (changed && s_server_https != NULL) {
         ESP_LOGI(TAG, "TLS cert updated, restarting HTTPS server");
+        webserver_screen_server_stopping(); /* 先摘除镜像客户端，再停服务器 */
         httpd_ssl_stop(s_server_https);
         s_server_https = NULL;
         if (start_https_server() != ESP_OK) {
@@ -300,12 +320,16 @@ esp_err_t espaperplay_webserver_start(void) {
     /* STA 获取新 IP 时刷新证书（SAN 含新 IP）并重启 HTTPS。 */
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, webserver_on_sta_got_ip, NULL);
 
+    /* 屏幕镜像引擎：GUI 帧钩子 + WebSocket 推送任务（幂等）。 */
+    webserver_screen_mirror_init();
+
     ESP_LOGI(TAG, "Web server started: HTTPS on :443, HTTP on :80 (redirect to HTTPS)");
     return ESP_OK;
 }
 
 esp_err_t espaperplay_webserver_stop(void) {
     esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, webserver_on_sta_got_ip);
+    webserver_screen_server_stopping();
     if (s_server_http != NULL) {
         httpd_stop(s_server_http);
         s_server_http = NULL;
