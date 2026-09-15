@@ -30,9 +30,17 @@ cycle around **auto light sleep**:
   disconnected deliberately and auto-reconnect suppressed; wakeup sources are
   configured (touch, BOOT, timer). On any user wake the screensaver is popped
   and the home screen rebuilt.
-- **Minute-aligned timer wakeup** — while asleep the device wakes on whole
-  minutes to refresh weather and the clock (home screen or screensaver), so the
-  screen is up to date the moment you wake it. Wake/sleep races are handled
+- **Unified sleep-time network refresh** — network services register a refresh
+  cadence, due predicate, trigger, and completion callback with the power
+  service. The nearest service deadline is merged with the display's
+  minute-aligned timer; services due within 30 seconds share one WiFi window.
+  WiFi windows are globally limited to at most one per 10 minutes, so a service
+  cannot accidentally defeat the low-power policy with an overly fine cadence.
+  Weather (10 minutes) and Hitokoto (1 hour) use this model; clock calibration
+  is coalesced into the same connection window.
+- **Minute-aligned display wakeup** — while asleep the device wakes on whole
+  minutes to refresh the clock (home screen or screensaver) without bringing
+  up WiFi unless a registered network service is due. Wake/sleep races are handled
   (touch during the wake window cancels re-sleep and exits the screensaver;
   phantom frames after resume are dropped; the status-bar sleep icon clears).
 - **Software RTC drift calibration** — the periodic timer wakeups double as
@@ -83,8 +91,13 @@ failures can be reconstructed from the card afterwards.
   天气摘要）并同步渲染落屏，双稳态面板在浅睡眠期间持续显示；整分唤醒
   借刷新窗口更新大字时钟。随后主动断开 WiFi 并抑制自动重连；配置唤醒源
   （触摸 / BOOT / 定时器）。用户唤醒（触摸/按键）时弹出屏保、重建主界面。
-- **分钟对齐定时唤醒**——睡眠中整分唤醒，刷新天气与时钟（主界面或屏保），
-  亮屏瞬间数据即新。唤醒 / 睡眠竞态已处理（唤醒窗口内的触摸不再立刻又睡，
+- **统一的睡眠联网刷新**——网络服务向 power 注册刷新粒度、到期判断、触发与
+  完成回调。power 把最近的服务截止时间与屏幕整分唤醒合并；相差 30 秒以内的
+  到期服务共用一次 WiFi 窗口，并以 10 分钟为全局最小联网间隔，避免某个服务
+  的过细配置破坏低功耗策略。天气（10 分钟）与一言（1 小时）已接入；时钟
+  标定也复用同一连接窗口。
+- **分钟对齐显示唤醒**——睡眠中整分唤醒只刷新时钟（主界面或屏保）；仅当
+  已注册网络服务到期时才启动 WiFi。唤醒 / 睡眠竞态已处理（窗口内的触摸不再立刻又睡，
   并同步退出屏保；恢复后的幻影帧被丢弃；状态栏睡眠图标正常清除）。
 - **软件 RTC 漂移标定**——周期定时唤醒兼作内部 RC 振荡器（仅睡眠时段）
   的漂移测量，无外部 32k 晶振也能长期保持走时精度。

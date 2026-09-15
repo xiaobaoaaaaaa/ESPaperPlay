@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -33,6 +34,27 @@ typedef struct {
     int gpio_num;               /*!< 用作唤醒源的 GPIO */
     bool gpio_level;            /*!< 唤醒电平（true 表示高电平） */
 } espaperplay_wakeup_config_t;
+
+/**
+ * @brief 睡眠期间需要联网刷新的服务描述。
+ *
+ * 电源服务按 @ref refresh_interval_ms 维护统一截止时间。多个服务在同一
+ * 唤醒窗口到期时只恢复一次 WiFi，再依次触发并等待它们完成。所有回调均
+ * 在 power_auto_sleep 任务上下文调用，不可长期持有服务内部锁。
+ *
+ * name 必须指向生命周期覆盖整个程序的字符串（通常为字符串常量）。
+ */
+typedef struct {
+    const char *name;                               /*!< 日志名称，必须非空 */
+    uint32_t refresh_interval_ms;                   /*!< 期望刷新粒度；过小会被全局低功耗下限钳制 */
+    uint32_t refresh_timeout_ms;                    /*!< 单次等待完成的最长时间 */
+    bool (*is_refresh_due)(void);                   /*!< 可选；返回 false 时本周期不联网 */
+    void (*request_refresh)(void);                  /*!< 触发服务后台刷新，必须非空 */
+    bool (*wait_refresh_done)(uint32_t timeout_ms); /*!< 可选；等待后台刷新完成 */
+} espaperplay_sleep_refresh_service_t;
+
+/** 睡眠期间两次 WiFi 联网窗口的最小间隔：避免服务配置过细破坏低功耗。 */
+#define ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS (10U * 60U * 1000U)
 
 /**
  * @brief 初始化电源管理。
@@ -68,8 +90,9 @@ esp_err_t espaperplay_power_enter_sleep(void);
  * 再调用 esp_light_sleep_start() 进入浅睡眠。唤醒源（触摸 INT / BOOT
  * 按键 / UART）触发后本函数返回。
  *
- * 浅睡眠期间 GPIO 电平保持、PSRAM 自刷新、WiFi 保持关联，外设与任务
- * 状态在唤醒后完整恢复；esp_timer 高精度时间基准会被自动补偿。
+ * 浅睡眠期间 GPIO 电平保持、PSRAM 自刷新；STA WiFi 会在睡前主动挂起，
+ * 仅在用户唤醒或已注册网络服务到期时恢复。外设与任务状态在唤醒后完整
+ * 恢复；esp_timer 高精度时间基准会被自动补偿。
  *
  * @note 必须在任务上下文调用（不可在 ISR 中调用）。
  *
@@ -102,6 +125,18 @@ esp_err_t espaperplay_power_set_auto_sleep_timeout_ms(uint32_t timeout_ms);
  * @return 成功返回 ESP_OK，否则返回错误码。
  */
 esp_err_t espaperplay_power_start_auto_sleep(void);
+
+/**
+ * @brief 注册一个睡眠期间周期联网刷新的服务（幂等，按 name 去重）。
+ *
+ * 注册只影响设备已经进入自动浅睡眠后的联网窗口；清醒期间仍由服务自身
+ * 的后台周期负责刷新。当前固定支持最多 8 个服务，不进行堆分配。
+ *
+ * @return ESP_OK；参数非法返回 ESP_ERR_INVALID_ARG；注册表满返回
+ *         ESP_ERR_NO_MEM；同名但配置不同返回 ESP_ERR_INVALID_STATE。
+ */
+esp_err_t espaperplay_power_register_sleep_refresh_service(
+    const espaperplay_sleep_refresh_service_t *service);
 
 /**
  * @brief 设置周期定时器唤醒间隔（毫秒）。

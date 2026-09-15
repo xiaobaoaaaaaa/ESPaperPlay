@@ -5,6 +5,7 @@
  */
 
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,6 @@
 #include "espaperplay_input.h"
 #include "espaperplay_power.h"
 #include "espaperplay_ui.h"
-#include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
 
 static const char *TAG = "ESPaperPlay_POWER";
@@ -54,9 +54,10 @@ static const char *TAG = "ESPaperPlay_POWER";
 /* NTP 对时/标定超时（毫秒）：用户唤醒与周期标定重连后等待 NTP 同步的最长时间。 */
 #define ESPAPERPLAY_POWER_NTP_TIMEOUT_MS 8000
 
-/* 睡眠期间天气刷新等待超时（毫秒）：天气到期时借定时器唤醒重连拉取，
- * 等待后台任务完成整体刷新的最长时间（重连后 TLS 拉取全部 API 约 5~10s）。 */
-#define ESPAPERPLAY_POWER_WEATHER_WAIT_MS 20000
+/* 睡眠联网服务注册表：固定容量避免运行期堆分配。到期时间使用 esp_timer
+ * 单调时钟（浅睡眠后仍连续），并允许临近截止时间的服务合并进同一窗口。 */
+#define ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES 8
+#define ESPAPERPLAY_POWER_NETWORK_COALESCE_MS 30000
 
 /* 进睡/唤醒后等待状态栏图标落屏的窗口（毫秒）：睡眠图标与 WiFi 图标走同一
  * 局部刷新路径，由状态栏 1s 定时器驱动；进睡前置位标志、唤醒后清除标志，
@@ -75,6 +76,162 @@ static bool s_auto_sleep_started = false;
 static bool s_wakeup_configured = false;
 static bool s_wake_was_timer = false;           /*!< 上次唤醒是否由定时器触发 */
 static volatile uint64_t s_ext_activity_ms = 0; /*!< 上次外部活动时刻（0=尚无） */
+
+typedef struct {
+    espaperplay_sleep_refresh_service_t service;
+    uint64_t next_due_ms;
+} power_sleep_refresh_slot_t;
+
+static power_sleep_refresh_slot_t s_sleep_refresh[ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES];
+static size_t s_sleep_refresh_count = 0;
+static uint64_t s_last_network_wake_ms = 0;
+static portMUX_TYPE s_sleep_refresh_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static uint32_t power_effective_refresh_interval(uint32_t requested_ms) {
+    return requested_ms < ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS
+               ? ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS
+               : requested_ms;
+}
+
+static bool power_network_window_allowed(uint64_t now_ms) {
+    portENTER_CRITICAL(&s_sleep_refresh_mux);
+    const uint64_t last_wake_ms = s_last_network_wake_ms;
+    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+    return last_wake_ms == 0 ||
+           now_ms >= last_wake_ms + ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS;
+}
+
+/** 返回最近一个联网服务截止时间距 now 的延时；0 表示无注册服务。 */
+static uint32_t power_next_network_wakeup_delay_ms(uint64_t now_ms) {
+    uint64_t earliest = UINT64_MAX;
+    portENTER_CRITICAL(&s_sleep_refresh_mux);
+    for (size_t i = 0; i < s_sleep_refresh_count; i++) {
+        if (s_sleep_refresh[i].next_due_ms < earliest) {
+            earliest = s_sleep_refresh[i].next_due_ms;
+        }
+    }
+    const uint64_t last_wake_ms = s_last_network_wake_ms;
+    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+    if (earliest == UINT64_MAX) {
+        return 0;
+    }
+
+    /* 即使某服务给出了更细粒度，也不能突破全局 WiFi 窗口下限。 */
+    const uint64_t allowed_ms =
+        last_wake_ms == 0 ? 0 : last_wake_ms + ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS;
+    if (earliest < allowed_ms) {
+        earliest = allowed_ms;
+    }
+    if (earliest <= now_ms) {
+        return 1; /* ESP-IDF 不接受 0us 定时器；尽快唤醒即可。 */
+    }
+    const uint64_t delay = earliest - now_ms;
+    return delay > UINT32_MAX ? UINT32_MAX : (uint32_t)delay;
+}
+
+/**
+ * 取出本联网窗口需要刷新的服务，并把各自截止时间推进到未来。
+ * 先复制配置再在临界区外执行 is_due，避免用户回调阻塞调度锁。
+ */
+static size_t power_collect_due_refresh_services(uint64_t now_ms,
+                                                 espaperplay_sleep_refresh_service_t *due,
+                                                 size_t due_capacity) {
+    espaperplay_sleep_refresh_service_t candidates[ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES];
+    size_t candidate_count = 0;
+    const uint64_t cutoff_ms = now_ms + ESPAPERPLAY_POWER_NETWORK_COALESCE_MS;
+
+    portENTER_CRITICAL(&s_sleep_refresh_mux);
+    const bool network_window_allowed =
+        s_last_network_wake_ms == 0 ||
+        now_ms >= s_last_network_wake_ms + ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS;
+    if (network_window_allowed) {
+        for (size_t i = 0; i < s_sleep_refresh_count; i++) {
+            power_sleep_refresh_slot_t *slot = &s_sleep_refresh[i];
+            if (slot->next_due_ms > cutoff_ms) {
+                continue;
+            }
+            if (candidate_count < ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES) {
+                candidates[candidate_count++] = slot->service;
+            }
+            const uint32_t interval =
+                power_effective_refresh_interval(slot->service.refresh_interval_ms);
+            do {
+                slot->next_due_ms += interval;
+            } while (slot->next_due_ms <= cutoff_ms);
+        }
+    }
+    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+
+    size_t due_count = 0;
+    for (size_t i = 0; i < candidate_count && due_count < due_capacity; i++) {
+        if (candidates[i].is_refresh_due == NULL || candidates[i].is_refresh_due()) {
+            due[due_count++] = candidates[i];
+        }
+    }
+    return due_count;
+}
+
+/** WiFi 连接失败时把本批服务安排到下一个允许的联网窗口重试。 */
+static void power_reschedule_refresh_services(const espaperplay_sleep_refresh_service_t *services,
+                                              size_t count, uint64_t now_ms) {
+    const uint64_t retry_ms = now_ms + ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS;
+    portENTER_CRITICAL(&s_sleep_refresh_mux);
+    for (size_t i = 0; i < s_sleep_refresh_count; i++) {
+        for (size_t j = 0; j < count; j++) {
+            if (strcmp(s_sleep_refresh[i].service.name, services[j].name) == 0 &&
+                s_sleep_refresh[i].next_due_ms > retry_ms) {
+                s_sleep_refresh[i].next_due_ms = retry_ms;
+                break;
+            }
+        }
+    }
+    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+}
+
+esp_err_t espaperplay_power_register_sleep_refresh_service(
+    const espaperplay_sleep_refresh_service_t *service) {
+    if (service == NULL || service->name == NULL || service->name[0] == '\0' ||
+        service->refresh_interval_ms == 0 || service->request_refresh == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    const uint32_t interval_ms = power_effective_refresh_interval(service->refresh_interval_ms);
+    esp_err_t result = ESP_OK;
+    bool added = false;
+
+    portENTER_CRITICAL(&s_sleep_refresh_mux);
+    for (size_t i = 0; i < s_sleep_refresh_count; i++) {
+        if (strcmp(s_sleep_refresh[i].service.name, service->name) == 0) {
+            const espaperplay_sleep_refresh_service_t *old = &s_sleep_refresh[i].service;
+            if (old->refresh_interval_ms != service->refresh_interval_ms ||
+                old->refresh_timeout_ms != service->refresh_timeout_ms ||
+                old->is_refresh_due != service->is_refresh_due ||
+                old->request_refresh != service->request_refresh ||
+                old->wait_refresh_done != service->wait_refresh_done) {
+                result = ESP_ERR_INVALID_STATE;
+            }
+            portEXIT_CRITICAL(&s_sleep_refresh_mux);
+            return result;
+        }
+    }
+    if (s_sleep_refresh_count >= ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES) {
+        result = ESP_ERR_NO_MEM;
+    } else {
+        power_sleep_refresh_slot_t *slot = &s_sleep_refresh[s_sleep_refresh_count++];
+        slot->service = *service;
+        slot->next_due_ms = now_ms + interval_ms;
+        added = true;
+    }
+    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+
+    if (added) {
+        ESP_LOGI(TAG, "sleep refresh registered: %s, interval=%u ms%s", service->name,
+                 (unsigned)interval_ms,
+                 interval_ms != service->refresh_interval_ms ? " (clamped)" : "");
+    }
+    return result;
+}
 
 void espaperplay_power_note_external_activity(void) {
     s_ext_activity_ms = (uint64_t)(esp_timer_get_time() / 1000);
@@ -185,16 +342,14 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
      * 唤醒源决定是否重连。AP 模式（热点）不受影响。 */
     espaperplay_wifi_suspend_for_sleep();
 
-    ESP_LOGI(TAG, "entering light sleep (wakeup: touch/key/uart%s)",
-             s_periodic_wakeup_ms > 0 ? "/timer" : "");
-
     /* 周期定时器唤醒（一次性，每次睡眠前重设）：用于睡眠期间周期刷新
      * （如主界面更新时钟）。0 表示不启用。
      * 若启用"分钟对齐"模式，则计算到下一分钟边界的剩余时间作为唤醒间隔，
      * 使唤醒恰好落在分钟切换点附近，主界面时钟得以在分钟更新时立即刷新
      * （而非固定 60s 相位，导致显示滞后真实分钟达 ~60s）。 */
+    uint32_t timer_ms = 0;
     if (s_periodic_wakeup_ms > 0 || s_periodic_wakeup_minute_aligned) {
-        uint32_t timer_ms = s_periodic_wakeup_ms;
+        timer_ms = s_periodic_wakeup_ms;
         if (s_periodic_wakeup_minute_aligned) {
             time_t now = time(NULL);
             if (now != (time_t)-1) {
@@ -215,13 +370,20 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
                 timer_ms = s_periodic_wakeup_ms > 0 ? s_periodic_wakeup_ms : 60000;
             }
         }
-        if (timer_ms > 0) {
-            esp_err_t tw = esp_sleep_enable_timer_wakeup((uint64_t)timer_ms * 1000ULL);
-            if (tw != ESP_OK) {
-                ESP_LOGW(TAG, "timer wakeup enable failed: %s", esp_err_to_name(tw));
-            }
+    }
+    const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+    const uint32_t network_timer_ms = power_next_network_wakeup_delay_ms(now_ms);
+    if (network_timer_ms > 0 && (timer_ms == 0 || network_timer_ms < timer_ms)) {
+        timer_ms = network_timer_ms;
+    }
+    if (timer_ms > 0) {
+        esp_err_t tw = esp_sleep_enable_timer_wakeup((uint64_t)timer_ms * 1000ULL);
+        if (tw != ESP_OK) {
+            ESP_LOGW(TAG, "timer wakeup enable failed: %s", esp_err_to_name(tw));
         }
     }
+    ESP_LOGI(TAG, "entering light sleep (wakeup: touch/key/uart%s, next=%u ms)",
+             timer_ms > 0 ? "/timer" : "", (unsigned)timer_ms);
 
     /* 睡眠前置守卫：触摸 INT 仍处于有效电平（低）时进入睡眠会被低电平
      * 唤醒立即弹回（触摸任务可能正在恢复时序中驱动 INT，或芯片复位后
@@ -246,10 +408,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
 
     /* 用 esp_timer 前后差值度量本次睡眠的 RC 测得时长（微秒），供时钟漂移
      * 模型仅对睡眠部分补偿（运行期由 XTAL 精确推进，不计入）。 */
-    espaperplay_diaglog_write("PWR", "enter light sleep%s",
-                              (s_periodic_wakeup_ms > 0 || s_periodic_wakeup_minute_aligned)
-                                  ? " (timer armed)"
-                                  : "");
+    espaperplay_diaglog_write("PWR", "enter light sleep%s", timer_ms > 0 ? " (timer armed)" : "");
     int64_t sleep_start = esp_timer_get_time();
     esp_err_t err = esp_light_sleep_start();
     int64_t sleep_end = esp_timer_get_time();
@@ -272,8 +431,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     const bool woke_by_gpio = (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) != 0;
     s_wake_was_timer = !woke_by_gpio && (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) != 0;
     ESP_LOGI(TAG, "woke from light sleep (causes=0x%x%s%s, slept %lld us)", (unsigned)causes,
-             s_wake_was_timer ? ", timer" : "", woke_by_gpio ? ", gpio" : "",
-             (long long)sleep_us);
+             s_wake_was_timer ? ", timer" : "", woke_by_gpio ? ", gpio" : "", (long long)sleep_us);
     espaperplay_diaglog_write("PWR", "woke: causes=0x%x%s%s, slept %lld us", (unsigned)causes,
                               s_wake_was_timer ? " (timer)" : "", woke_by_gpio ? " (gpio)" : "",
                               (long long)sleep_us);
@@ -305,17 +463,18 @@ esp_err_t espaperplay_power_set_periodic_wakeup_minute_aligned(bool enable) {
 /**
  * @brief 等待 STA 连接就绪（最多约 3s）。
  *
- * 重连是异步的（约 2.5s）；后续的 NTP / 天气操作需要连接已建立才能成功。
+ * 重连是异步的（约 2.5s）；后续的 NTP / 网络服务刷新需要连接已建立。
  * 超时返回后各操作仍按自身超时执行（网络不可用时快速失败，不影响流程）。
  */
-static void power_wait_wifi_connected(void) {
+static bool power_wait_wifi_connected(void) {
     for (int i = 0; i < 15; i++) {
         espaperplay_wifi_status_t st;
         if (espaperplay_wifi_get_status(&st) == ESP_OK && st.connected) {
-            return;
+            return true;
         }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+    return false;
 }
 
 /**
@@ -392,24 +551,33 @@ static void power_auto_sleep_task(void *arg) {
 
             if (s_wake_was_timer) {
                 /* 定时器唤醒（周期刷新时钟）：默认不重连、保持断开，
-                 * 留刷新窗口后由下一轮循环立即重新睡眠。时钟标定与天气
-                 * 刷新共用同一个联网窗口——任一到期才重连一次，窗口内
-                 * 依次完成，尽量减少 WiFi 重连次数以省电。若刷新窗口内
+                 * 留刷新窗口后由下一轮循环立即重新睡眠。时钟标定与所有
+                 * 已注册网络服务共用一个联网窗口——任一到期才重连一次，
+                 * 窗口内统一完成，尽量减少 WiFi 重连次数以省电。若窗口内
                  * 发生用户操作（触摸/按键），则升级为用户唤醒：重连并
                  * 保持唤醒，避免"刚唤醒刷新完又立刻睡、忽略用户操作"。 */
                 const uint64_t activity_at_wake = espaperplay_input_get_last_activity_ms();
-                const bool cal_due = espaperplay_clock_is_calibration_due();
-                const bool weather_due = espaperplay_weather_is_refresh_due();
+                espaperplay_sleep_refresh_service_t
+                    due_services[ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES];
+                const uint64_t wake_now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+                const bool cal_due = espaperplay_clock_is_calibration_due() &&
+                                     power_network_window_allowed(wake_now_ms);
+                const size_t due_count = power_collect_due_refresh_services(
+                    wake_now_ms, due_services, ESPAPERPLAY_POWER_MAX_SLEEP_REFRESH_SERVICES);
                 bool connected = false;
 
-                if (cal_due || weather_due) {
-                    ESP_LOGI(TAG, "timer wake: reconnecting (%s%s%s)",
-                             cal_due ? "clock-calibration" : "",
-                             cal_due && weather_due ? " + " : "",
-                             weather_due ? "weather-refresh" : "");
+                if (cal_due || due_count > 0) {
+                    ESP_LOGI(TAG, "timer wake: reconnecting (clock_cal=%d, services=%u)", cal_due,
+                             (unsigned)due_count);
                     espaperplay_wifi_resume_after_wake(true);
-                    power_wait_wifi_connected();
-                    connected = true;
+                    connected = power_wait_wifi_connected();
+                    portENTER_CRITICAL(&s_sleep_refresh_mux);
+                    s_last_network_wake_ms = wake_now_ms;
+                    portEXIT_CRITICAL(&s_sleep_refresh_mux);
+                    if (!connected) {
+                        ESP_LOGW(TAG, "timer wake: WiFi connection timeout; retry next window");
+                        power_reschedule_refresh_services(due_services, due_count, wake_now_ms);
+                    }
                 }
                 if (cal_due && connected) {
                     /* NTP 标定（测量/精修漂移率），使本次刷新即显示校正后时间。 */
@@ -422,14 +590,20 @@ static void power_auto_sleep_task(void *arg) {
                                  (long)espaperplay_clock_get_drift_ppm());
                     }
                 }
-                if (weather_due && connected) {
-                    /* 天气到期：触发后台任务拉取并等待完成（各 API 受 TTL
-                     * 约束，未过期项不重复请求）。 */
-                    espaperplay_weather_request_refresh();
-                    if (!espaperplay_weather_wait_refresh_done(
-                            ESPAPERPLAY_POWER_WEATHER_WAIT_MS)) {
-                        ESP_LOGW(TAG, "weather refresh wait timeout (%d ms)",
-                                 ESPAPERPLAY_POWER_WEATHER_WAIT_MS);
+                if (connected) {
+                    /* 同一 WiFi 窗口先并发触发全部到期服务，再逐个等待；TLS
+                     * 建连可相互重叠，且不会为每个服务重复唤醒 WiFi。 */
+                    for (size_t i = 0; i < due_count; i++) {
+                        ESP_LOGI(TAG, "sleep refresh dispatch: %s", due_services[i].name);
+                        due_services[i].request_refresh();
+                    }
+                    for (size_t i = 0; i < due_count; i++) {
+                        if (due_services[i].wait_refresh_done != NULL &&
+                            !due_services[i].wait_refresh_done(
+                                due_services[i].refresh_timeout_ms)) {
+                            ESP_LOGW(TAG, "sleep refresh timeout: %s (%u ms)", due_services[i].name,
+                                     (unsigned)due_services[i].refresh_timeout_ms);
+                        }
                     }
                 }
                 vTaskDelay(pdMS_TO_TICKS(ESPAPERPLAY_POWER_REFRESH_GRACE_MS));

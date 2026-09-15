@@ -13,9 +13,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "nethttp.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nethttp.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
@@ -28,6 +28,7 @@
 
 #include "espaperplay_geoip.h"
 #include "espaperplay_netip.h"
+#include "espaperplay_power.h"
 #include "espaperplay_system.h"
 #include "espaperplay_weather.h"
 #include "espaperplay_wifi.h"
@@ -158,9 +159,9 @@ static espaperplay_weather_status_t *s_status;
 
 /* 各 API 独立缓存（键 = 实际使用的 LocationID）。 */
 typedef struct {
-    bool valid;    /*!< 是否已有有效缓存 */
+    bool valid;     /*!< 是否已有有效缓存 */
     uint64_t ts_ms; /*!< 缓存写入时间（esp_timer，毫秒） */
-    char loc[16];  /*!< 缓存对应的 LocationID */
+    char loc[16];   /*!< 缓存对应的 LocationID */
     espaperplay_weather_now_t data;
 } weather_now_cache_t;
 
@@ -242,7 +243,8 @@ typedef struct {
     espaperplay_weather_location_t loc[WEATHER_LOOKUP_RESULT_MAX];
 } weather_lookup_cache_entry_t;
 
-static weather_lookup_cache_entry_t *s_cache_lookup; /*!< [ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES] */
+static weather_lookup_cache_entry_t
+    *s_cache_lookup; /*!< [ESPAPERPLAY_WEATHER_LOOKUP_CACHE_ENTRIES] */
 
 /* 自动定位结果缓存。 */
 typedef struct {
@@ -323,9 +325,7 @@ static void weather_lock_ensure(void) {
 }
 
 /** 当前时间（毫秒，esp_timer）。 */
-static uint64_t weather_now_ms(void) {
-    return (uint64_t)(esp_timer_get_time() / 1000);
-}
+static uint64_t weather_now_ms(void) { return (uint64_t)(esp_timer_get_time() / 1000); }
 
 /* ------------------------------------------------------------------ */
 /* HTTP 层                                                              */
@@ -444,8 +444,7 @@ static esp_err_t weather_http_get(const char *url, const char *api_key, size_t m
                                    /* 明确要求不压缩：esp_http_client 不解压 gzip，防止
                                     * 服务端按 Accept-Encoding 返回压缩体导致 JSON
                                     * 解析失败（部分响应仍可能 gzip，下方按魔数兜底）。 */
-                                   "Accept-Encoding", "identity",
-                                   NULL};
+                                   "Accept-Encoding", "identity", NULL};
     const nethttp_cfg_t cfg = {
         .url = url,
         .timeout_ms = ESPAPERPLAY_WEATHER_HTTP_TIMEOUT_MS,
@@ -719,8 +718,7 @@ static esp_err_t weather_parse_minutely(const char *body, espaperplay_weather_mi
             /* 新格式：对象数组 [{"fxTime":...,"precip":"0.15","type":"rain"},...]。 */
             const cJSON *p = cJSON_GetObjectItemCaseSensitive(item, "precip");
             if (cJSON_IsString(p) && p->valuestring != NULL) {
-                strlcpy(out->precip[out->count], p->valuestring,
-                        sizeof(out->precip[out->count]));
+                strlcpy(out->precip[out->count], p->valuestring, sizeof(out->precip[out->count]));
                 out->count++;
             }
         }
@@ -814,7 +812,8 @@ static esp_err_t weather_parse_air(const char *body, espaperplay_weather_air_t *
     return ESP_OK;
 }
 
-static esp_err_t weather_parse_astronomy(const char *body, bool sun, espaperplay_weather_astronomy_t *out) {
+static esp_err_t weather_parse_astronomy(const char *body, bool sun,
+                                         espaperplay_weather_astronomy_t *out) {
     cJSON *root = cJSON_Parse(body);
     if (root == NULL) {
         return ESP_ERR_INVALID_RESPONSE;
@@ -832,8 +831,7 @@ static esp_err_t weather_parse_astronomy(const char *body, bool sun, espaperplay
         const cJSON *first = cJSON_GetArrayItem(arr, 0);
         if (cJSON_IsObject(first)) {
             weather_copy_field(first, "name", out->moon_phase, sizeof(out->moon_phase));
-            weather_copy_field(first, "icon", out->moon_phase_icon,
-                               sizeof(out->moon_phase_icon));
+            weather_copy_field(first, "icon", out->moon_phase_icon, sizeof(out->moon_phase_icon));
         } else {
             weather_copy_field(root, "moonPhase.text", out->moon_phase, sizeof(out->moon_phase));
             weather_copy_field(root, "moonPhase.icon", out->moon_phase_icon,
@@ -1004,8 +1002,8 @@ static esp_err_t weather_request(const char *host, const char *path, const char 
 /* ------------------------------------------------------------------ */
 
 /** 通用缓存命中判断（TTL 内且 LocationID 匹配）。 */
-static bool weather_cache_hit(bool valid, uint64_t ts_ms, const char *cache_loc,
-                              const char *loc_id, uint32_t ttl_ms) {
+static bool weather_cache_hit(bool valid, uint64_t ts_ms, const char *cache_loc, const char *loc_id,
+                              uint32_t ttl_ms) {
     if (!valid || strcmp(cache_loc, loc_id) != 0) {
         return false;
     }
@@ -1013,8 +1011,7 @@ static bool weather_cache_hit(bool valid, uint64_t ts_ms, const char *cache_loc,
 }
 
 /** 通用缓存写入（调用方需持锁）。 */
-static void weather_cache_store(bool *valid, uint64_t *ts_ms, char *cache_loc,
-                                const char *loc_id) {
+static void weather_cache_store(bool *valid, uint64_t *ts_ms, char *cache_loc, const char *loc_id) {
     *valid = true;
     *ts_ms = weather_now_ms();
     strlcpy(cache_loc, loc_id, 16);
@@ -1140,8 +1137,7 @@ static esp_err_t weather_resolve_location(char *loc_id, size_t id_size, char *lo
 /* ------------------------------------------------------------------ */
 
 esp_err_t espaperplay_weather_location_lookup(const char *query,
-                                              espaperplay_weather_location_t *out,
-                                              int *out_count) {
+                                              espaperplay_weather_location_t *out, int *out_count) {
     if (query == NULL || query[0] == '\0' || out == NULL || out_count == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1178,8 +1174,8 @@ esp_err_t espaperplay_weather_location_lookup(const char *query,
     const char *data_host = NULL;
     weather_get_hosts(&data_host, &geo_host, &geo_path);
     char *body = NULL;
-    esp_err_t err = weather_request(geo_host, geo_path, q, ESPAPERPLAY_WEATHER_RESP_LOOKUP_MAX,
-                                    &body);
+    esp_err_t err =
+        weather_request(geo_host, geo_path, q, ESPAPERPLAY_WEATHER_RESP_LOOKUP_MAX, &body);
     if (err != ESP_OK) {
         return err;
     }
@@ -1257,8 +1253,8 @@ static esp_err_t weather_effective_location(const char *location, char *loc_id, 
             weather_normalize_coords(location, norm, sizeof(norm));
             espaperplay_weather_location_t locs[WEATHER_LOOKUP_RESULT_MAX];
             int count = 0;
-            if (espaperplay_weather_location_lookup(norm, locs, &count) == ESP_OK &&
-                count > 0 && locs[0].id[0] != '\0') {
+            if (espaperplay_weather_location_lookup(norm, locs, &count) == ESP_OK && count > 0 &&
+                locs[0].id[0] != '\0') {
                 strlcpy(loc_id, locs[0].id, id_size);
                 return ESP_OK;
             }
@@ -1357,8 +1353,8 @@ static esp_err_t weather_fetch_daily(const char *location, int days,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = cache != NULL &&
-               weather_cache_hit(cache->valid, cache->ts_ms, cache->loc, loc_id, ttl);
+    bool hit =
+        cache != NULL && weather_cache_hit(cache->valid, cache->ts_ms, cache->loc, loc_id, ttl);
     if (hit) {
         *out_count = cache->count;
         for (int i = 0; i < cache->count; i++) {
@@ -1376,8 +1372,8 @@ static esp_err_t weather_fetch_daily(const char *location, int days,
     weather_build_query(loc_id, NULL, query, sizeof(query));
     const char *path = (days == 3) ? "/v7/weather/3d" : "/v7/weather/7d";
     char *body = NULL;
-    err = weather_request(weather_data_host(), path, query,
-                          ESPAPERPLAY_WEATHER_RESP_DAILY_MAX, &body);
+    err = weather_request(weather_data_host(), path, query, ESPAPERPLAY_WEATHER_RESP_DAILY_MAX,
+                          &body);
     if (err != ESP_OK) {
         return err;
     }
@@ -1483,10 +1479,10 @@ static esp_err_t weather_fetch_minutely(const char *location, espaperplay_weathe
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = s_cache_minutely != NULL &&
-               weather_cache_hit(s_cache_minutely->valid, s_cache_minutely->ts_ms,
-                                 s_cache_minutely->loc, loc_id,
-                                 ESPAPERPLAY_WEATHER_TTL_MINUTELY_MS);
+    bool hit =
+        s_cache_minutely != NULL &&
+        weather_cache_hit(s_cache_minutely->valid, s_cache_minutely->ts_ms, s_cache_minutely->loc,
+                          loc_id, ESPAPERPLAY_WEATHER_TTL_MINUTELY_MS);
     if (hit) {
         *out = s_cache_minutely->data;
     }
@@ -1557,8 +1553,7 @@ static esp_err_t weather_fetch_warning(const char *location, espaperplay_weather
     }
     bool hit = s_cache_warning != NULL &&
                weather_cache_hit(s_cache_warning->valid, s_cache_warning->ts_ms,
-                                 s_cache_warning->loc, loc_id,
-                                 ESPAPERPLAY_WEATHER_TTL_WARNING_MS);
+                                 s_cache_warning->loc, loc_id, ESPAPERPLAY_WEATHER_TTL_WARNING_MS);
     if (hit) {
         *out_count = s_cache_warning->count;
         for (int i = 0; i < s_cache_warning->count; i++) {
@@ -1596,8 +1591,8 @@ static esp_err_t weather_fetch_warning(const char *location, espaperplay_weather
         for (int i = 0; i < count; i++) {
             s_cache_warning->data[i] = out[i];
         }
-        weather_cache_store(&s_cache_warning->valid, &s_cache_warning->ts_ms,
-                            s_cache_warning->loc, loc_id);
+        weather_cache_store(&s_cache_warning->valid, &s_cache_warning->ts_ms, s_cache_warning->loc,
+                            loc_id);
     }
     if (s_lock != NULL) {
         xSemaphoreGive(s_lock);
@@ -1624,10 +1619,10 @@ static esp_err_t weather_fetch_indices(const char *location, const char *type,
         if (s_lock != NULL) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
         }
-        bool hit = s_cache_indices != NULL &&
-                   weather_cache_hit(s_cache_indices->valid, s_cache_indices->ts_ms,
-                                     s_cache_indices->loc, loc_id,
-                                     ESPAPERPLAY_WEATHER_TTL_INDICES_MS);
+        bool hit =
+            s_cache_indices != NULL &&
+            weather_cache_hit(s_cache_indices->valid, s_cache_indices->ts_ms, s_cache_indices->loc,
+                              loc_id, ESPAPERPLAY_WEATHER_TTL_INDICES_MS);
         if (hit) {
             *out_count = s_cache_indices->count;
             for (int i = 0; i < s_cache_indices->count; i++) {
@@ -1773,8 +1768,7 @@ static bool weather_fetch_moon_day(const char *loc_id, const char *date, char *r
     if (set_out != NULL) {
         strlcpy(set_out, tmp.moonset, set_size);
     }
-    ESP_LOGI(TAG, "backfilled moon data from %s: rise=%s set=%s", date, tmp.moonrise,
-             tmp.moonset);
+    ESP_LOGI(TAG, "backfilled moon data from %s: rise=%s set=%s", date, tmp.moonrise, tmp.moonset);
     return true;
 }
 
@@ -1808,10 +1802,10 @@ static esp_err_t weather_fetch_astronomy(const char *location,
     if (s_lock != NULL) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
     }
-    bool hit = s_cache_astronomy != NULL &&
-               weather_cache_hit(s_cache_astronomy->valid, s_cache_astronomy->ts_ms,
-                                 s_cache_astronomy->loc, loc_id,
-                                 ESPAPERPLAY_WEATHER_TTL_ASTRONOMY_MS);
+    bool hit =
+        s_cache_astronomy != NULL &&
+        weather_cache_hit(s_cache_astronomy->valid, s_cache_astronomy->ts_ms,
+                          s_cache_astronomy->loc, loc_id, ESPAPERPLAY_WEATHER_TTL_ASTRONOMY_MS);
     if (hit) {
         *out = s_cache_astronomy->data;
     }
@@ -1869,10 +1863,8 @@ static esp_err_t weather_fetch_astronomy(const char *location,
      * 正常日子不多花请求；回填失败不影响今日数据。 */
     if (tmp.moonrise[0] == '\0') {
         if (s_cache_astronomy != NULL && s_cache_astronomy->last_moonrise[0] != '\0') {
-            strlcpy(tmp.moonrise_prev, s_cache_astronomy->last_moonrise,
-                    sizeof(tmp.moonrise_prev));
-            ESP_LOGI(TAG, "moonrise empty today, backfilled from cache: %s",
-                     tmp.moonrise_prev);
+            strlcpy(tmp.moonrise_prev, s_cache_astronomy->last_moonrise, sizeof(tmp.moonrise_prev));
+            ESP_LOGI(TAG, "moonrise empty today, backfilled from cache: %s", tmp.moonrise_prev);
         } else {
             char next_date[16];
             weather_rel_date(+1, next_date, sizeof(next_date));
@@ -1882,8 +1874,8 @@ static esp_err_t weather_fetch_astronomy(const char *location,
                 const int ms_min = weather_moon_ts_to_min(tmp.moonset);
                 if (ms_min >= 0) {
                     const int est = ((ms_min - WEATHER_MOON_ABOVE_MIN) % 1440 + 1440) % 1440;
-                    snprintf(tmp.moonrise_prev, sizeof(tmp.moonrise_prev), "%02d:%02d",
-                             est / 60, est % 60);
+                    snprintf(tmp.moonrise_prev, sizeof(tmp.moonrise_prev), "%02d:%02d", est / 60,
+                             est % 60);
                     ESP_LOGW(TAG, "moonrise empty, estimated from moonset %s: %s", tmp.moonset,
                              tmp.moonrise_prev);
                 }
@@ -1898,8 +1890,8 @@ static esp_err_t weather_fetch_astronomy(const char *location,
             const int mr_min = weather_moon_ts_to_min(tmp.moonrise);
             if (mr_min >= 0) {
                 const int est = (mr_min + WEATHER_MOON_ABOVE_MIN) % 1440;
-                snprintf(tmp.moonset_next, sizeof(tmp.moonset_next), "%02d:%02d",
-                         est / 60, est % 60);
+                snprintf(tmp.moonset_next, sizeof(tmp.moonset_next), "%02d:%02d", est / 60,
+                         est % 60);
                 ESP_LOGW(TAG, "moonset empty, estimated from moonrise %s: %s", tmp.moonrise,
                          tmp.moonset_next);
             }
@@ -1944,8 +1936,8 @@ esp_err_t espaperplay_weather_query_daily(const char *location, int days,
     return weather_fetch_daily(location, days, out, out_count);
 }
 
-esp_err_t espaperplay_weather_query_hourly(const char *location,
-                                           espaperplay_weather_hourly_t *out, int *out_count) {
+esp_err_t espaperplay_weather_query_hourly(const char *location, espaperplay_weather_hourly_t *out,
+                                           int *out_count) {
     if (out == NULL || out_count == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -2007,8 +1999,8 @@ esp_err_t espaperplay_weather_refresh(void) {
     char loc_id[16];
     char loc_name[128];
     bool auto_loc = false;
-    esp_err_t err = weather_resolve_location(loc_id, sizeof(loc_id), loc_name, sizeof(loc_name),
-                                             &auto_loc);
+    esp_err_t err =
+        weather_resolve_location(loc_id, sizeof(loc_id), loc_name, sizeof(loc_name), &auto_loc);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "location resolve failed: %s", esp_err_to_name(err));
         return err;
@@ -2176,8 +2168,8 @@ esp_err_t espaperplay_weather_refresh(void) {
         xSemaphoreGive(s_lock);
     }
 
-    ESP_LOGI(TAG, "weather refresh done: %s (%s), temp %s°C %s, daily %d, warnings %d",
-             loc_name, loc_id, now->temp, now->text, daily_count, warning_count);
+    ESP_LOGI(TAG, "weather refresh done: %s (%s), temp %s°C %s, daily %d, warnings %d", loc_name,
+             loc_id, now->temp, now->text, daily_count, warning_count);
 
     free(now);
     free(daily);
@@ -2335,6 +2327,19 @@ esp_err_t espaperplay_weather_start(void) {
         s_task = NULL;
         return ESP_ERR_NO_MEM;
     }
+    const espaperplay_sleep_refresh_service_t sleep_refresh = {
+        .name = "weather",
+        .refresh_interval_ms = ESPAPERPLAY_WEATHER_REFRESH_INTERVAL_MS,
+        .refresh_timeout_ms = 20000,
+        .is_refresh_due = espaperplay_weather_is_refresh_due,
+        .request_refresh = espaperplay_weather_request_refresh,
+        .wait_refresh_done = espaperplay_weather_wait_refresh_done,
+    };
+    esp_err_t reg = espaperplay_power_register_sleep_refresh_service(&sleep_refresh);
+    if (reg != ESP_OK) {
+        ESP_LOGE(TAG, "sleep refresh registration failed: %s", esp_err_to_name(reg));
+        return reg;
+    }
     ESP_LOGI(TAG, "weather task created");
     return ESP_OK;
 }
@@ -2357,6 +2362,9 @@ void espaperplay_weather_request_refresh(void) {
         xSemaphoreGive(s_lock);
     }
     if (task != NULL) {
+        if (s_refresh_done != NULL) {
+            xEventGroupClearBits(s_refresh_done, BIT(0));
+        }
         xTaskNotifyGive(task);
         ESP_LOGI(TAG, "refresh requested");
     } else {
@@ -2389,6 +2397,7 @@ bool espaperplay_weather_wait_refresh_done(uint32_t timeout_ms) {
     if (done == NULL || s_task == NULL) {
         return true; /* 任务未运行：无在途刷新可等 */
     }
-    EventBits_t bits = xEventGroupWaitBits(done, BIT(0), pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
+    EventBits_t bits =
+        xEventGroupWaitBits(done, BIT(0), pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     return (bits & BIT(0)) != 0;
 }

@@ -49,12 +49,12 @@ extern "C" {
 
 /** 一条一言（快照拷贝用；字符串均以 '\0' 结尾，缺失字段为空串）。 */
 typedef struct {
-    bool valid;                    /*!< 是否已成功获取过（false 时其余字段无意义） */
-    int32_t id;                    /*!< 句子 ID（同句去重 / 判断"换一句"生效） */
-    char text[ESPAPERPLAY_HITOKOTO_TEXT_MAX]; /*!< 句子内容 */
-    char from[ESPAPERPLAY_HITOKOTO_FROM_MAX]; /*!< 出处（《作品》/ 说话场合等） */
+    bool valid;                                  /*!< 是否已成功获取过（false 时其余字段无意义） */
+    int32_t id;                                  /*!< 句子 ID（同句去重 / 判断"换一句"生效） */
+    char text[ESPAPERPLAY_HITOKOTO_TEXT_MAX];    /*!< 句子内容 */
+    char from[ESPAPERPLAY_HITOKOTO_FROM_MAX];    /*!< 出处（《作品》/ 说话场合等） */
     char from_who[ESPAPERPLAY_HITOKOTO_WHO_MAX]; /*!< 作者（可为空） */
-    char type[ESPAPERPLAY_HITOKOTO_TYPE_MAX]; /*!< 分类代码（a 动画 / d 文学 / i 诗词…） */
+    char type[ESPAPERPLAY_HITOKOTO_TYPE_MAX];    /*!< 分类代码（a 动画 / d 文学 / i 诗词…） */
 } espaperplay_hitokoto_t;
 
 /**
@@ -82,6 +82,12 @@ esp_err_t espaperplay_hitokoto_get(espaperplay_hitokoto_t *out);
  * espaperplay_hitokoto_get() 轮询获取（比较 id 是否变化）。
  */
 void espaperplay_hitokoto_request_refresh(void);
+
+/** @brief 当前快照是否已到刷新周期（含失败退避判断）。 */
+bool espaperplay_hitokoto_is_refresh_due(void);
+
+/** @brief 等待最近一次后台刷新完成，供睡眠联网窗口同步收尾。 */
+bool espaperplay_hitokoto_wait_refresh_done(uint32_t timeout_ms);
 
 /**
  * @brief 分类代码转中文名（"a"->"动画" 等，未知代码返回 NULL）。

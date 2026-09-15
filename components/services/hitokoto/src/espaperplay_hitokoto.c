@@ -20,13 +20,16 @@
 #include "esp_log.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 
 #include "cJSON.h"
+#include "esp_timer.h"
 #include "nethttp.h"
 #include "nvs.h"
 
 #include "espaperplay_nvs.h"
+#include "espaperplay_power.h"
 #include "espaperplay_wifi.h"
 
 #include "espaperplay_hitokoto_cert.h"
@@ -65,10 +68,13 @@ static const char *TAG = "ESPaperPlay_HITOKOTO";
 /* 全局状态                                                             */
 /* ------------------------------------------------------------------ */
 
-static SemaphoreHandle_t s_lock = NULL; /*!< 快照 / 任务句柄访问互斥锁 */
-static TaskHandle_t s_task = NULL;      /*!< 后台刷新任务句柄（NULL=未运行） */
-static espaperplay_hitokoto_t s_snap;   /*!< 当前一言快照（s_lock 保护） */
+static SemaphoreHandle_t s_lock = NULL;          /*!< 快照 / 任务句柄访问互斥锁 */
+static TaskHandle_t s_task = NULL;               /*!< 后台刷新任务句柄（NULL=未运行） */
+static EventGroupHandle_t s_refresh_done = NULL; /*!< 最近一次刷新完成信号 */
+static espaperplay_hitokoto_t s_snap;            /*!< 当前一言快照（s_lock 保护） */
 static volatile uint32_t s_interval_ms = ESPAPERPLAY_HITOKOTO_REFRESH_INTERVAL_MS;
+static volatile int64_t s_last_refresh_ok_ms = 0;
+static volatile int64_t s_last_refresh_try_ms = 0;
 
 /* ------------------------------------------------------------------ */
 /* 持久化（NVS）                                                        */
@@ -100,6 +106,7 @@ static void hitokoto_restore(void) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
         }
         s_snap = saved;
+        s_last_refresh_ok_ms = esp_timer_get_time() / 1000LL;
         if (s_lock != NULL) {
             xSemaphoreGive(s_lock);
         }
@@ -215,6 +222,9 @@ static void hitokoto_task(void *arg) {
     }
 
     while (1) {
+        if (s_refresh_done != NULL) {
+            xEventGroupClearBits(s_refresh_done, BIT(0));
+        }
         /* 失败退避：无效态（尚未取到第一条）短周期重试——设备睡眠期间
          * WiFi 断开、拉取必然失败，此间隔只在清醒时起效，缩短拿到第一
          * 条的等待；已有内容则失败按短退避、成功按整周期。 */
@@ -222,18 +232,24 @@ static void hitokoto_task(void *arg) {
         espaperplay_hitokoto_get(&cur);
         uint32_t next_wait = cur.valid ? s_interval_ms : HITOKOTO_INVALID_RETRY_MS;
         if (espaperplay_wifi_is_sta_online()) {
+            s_last_refresh_try_ms = esp_timer_get_time() / 1000LL;
             const esp_err_t err = hitokoto_fetch_once();
             if (err != ESP_OK) {
-                next_wait = cur.valid ? ESPAPERPLAY_HITOKOTO_RETRY_INTERVAL_MS
-                                      : HITOKOTO_INVALID_RETRY_MS;
+                next_wait =
+                    cur.valid ? ESPAPERPLAY_HITOKOTO_RETRY_INTERVAL_MS : HITOKOTO_INVALID_RETRY_MS;
                 ESP_LOGW(TAG, "hitokoto fetch failed: %s (retry in %u ms)", esp_err_to_name(err),
                          (unsigned)next_wait);
+            } else {
+                s_last_refresh_ok_ms = esp_timer_get_time() / 1000LL;
             }
             /* 监控任务栈余量（TLS 握手等路径的栈占用），便于发现潜在溢出。 */
             ESP_LOGD(TAG, "task stack high water: %u bytes",
                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
         } else {
             ESP_LOGD(TAG, "no STA network, skip hitokoto fetch");
+        }
+        if (s_refresh_done != NULL) {
+            xEventGroupSetBits(s_refresh_done, BIT(0));
         }
         /* 等待周期或立即刷新通知（通知返回 pdTRUE，立即进入下一轮）。 */
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(next_wait));
@@ -252,6 +268,12 @@ esp_err_t espaperplay_hitokoto_start(void) {
         }
         s_lock = m;
     }
+    if (s_refresh_done == NULL) {
+        s_refresh_done = xEventGroupCreate();
+        if (s_refresh_done == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
     hitokoto_restore(); /* 先恢复上次内容：开机即有可用句子 */
     if (s_task != NULL) {
         return ESP_OK; /* 幂等 */
@@ -261,6 +283,19 @@ esp_err_t espaperplay_hitokoto_start(void) {
         ESP_LOGE(TAG, "failed to create hitokoto task");
         s_task = NULL;
         return ESP_ERR_NO_MEM;
+    }
+    const espaperplay_sleep_refresh_service_t sleep_refresh = {
+        .name = "hitokoto",
+        .refresh_interval_ms = ESPAPERPLAY_HITOKOTO_REFRESH_INTERVAL_MS,
+        .refresh_timeout_ms = 15000,
+        .is_refresh_due = espaperplay_hitokoto_is_refresh_due,
+        .request_refresh = espaperplay_hitokoto_request_refresh,
+        .wait_refresh_done = espaperplay_hitokoto_wait_refresh_done,
+    };
+    esp_err_t reg = espaperplay_power_register_sleep_refresh_service(&sleep_refresh);
+    if (reg != ESP_OK) {
+        ESP_LOGE(TAG, "sleep refresh registration failed: %s", esp_err_to_name(reg));
+        return reg;
     }
     ESP_LOGI(TAG, "hitokoto task created");
     return ESP_OK;
@@ -289,6 +324,9 @@ void espaperplay_hitokoto_request_refresh(void) {
         xSemaphoreGive(s_lock);
     }
     if (task != NULL) {
+        if (s_refresh_done != NULL) {
+            xEventGroupClearBits(s_refresh_done, BIT(0));
+        }
         xTaskNotifyGive(task);
         ESP_LOGI(TAG, "refresh requested");
     } else {
@@ -296,36 +334,57 @@ void espaperplay_hitokoto_request_refresh(void) {
     }
 }
 
+bool espaperplay_hitokoto_is_refresh_due(void) {
+    const int64_t now_ms = esp_timer_get_time() / 1000LL;
+    espaperplay_hitokoto_t cur;
+    espaperplay_hitokoto_get(&cur);
+    const int64_t interval = cur.valid ? (int64_t)s_interval_ms : HITOKOTO_INVALID_RETRY_MS;
+    if (cur.valid && now_ms - s_last_refresh_ok_ms < interval) {
+        return false;
+    }
+    return now_ms - s_last_refresh_try_ms >= interval;
+}
+
+bool espaperplay_hitokoto_wait_refresh_done(uint32_t timeout_ms) {
+    EventGroupHandle_t done = s_refresh_done;
+    if (done == NULL || s_task == NULL) {
+        return true;
+    }
+    const EventBits_t bits =
+        xEventGroupWaitBits(done, BIT(0), pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
+    return (bits & BIT(0)) != 0;
+}
+
 const char *espaperplay_hitokoto_type_name(const char *type) {
     if (type == NULL || type[0] == '\0' || type[1] != '\0') {
         return NULL;
     }
     switch (type[0]) {
-        case 'a':
-            return "动画";
-        case 'b':
-            return "漫画";
-        case 'c':
-            return "游戏";
-        case 'd':
-            return "文学";
-        case 'e':
-            return "原创";
-        case 'f':
-            return "网络";
-        case 'g':
-            return "其他";
-        case 'h':
-            return "影视";
-        case 'i':
-            return "诗词";
-        case 'j':
-            return "网易云";
-        case 'k':
-            return "哲学";
-        case 'l':
-            return "抖机灵";
-        default:
-            return NULL;
+    case 'a':
+        return "动画";
+    case 'b':
+        return "漫画";
+    case 'c':
+        return "游戏";
+    case 'd':
+        return "文学";
+    case 'e':
+        return "原创";
+    case 'f':
+        return "网络";
+    case 'g':
+        return "其他";
+    case 'h':
+        return "影视";
+    case 'i':
+        return "诗词";
+    case 'j':
+        return "网易云";
+    case 'k':
+        return "哲学";
+    case 'l':
+        return "抖机灵";
+    default:
+        return NULL;
     }
 }
