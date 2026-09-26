@@ -39,8 +39,8 @@ static const char *TAG = "ESPaperPlay_UI";
  *     区间 / 图片段）并返回下一页起点；图片块独占一页（居中显示）。
  *   - 全局页码 = 前缀章节页数和 + 章内页号。各章页数表惰性计算：恢复进度
  *     时同步算到目标章，其余由 LVGL 定时器分片补齐（每 tick 一章）；
- *   - TXT 为单章节文档（每行为一块），沿用惰性分页 + 稀疏检查点，512KB
- *     小说打开即时；EPUB 章节小，按需加载驻留（同一时刻仅一章在内存）。
+ *   - TXT 按有界分段建立索引（每行为一块）；TXT / EPUB 均按需驻留，
+ *     沿用惰性分页与稀疏检查点。
  *
  * 交互不变：点击左/中/右 1/3（上页 / 底边栏 / 下页）、横滑翻页、边缘内滑
  * 返回；BOOT 键单击下页、双击上页、长按单次 GRAY4；底边栏（翻页 / 页码
@@ -1775,9 +1775,8 @@ static void reader_exit(void) {
         const int gtotal = reader_global_total();
         if (path != NULL) {
             /* 进度存打包位置（章 << 20 | 章内页）：恢复无需预数前缀章节。
-             * EPUB 的 total 打包为 bit31 | 章内总页数——主页才能显示自洽的
-             * 「第 N 章 x/y 页」（y 是章内页数，与全书页数不可比）；
-             * TXT 无章节概念，total 仍存全书页数。 */
+             * 多章 EPUB / TXT 分段的 total 为 bit31 | 章内总页数，
+             * 主页显示「第 N 章/节 x/y 页」；单章文档仍保存全书页数。 */
             const uint32_t page = ((uint32_t)s_ch << 20) | (uint32_t)s_local_page;
             uint32_t ch_lt = 0; /* 视图章的章内总页数（可能被计数换出） */
             if (reader_view_resident()) {

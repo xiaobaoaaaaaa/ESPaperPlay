@@ -24,28 +24,15 @@ extern "C" {
  * @file espaperplay_reader_epub.h
  * @brief EPUB 解析后端（ZIP 容器 + OPF 章节表 + XHTML 块化 + 图片解码）。
  *
- * 面向 ESP32-S3 + PSRAM 的低内存设计：
- *   - 解析与渲染解耦：章节解析（解压 + CSS + XHTML 块化）在内部 RAM 栈的
- *     预取 worker 任务执行（优先级低于 LVGL），产出数据包放入就绪槽；
- *     LVGL 线程只做采纳与 FreeType 分页，翻章零解析阻塞；
- *   - SD 解析缓存：数据包二进制落盘（/sdcard/system/cache/reader/，键 =
- *     路径哈希 ^ mtime ^ size，书变更自动失效），二次打开章节装载为一次
- *     小文件读取；缓存写全部在 worker（SD 写不进 LVGL 线程）；
- *   - ZIP 按需解压：只解析中央目录（常驻小表），条目数据用 zlib raw inflate
- *     流式解压到 PSRAM，用后即释放，不整书载入（zip 访问带递归互斥，
- *     worker 解析与 LVGL 图片解码可并发）；
- *   - 章节以目录为准（EPUB2 toc.ncx navMap / EPUB3 nav），而非 spine 文档
- *     数——目录外的独立插图文档并入相邻章节的阅读流，内容不丢；无目录时
- *     退化为 spine 文档即章；
- *   - 章节按需驻留：同一时刻只保留一个章节的文本 blob + 块表（章 = 多个
- *     spine 文档顺序拼接）；
- *   - CSS 版式子集：章节样式表按 zip 条目缓存解析——类规则对齐 / 粗斜体 /
- *     text-indent 覆盖与元素规则 p{text-indent}（正文首行缩进），块级样式
- *     随标签开合继承给内部段落；字体族 / 颜色 / 阴影不还原；
- *   - 图片单页渲染：JPEG 走 TJpgD 逐 MCU 解码、PNG 走 zlib 流式逐行解码
- *     （unfilter + 行内抽样，支持 1-16 位深全颜色类型与调色板 / tRNS，
- *     峰值内存 ≈ 2 行扫描线），均在解码中抽样缩放（目标缓冲 + KB 级工作区，
- *     不做整图 RGBA 解码）；同一时刻只缓存一张图。
+ * ZIP、XML/URI、OPF/导航、CSS、XHTML、图片解码分别在 src/parser 下实现。
+ * 显式资源上限、支持范围与测试方法见 docs/reader-engine.md。
+ *
+ * 章节由 EPUB3 nav（优先）/ EPUB2 NCX 与 spine 阅读顺序共同构建，保留锚点。
+ * 当前章节和一个后台预取结果分别拥有自己的文本、块表和资源编号。
+ * 交互装载优先采纳预取 / SD 缓存，未命中时同步解析；后台轮询走 worker。
+ * worker 使用 PSRAM 栈，写入带引擎版本的缓存，换书通过锁和会话代数隔离。
+ * JPEG / PNG 按目标尺寸逐 MCU / 逐行抽样，只缓存一张解码图片。
+
  */
 
 /** 单个 EPUB 条目（图片/字体）解压后的最大体积（超出按解码失败处理）。 */
@@ -82,29 +69,27 @@ bool espaperplay_reader_epub_toc_title(int idx, char *buf, size_t len);
 /**
  * @brief 加载并驻留一个章节（XHTML 解析为块模型）。
  *
- * 同一时刻仅驻留一个章节；再次调用会释放上一章。解析为单遍状态机：
- * 标题层级 / 加粗 / 斜体 / 引用 / 对齐 / 首行缩进 → 块 flags（块级样式
- * 随标签开合栈式继承），<img> → 图片块，ruby 注音（rt/rp）与
- * style/script/head 内容丢弃，实体解码、空白折叠；首个 <link> 样式表
- * 按 zip 条目缓存做 CSS 子集解析。
+ * 成功后转移结果包所有权并释放上一章；失败保留原驻留结果。
+ * 文档样式按继承和层叠合成；结构和 Ruby 注音保留为可读块流。
  *
- * @param idx 章节（spine 序，0 基）。
+ * @param idx 目录章节号（0 基，可对应同一 spine 文档内的不同锚点）。
  * @return ESP_OK；ESP_ERR_NOT_FOUND / ESP_ERR_NO_MEM / ESP_ERR_INVALID_STATE。
  */
 esp_err_t espaperplay_reader_epub_load_chapter(int idx);
 
-/** 书指纹（路径哈希 ^ mtime ^ size）：分页缓存等外部数据的键。 */
+/** 书指纹（路径哈希 ^ mtime ^ size ^ 引擎版本）：分页缓存等外部数据的键。 */
 uint32_t espaperplay_reader_epub_token(void);
 
 /** 当前驻留章节号（未驻留返回 -1）。 */
 int espaperplay_reader_epub_chapter_current(void);
 
 /**
- * @brief 轮询式章节装载（后台计数等非交互路径专用，绝不内联解析）。
+ * @brief 轮询式章节装载（后台计数等非交互路径专用，worker 可用时不内联解析）。
  *
  * 就绪槽（worker 预取）命中 → 采纳为驻留章并返回 true；未命中 → 向 worker
  * 投递预取请求并返回 false，调用方下一轮再试。与 load_chapter 的区别：
- * 不做缓存读 / 内联解析兜底，保证调用线程不被百毫秒级解析阻塞。
+ * worker 创建失败时同步降级。坏章以空驻留结果完成，避免无限轮询；
+ * 再次 load_chapter 返回其错误状态。
  */
 bool espaperplay_reader_epub_poll_chapter(int idx);
 

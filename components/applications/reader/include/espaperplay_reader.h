@@ -29,7 +29,7 @@ extern "C" {
  * EPUB）、渲染（通过 GUI / EPD）与导航（来自输入事件）。
  *
  * 统一文档模型：任意格式归一为「章节 → 块序列」（见
- * espaperplay_reader_blocks.h）。TXT 是单章节文档（按行成块）；EPUB 章节表
+ * espaperplay_reader_blocks.h）。TXT 按有界分段驻留（按行成块）；EPUB 章节表
  * 来自 OPF spine，章节按需解析驻留（同一时刻仅一个章节在内存）。渲染层
  * （screen_reader）只面向该模型，与具体格式解耦。
  */
@@ -51,7 +51,7 @@ esp_err_t espaperplay_reader_init(void);
 /**
  * @brief 从存储打开一份文档并准备阅读。
  *
- * 支持 TXT（.txt）与 EPUB（.epub），大小写不敏感。TXT 自动处理 UTF-8 BOM
+ * 支持 TXT（.txt）与 EPUB（.epub），大小写不敏感。TXT 自动识别 UTF-8 / UTF-16 / UTF-32 BOM 与 GB18030
  * 与换行归一化（\r\n / \r -> \n）；EPUB 解析容器 / OPF 书目（不加载正文，
  * 章节按需驻留）。路径可为绝对路径（/sdcard/...）或相对路径（books/xxx，
  * 相对于挂载点）。
@@ -85,9 +85,9 @@ bool espaperplay_reader_is_open(void);
 const char *espaperplay_reader_get_path(void);
 
 /**
- * @brief 获取当前文档的归一化文本缓冲。
+ * @brief 获取当前驻留章节的归一化文本缓冲。
  *
- * @param[out] out_buf 文本缓冲（NUL 结尾，生命周期至 close）。
+ * @param[out] out_buf 文本缓冲（NUL 结尾，生命周期至下次加载章节或 close）。
  * @param[out] out_len 文本长度（不含 NUL）。
  *
  * @return 成功返回 ESP_OK，未打开返回 ESP_ERR_INVALID_STATE。
@@ -120,18 +120,18 @@ espaperplay_reader_fmt_t espaperplay_reader_get_fmt(void);
 /** 文档显示标题（TXT=文件名去后缀，EPUB=dc:title；未打开返回 NULL）。 */
 const char *espaperplay_reader_get_title(void);
 
-/** 章节数（TXT 恒为 1；未打开返回 0）。 */
+/** 章节数（TXT 为分段数；未打开返回 0）。 */
 int espaperplay_reader_chapter_count(void);
 
 /**
- * @brief 获取章节的目录标题（打开时已解析，无需装载章节；TXT 返回书名）。
+ * @brief 获取章节的目录标题（打开时已解析，无需装载章节；TXT 返回书名或分段编号）。
  *
  * @return 有非空标题返回 true；无 / 空标题返回 false（调用方显示“第 N 章”）。
  */
 bool espaperplay_reader_toc_title(int idx, char *buf, size_t len);
 
 /**
- * @brief 加载并驻留一个章节（TXT 仅支持 0）。
+ * @brief 加载并驻留一个章节或 TXT 分段。
  *
  * 同一时刻仅驻留一个章节；再次调用释放上一章。EPUB 章节正文按需解压解析。
  *
@@ -146,11 +146,11 @@ int espaperplay_reader_chapter_current(void);
 /**
  * @brief 轮询式章节装载（后台路径专用；EPUB 未就绪时投递预取并返回 false）。
  *
- * TXT 恒为 true（单章节常驻）。详见 espaperplay_reader_epub.h。
+ * TXT 同步读取至多约 64 KiB 的分段；成功返回 true。详见 espaperplay_reader_epub.h。
  */
 bool espaperplay_reader_poll_chapter(int idx);
 
-/** 驻留章节标题（EPUB=XHTML <title>，TXT=文档标题；生命周期至下次加载/close）。 */
+/** 驻留章节标题（EPUB=XHTML <title>，TXT=文档标题或分段编号；生命周期至下次加载/close）。 */
 const char *espaperplay_reader_chapter_title(void);
 
 /** 驻留章节文本 blob（NUL 结尾，块 off/len 指向该缓冲；未驻留返回 NULL）。 */
@@ -173,7 +173,7 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
 /* ---------------- 分页数据 SD 缓存（TXT / EPUB 通用） ---------------- */
 
 /**
- * @brief 读取章节分页缓存（TXT 章节号恒为 0；键含书指纹 + 版式指纹）。
+ * @brief 读取章节分页缓存（键含引擎版本、书指纹、章节号与版式指纹）。
  *
  * @return 页数（>0 命中）；0=无缓存；<0=读取失败或 -所需容量（扩表重读）。
  */

@@ -22,23 +22,18 @@
 #include "espaperplay_reader_pagen.h"
 #include "espaperplay_reader_txt.h"
 #include "espaperplay_storage.h"
+#include "parser/reader_text.h"
 
 static const char *TAG = "ESPaperPlay_READER";
 
-/** 单个 TXT 文件最大支持（PSRAM 缓冲，超限拒绝打开）。 */
-#define READER_TXT_MAX_BYTES (512 * 1024)
-
-/* TXT 文档状态（单章节：文本 blob + 行块表） */
-static char *s_buf = NULL;      /*!< 归一化文本缓冲（PSRAM，NUL 结尾） */
-static size_t s_len = 0;        /*!< 文本长度（不含 NUL） */
-static espaperplay_reader_block_t *s_txt_blocks = NULL; /*!< TXT 行块表 */
-static int s_txt_block_cnt = 0;
+static rp_text_t s_txt;
+static char s_txt_chapter_title[128];
 
 static espaperplay_reader_fmt_t s_fmt = ESPAPERPLAY_READER_FMT_NONE;
-static char s_path[256] = {0}; /*!< 当前文档绝对路径 */
+static char s_path[256] = {0};   /*!< 当前文档绝对路径 */
 static uint32_t s_txt_token = 0; /*!< TXT 书指纹（分页缓存键；EPUB 用 epub 模块的 token） */
 static char s_title[128] = {0};
-static bool s_open = false;    /*!< 是否已打开 */
+static bool s_open = false; /*!< 是否已打开 */
 
 esp_err_t espaperplay_reader_init(void) {
     ESP_LOGI(TAG, "Reader framework init");
@@ -47,16 +42,7 @@ esp_err_t espaperplay_reader_init(void) {
 }
 
 static void reader_close_internal(void) {
-    if (s_buf != NULL) {
-        heap_caps_free(s_buf);
-        s_buf = NULL;
-    }
-    if (s_txt_blocks != NULL) {
-        heap_caps_free(s_txt_blocks);
-        s_txt_blocks = NULL;
-    }
-    s_txt_block_cnt = 0;
-    s_len = 0;
+    rp_text_close(&s_txt);
     if (s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
         espaperplay_reader_epub_close();
     }
@@ -76,97 +62,23 @@ bool espaperplay_reader_is_open(void) { return s_open; }
 
 const char *espaperplay_reader_get_path(void) { return s_open ? s_path : NULL; }
 
-/** TXT 行块表：每非空行为一块（块内无 '\n'；空行为占位块分隔段落间距）。 */
-static esp_err_t reader_txt_build_blocks(void) {
-    /* 预估行数（按 '\n' 计数 + 1） */
-    size_t lines = 1;
-    for (size_t i = 0; i < s_len; i++) {
-        if (s_buf[i] == '\n') {
-            lines++;
-        }
-    }
-    if (lines > 65535 * 4) { /* 块表上限（防御病态文件） */
-        lines = 65535 * 4;
-    }
-    s_txt_blocks = heap_caps_malloc(lines * sizeof(espaperplay_reader_block_t),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_txt_blocks == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    size_t off = 0;
-    int n = 0;
-    while (off <= s_len && n < (int)lines) {
-        char *nl = memchr(&s_buf[off], '\n', s_len - off);
-        const size_t len = nl != NULL ? (size_t)(nl - &s_buf[off]) : s_len - off;
-        s_txt_blocks[n].off = (uint32_t)off;
-        s_txt_blocks[n].len = (uint32_t)len;
-        s_txt_blocks[n].flags = 0;
-        s_txt_blocks[n].image = -1;
-        n++;
-        if (nl == NULL) {
-            break;
-        }
-        off += len + 1;
-    }
-    s_txt_block_cnt = n;
-    return ESP_OK;
-}
-
-/** TXT 打开（读取 + 归一化 + 行块表）。 */
-static esp_err_t reader_open_txt(const char *abs_path, size_t file_size) {
-    FILE *f = fopen(abs_path, "rb");
-    if (f == NULL) {
-        ESP_LOGW(TAG, "fopen failed: %s", abs_path);
-        return ESP_ERR_NOT_FOUND;
-    }
-    char *buf = heap_caps_malloc(file_size + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buf == NULL) {
-        fclose(f);
-        return ESP_ERR_NO_MEM;
-    }
-    size_t read_n = 0;
-    if (file_size > 0) {
-        read_n = fread(buf, 1, file_size, f);
-        if (read_n != file_size) {
-            ESP_LOGW(TAG, "fread short: %u/%u", (unsigned)read_n, (unsigned)file_size);
-            /* 按实际读取长度继续 */
-        }
-    }
-    fclose(f);
-    buf[read_n] = '\0';
-
-    /* 归一化（BOM + 换行） */
-    size_t norm_len = read_n;
-    espaperplay_reader_txt_normalize(buf, &norm_len);
-
+/** TXT indexes raw offsets once; only the current bounded segment is decoded. */
+static esp_err_t reader_open_txt(const char *abs_path) {
     reader_close_internal();
-    s_buf = buf;
-    s_len = norm_len;
-    s_fmt = ESPAPERPLAY_READER_FMT_TXT;
-
-    const esp_err_t err = reader_txt_build_blocks();
-    if (err != ESP_OK) {
-        reader_close_internal();
+    esp_err_t err = rp_text_open(&s_txt, abs_path);
+    if (err != ESP_OK)
         return err;
-    }
-
-    /* 标题：文件名去后缀 */
+    s_fmt = ESPAPERPLAY_READER_FMT_TXT;
     const char *base = strrchr(abs_path, '/');
-    base = base != NULL ? base + 1 : abs_path;
+    base = base ? base + 1 : abs_path;
     strlcpy(s_title, base, sizeof(s_title));
     char *dot = strrchr(s_title, '.');
-    if (dot != NULL) {
-        *dot = '\0';
-    }
-
-    /* 书指纹（分页缓存键；文件变更自动失效） */
-    s_txt_token = espcache_file_token(abs_path);
-
+    if (dot)
+        *dot = 0;
+    s_txt_token = espcache_file_token(abs_path) ^ 0x54585402u;
     strlcpy(s_path, abs_path, sizeof(s_path));
     s_open = true;
-
-    ESP_LOGI(TAG, "opened txt %s (%u bytes -> %u normalized, %d lines)", abs_path,
-             (unsigned)file_size, (unsigned)s_len, s_txt_block_cnt);
+    ESP_LOGI(TAG, "opened TXT: %d segments, encoding %d", s_txt.count, s_txt.encoding);
     return ESP_OK;
 }
 
@@ -186,7 +98,8 @@ int espaperplay_reader_chapter_count(void) {
     if (!s_open) {
         return 0;
     }
-    return s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_chapter_count() : 1;
+    return s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_chapter_count()
+                                                : s_txt.count;
 }
 
 bool espaperplay_reader_toc_title(int idx, char *buf, size_t len) {
@@ -196,10 +109,13 @@ bool espaperplay_reader_toc_title(int idx, char *buf, size_t len) {
     if (s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
         return espaperplay_reader_epub_toc_title(idx, buf, len);
     }
-    if (idx != 0) {
+    if (idx < 0 || idx >= s_txt.count) {
         return false;
     }
-    strlcpy(buf, s_title, len); /* TXT 单章：目录项即书名 */
+    if (s_txt.count == 1)
+        strlcpy(buf, s_title, len);
+    else
+        snprintf(buf, len, "第 %d / %d 节", idx + 1, s_txt.count);
     return buf[0] != '\0';
 }
 
@@ -208,7 +124,7 @@ esp_err_t espaperplay_reader_load_chapter(int idx) {
         return ESP_ERR_INVALID_STATE;
     }
     if (s_fmt == ESPAPERPLAY_READER_FMT_TXT) {
-        return idx == 0 ? ESP_OK : ESP_ERR_INVALID_ARG;
+        return rp_text_load(&s_txt, idx);
     }
     return espaperplay_reader_epub_load_chapter(idx);
 }
@@ -217,7 +133,8 @@ int espaperplay_reader_chapter_current(void) {
     if (!s_open) {
         return -1;
     }
-    return s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_chapter_current() : 0;
+    return s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_chapter_current()
+                                                : s_txt.current;
 }
 
 bool espaperplay_reader_poll_chapter(int idx) {
@@ -227,7 +144,20 @@ bool espaperplay_reader_poll_chapter(int idx) {
     if (s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
         return espaperplay_reader_epub_poll_chapter(idx);
     }
-    return idx == 0;
+    if (idx < 0 || idx >= s_txt.count)
+        return false;
+    esp_err_t err = rp_text_load(&s_txt, idx);
+    if (err != ESP_OK) {
+        rp_free(s_txt.text);
+        rp_free(s_txt.blocks);
+        s_txt.text = NULL;
+        s_txt.blocks = NULL;
+        s_txt.text_len = 0;
+        s_txt.block_count = 0;
+        s_txt.current = idx;
+        s_txt.status = err;
+    }
+    return true;
 }
 
 const char *espaperplay_reader_chapter_title(void) {
@@ -237,7 +167,11 @@ const char *espaperplay_reader_chapter_title(void) {
     if (s_fmt == ESPAPERPLAY_READER_FMT_EPUB) {
         return espaperplay_reader_epub_chapter_title();
     }
-    return s_title;
+    if (s_txt.count == 1)
+        return s_title;
+    snprintf(s_txt_chapter_title, sizeof(s_txt_chapter_title), "第 %d / %d 节", s_txt.current + 1,
+             s_txt.count);
+    return s_txt_chapter_title;
 }
 
 const char *espaperplay_reader_chapter_text(size_t *out_len) {
@@ -248,9 +182,9 @@ const char *espaperplay_reader_chapter_text(size_t *out_len) {
         return espaperplay_reader_epub_chapter_text(out_len);
     }
     if (out_len != NULL) {
-        *out_len = s_len;
+        *out_len = s_txt.text_len;
     }
-    return s_buf;
+    return s_txt.text;
 }
 
 const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt) {
@@ -261,9 +195,9 @@ const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt) {
         return espaperplay_reader_epub_blocks(out_cnt);
     }
     if (out_cnt != NULL) {
-        *out_cnt = s_txt_block_cnt;
+        *out_cnt = s_txt.block_count;
     }
-    return s_txt_blocks;
+    return s_txt.blocks;
 }
 
 esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
@@ -277,8 +211,8 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
     return espaperplay_reader_epub_image(img_id, max_w, max_h, out_dsc);
 }
 
-int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
-                                  uint16_t *lines, int max_cnt) {
+int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks, uint16_t *lines,
+                                  int max_cnt) {
     if (!s_open) {
         return 0;
     }
@@ -312,14 +246,14 @@ esp_err_t espaperplay_reader_get_text(const char **out_buf, size_t *out_len) {
         }
         return ESP_OK;
     }
-    if (s_buf == NULL) {
+    if (s_txt.text == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     if (out_buf != NULL) {
-        *out_buf = s_buf;
+        *out_buf = s_txt.text;
     }
     if (out_len != NULL) {
-        *out_len = s_len;
+        *out_len = s_txt.text_len;
     }
     return ESP_OK;
 }
@@ -363,10 +297,6 @@ esp_err_t espaperplay_reader_open(const char *path) {
     if (S_ISDIR(st.st_mode)) {
         return ESP_ERR_NOT_SUPPORTED;
     }
-    if (is_txt && (size_t)st.st_size > READER_TXT_MAX_BYTES) {
-        ESP_LOGW(TAG, "file too large: %ld bytes", (long)st.st_size);
-        return ESP_ERR_NO_MEM;
-    }
 
     if (is_epub) {
         reader_close_internal(); /* 释放上一份文档（含 EPUB 模块状态） */
@@ -388,5 +318,5 @@ esp_err_t espaperplay_reader_open(const char *path) {
         return ESP_OK;
     }
 
-    return reader_open_txt(abs_path, (size_t)st.st_size);
+    return reader_open_txt(abs_path);
 }

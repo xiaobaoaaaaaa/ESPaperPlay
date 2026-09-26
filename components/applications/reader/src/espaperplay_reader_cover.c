@@ -14,14 +14,14 @@
 #include "esp_log.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h" /* xTaskCreateWithCaps */
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "freertos/idf_additions.h" /* xTaskCreateWithCaps */
 
 #include "espaperplay_config.h"
+#include "espaperplay_fs.h"
 #include "espaperplay_storage.h"
 #include "espcache.h"
-#include "espaperplay_fs.h"
 
 #include "espaperplay_reader_epub.h"
 
@@ -29,13 +29,13 @@ static const char *TAG = "ESPaperPlay_READER_COVER";
 
 #define COVER_CACHE_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader/covers"
 #define COVER_CACHE_MAGIC 0x56435045u /* "EPCV" */
-#define COVER_CACHE_VER 1u
+#define COVER_CACHE_VER 2u            /* 新图片解码器：旧缩略图/负缓存失效 */
 
 #define COVER_QUEUE_LEN 16 /* 单页网格容量上限 */
 #define COVER_RESULT_LEN 4
 
-#define COVER_WORKER_STACK 8192 /* 内部 RAM；SD 写期间 flash 缓存禁用，栈不能放 PSRAM */
-#define COVER_WORKER_PRIO 3     /* 低于 LVGL 与章节预取（解码秒级，尽量不抢 CPU） */
+#define COVER_WORKER_STACK 16384 /* OPF / URI / SD 调用链需栈余量；SDMMC 不禁用 Flash cache */
+#define COVER_WORKER_PRIO 3      /* 低于 LVGL 与章节预取（解码秒级，尽量不抢 CPU） */
 
 typedef struct {
     char path[ESPAPERPLAY_READER_COVER_PATH_MAX];
@@ -43,8 +43,8 @@ typedef struct {
     int16_t max_h;
 } cover_job_t;
 
-static SemaphoreHandle_t s_mutex;      /* 队列 / 结果 / 代际互斥 */
-static SemaphoreHandle_t s_job_sem;    /* 计数 = 待处理任务数 */
+static SemaphoreHandle_t s_mutex;   /* 队列 / 结果 / 代际互斥 */
+static SemaphoreHandle_t s_job_sem; /* 计数 = 待处理任务数 */
 static TaskHandle_t s_worker = NULL;
 
 static cover_job_t s_jobs[COVER_QUEUE_LEN];
@@ -61,8 +61,7 @@ static uint32_t s_gen = 0; /* cancel 代际：作废在途任务 */
 
 /** 封面缓存路径（文件指纹 token，与章节/分页缓存同方案）。 */
 static void cover_cache_path(char *buf, size_t n, const char *path) {
-    snprintf(buf, n, "%s/%08x.cov", COVER_CACHE_DIR,
-             (unsigned)espcache_file_token(path));
+    snprintf(buf, n, "%s/%08x.cov", COVER_CACHE_DIR, (unsigned)espcache_file_token(path));
 }
 
 /** 读缓存上下文：结果出参 + 源指纹（头内必须一致）。 */
@@ -118,7 +117,7 @@ static bool cover_cache_load(const char *cache_path, uint32_t src_size, uint32_t
 
 /** 写缓存上下文。 */
 typedef struct {
-    uint32_t hdr[6];    /* magic, ver, w, h, src_size, src_mtime */
+    uint32_t hdr[6];     /* magic, ver, w, h, src_size, src_mtime */
     const uint8_t *data; /*!< NULL=负缓存（仅写头部） */
 } cover_write_ctx_t;
 
@@ -242,18 +241,20 @@ static void cover_worker_task(void *arg) {
         xSemaphoreGive(s_mutex);
         if (have) {
             cover_process(&job);
+            ESP_LOGD(TAG, "cover worker stack watermark=%u",
+                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
         }
     }
 }
 
-/** 确保 worker 已创建（内部 RAM 栈，创建失败则本轮请求不服务）。 */
+/** 封面和章节预取一样使用 PSRAM 栈；创建失败时显示占位封面。 */
 static void cover_worker_ensure(void) {
     if (s_worker != NULL) {
         return;
     }
     if (xTaskCreateWithCaps(cover_worker_task, "rdr_cover", COVER_WORKER_STACK, NULL,
                             COVER_WORKER_PRIO, &s_worker,
-                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "cover worker create failed");
     }
 }
