@@ -111,3 +111,6 @@ tools/icon_src/
 # QWeather icon package (downloaded, regenerable)
 QWeather-Icons-1.8.0/
 tools/qweather_icons_src/
+
+# Local PCB design workspace (hardware project is maintained separately)
+/.easyeda/
