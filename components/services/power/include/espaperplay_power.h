@@ -20,9 +20,30 @@ extern "C" {
  * @brief 电源管理抽象层。
  *
  * 负责设备的低功耗策略：可配置的唤醒源、自动浅睡眠管理，以及进入 ESP32
- * 深度睡眠的切换。TOUCH / EPD / SD 三个部件的供电为常供电，板上无 MOS
- * 电源轨、固件不做独立断电（历史电源轨配置已移除）。
+ * 深度睡眠的切换；同时提供电池 / 充电状态读取（v2.0 板：BAT_SENSE 分压
+ * ADC + TP4056 CHRG#/STDBY# 回读）。v2.0 板外设电源轨 3V3_PER（EPD /
+ * 触摸 / SD）由 POWER_EN 控制：board 初始化时开轨，深睡"关机"时断轨
+ * （浅睡眠期间保持常通以维持触摸唤醒）。
  */
+
+/**
+ * @brief 电池供电 / 充电状态。
+ */
+typedef enum {
+    ESPAPERPLAY_BATTERY_DISCHARGING = 0, /*!< 电池放电（无 USB 或未在充电） */
+    ESPAPERPLAY_BATTERY_CHARGING,        /*!< 充电中（TP4056 CHRG# 拉低） */
+    ESPAPERPLAY_BATTERY_FULL,            /*!< 充电完成（TP4056 STDBY# 拉低） */
+} espaperplay_battery_state_t;
+
+/**
+ * @brief 电池状态快照。
+ */
+typedef struct {
+    uint32_t voltage_mv;                 /*!< 电池端电压（毫伏，分压反算） */
+    uint8_t percent;                     /*!< 电量百分比（0-100，电压查表估算） */
+    espaperplay_battery_state_t state;   /*!< 供电 / 充电状态 */
+    bool usb_present;                    /*!< USB 电源在位（充电中或充满） */
+} espaperplay_battery_info_t;
 
 /**
  * @brief 深度睡眠的唤醒源配置。
@@ -59,9 +80,25 @@ typedef struct {
 /**
  * @brief 初始化电源管理。
  *
+ * 建立电池电压 ADC 通道（BAT_SENSE 分压）与充电状态回读引脚
+ * （CHRG#/STDBY#），并读取一次电池状态记录到日志。
+ *
  * @return 成功返回 ESP_OK，否则返回错误码。
  */
 esp_err_t espaperplay_power_init(void);
+
+/**
+ * @brief 读取电池状态（电压 / 电量 / 充电状态 / USB 在位）。
+ *
+ * 电压经 16 次采样均值 + 出厂校准曲线换算；USB 在位由 TP4056 的
+ * CHRG#/STDBY# 任一拉低推断（板上无独立 VBUS 检测脚）。可在任意任务
+ * 上下文调用，单次耗时约数毫秒。
+ *
+ * @param[out] info 接收状态快照。
+ *
+ * @return 成功返回 ESP_OK；参数非法或电源服务未初始化返回相应错误码。
+ */
+esp_err_t espaperplay_power_get_battery_info(espaperplay_battery_info_t *info);
 
 /**
  * @brief 配置下一次睡眠使用的唤醒源。
@@ -73,12 +110,16 @@ esp_err_t espaperplay_power_init(void);
 esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *config);
 
 /**
- * @brief 进入深度睡眠。
+ * @brief 进入深度睡眠（v2.0 板"关机"）。
  *
- * 使用已配置的唤醒源进入 ESP32 深度睡眠。
- * 成功进入后本函数不会返回。
+ * 时序：音频子系统下电 -> EPD 进自身深睡 -> 断开 WiFi -> 断外设电源轨
+ * 3V3_PER（EPD / 触摸 / SD 随轨断电；POWER_EN 引脚深睡中悬空，由板上
+ * R20 上拉保持关断）-> 以 BOOT 键（GPIO0 低电平）为唤醒源进入深度睡眠。
  *
- * @return 成功返回 ESP_OK，否则返回错误码。
+ * 唤醒即整机重启（深睡恢复等效复位）：按 BOOT 键或按 EN 键（SW1 硬复位）
+ * 重新上电启动，board 初始化时重新开轨。成功进入后本函数不会返回。
+ *
+ * @return 成功返回 ESP_OK（不返回），否则返回错误码。
  */
 esp_err_t espaperplay_power_enter_sleep(void);
 

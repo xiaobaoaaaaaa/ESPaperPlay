@@ -93,6 +93,20 @@ esp_err_t webserver_handle_status_get(httpd_req_t *req) {
         cJSON_AddStringToObject(wifi, "ip", wifi_status.ip);
     }
 
+    /* 电池 / 充电状态（v2.0 板：BAT_SENSE 分压 ADC + TP4056 回读）。 */
+    espaperplay_battery_info_t battery;
+    if (espaperplay_power_get_battery_info(&battery) == ESP_OK) {
+        cJSON *bat = cJSON_AddObjectToObject(root, "battery");
+        cJSON_AddNumberToObject(bat, "voltage_mv", (double)battery.voltage_mv);
+        cJSON_AddNumberToObject(bat, "percent", (double)battery.percent);
+        cJSON_AddBoolToObject(bat, "usb_present", battery.usb_present);
+        cJSON_AddStringToObject(
+            bat, "state",
+            battery.state == ESPAPERPLAY_BATTERY_CHARGING
+                ? "charging"
+                : (battery.state == ESPAPERPLAY_BATTERY_FULL ? "full" : "discharging"));
+    }
+
     webserver_send_json(req, "200 OK", root);
     cJSON_Delete(root);
     return ESP_OK;

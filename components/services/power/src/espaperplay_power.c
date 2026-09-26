@@ -12,11 +12,15 @@
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
-#include "driver/uart.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
 
+#include "espaperplay_audio.h"
+#include "espaperplay_board.h"
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
 #include "espaperplay_diaglog.h"
@@ -86,6 +90,28 @@ static power_sleep_refresh_slot_t s_sleep_refresh[ESPAPERPLAY_POWER_MAX_SLEEP_RE
 static size_t s_sleep_refresh_count = 0;
 static uint64_t s_last_network_wake_ms = 0;
 static portMUX_TYPE s_sleep_refresh_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* ---- 电池监测（v2.0 板：BAT_SENSE 分压 ADC + TP4056 状态回读） ---- */
+
+/** BAT_SENSE 对应的 ADC 通道（GPIO1 = ADC1_CH0）。 */
+#define ESPAPERPLAY_POWER_BAT_ADC_UNIT ADC_UNIT_1
+#define ESPAPERPLAY_POWER_BAT_ADC_CHANNEL ADC_CHANNEL_0
+
+/** 电池电压 ADC 采样次数（高阻分压 + 100nF 保持，均值去抖）。 */
+#define ESPAPERPLAY_POWER_BAT_ADC_SAMPLES 16
+
+/** 电池电压->电量百分比的查表锚点（毫伏，升序；锂电开路电压近似曲线）。 */
+static const uint16_t power_bat_curve_mv[] = {
+    3300, 3450, 3550, 3650, 3700, 3750, 3800, 3850, 3900, 4000, 4100, 4200,
+};
+/** 与上方电压锚点一一对应的电量百分比。 */
+static const uint8_t power_bat_curve_pct[] = {
+    0, 5, 10, 20, 30, 40, 50, 60, 70, 85, 95, 100,
+};
+
+static adc_oneshot_unit_handle_t s_bat_adc_unit;
+static adc_cali_handle_t s_bat_adc_cali;
+static bool s_battery_ready;
 
 static uint32_t power_effective_refresh_interval(uint32_t requested_ms) {
     return requested_ms < ESPAPERPLAY_POWER_MIN_NETWORK_WAKE_INTERVAL_MS
@@ -246,8 +272,135 @@ static bool power_ext_activity_fresh(void) {
     return now_ms < s_ext_activity_ms + ESPAPERPLAY_POWER_EXT_ACTIVITY_WINDOW_MS;
 }
 
+/** 电压（毫伏）查表插值为电量百分比。 */
+static uint8_t power_battery_voltage_to_percent(uint32_t voltage_mv) {
+    const size_t points = sizeof(power_bat_curve_mv) / sizeof(power_bat_curve_mv[0]);
+    if (voltage_mv <= power_bat_curve_mv[0]) {
+        return 0;
+    }
+    for (size_t i = 1; i < points; i++) {
+        if (voltage_mv <= power_bat_curve_mv[i]) {
+            const uint32_t lo_mv = power_bat_curve_mv[i - 1];
+            const uint32_t hi_mv = power_bat_curve_mv[i];
+            const uint32_t lo_pct = power_bat_curve_pct[i - 1];
+            const uint32_t hi_pct = power_bat_curve_pct[i];
+            return (uint8_t)(lo_pct + (hi_pct - lo_pct) * (voltage_mv - lo_mv) / (hi_mv - lo_mv));
+        }
+    }
+    return 100;
+}
+
+/**
+ * 读电池端电压（毫伏）：多次采样取均值后按分压比反算。
+ * ADC 未就绪时返回 0（调用方以 0 电压降级呈现）。
+ */
+static uint32_t power_battery_read_voltage_mv(void) {
+    if (!s_battery_ready) {
+        return 0;
+    }
+
+    int raw = 0;
+    uint32_t raw_sum = 0;
+    uint32_t valid = 0;
+    for (int i = 0; i < ESPAPERPLAY_POWER_BAT_ADC_SAMPLES; i++) {
+        if (adc_oneshot_read(s_bat_adc_unit, ESPAPERPLAY_POWER_BAT_ADC_CHANNEL, &raw) ==
+            ESP_OK) {
+            raw_sum += (uint32_t)raw;
+            valid++;
+        }
+    }
+    if (valid == 0) {
+        return 0;
+    }
+
+    int voltage_mv = 0;
+    if (s_bat_adc_cali == NULL ||
+        adc_cali_raw_to_voltage(s_bat_adc_cali, (int)(raw_sum / valid), &voltage_mv) != ESP_OK) {
+        /* 校准不可用时的粗略回退：12-bit 满量程按标称 3.3V 折算。 */
+        voltage_mv = (int)((raw_sum / valid) * 3300U / 4095U);
+    }
+
+    /* 分压反算：V_bat = V_pin × (R_upper + R_lower) / R_lower。分压比
+     * 由 config 宏给出（10M/3.3M ≈ 0.248），乘法先做避免精度损失。 */
+    return (uint32_t)((uint32_t)voltage_mv *
+                      (ESPAPERPLAY_BAT_DIVIDER_R_UPPER_KOHM + ESPAPERPLAY_BAT_DIVIDER_R_LOWER_KOHM) /
+                      ESPAPERPLAY_BAT_DIVIDER_R_LOWER_KOHM);
+}
+
+esp_err_t espaperplay_power_get_battery_info(espaperplay_battery_info_t *info) {
+    if (info == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_battery_ready) return ESP_ERR_INVALID_STATE;
+
+    /* 充电状态（低有效、开漏 + 外部上拉）：无 USB 时 TP4056 无 VCC，
+     * 两脚均被上拉为高 => 放电态；任一拉低即 USB 在位。 */
+    const bool charging = gpio_get_level(ESPAPERPLAY_PIN_CHRG_STAT) == 0;
+    const bool full = gpio_get_level(ESPAPERPLAY_PIN_STANDBY_STAT) == 0;
+
+    info->voltage_mv = power_battery_read_voltage_mv();
+    info->percent = power_battery_voltage_to_percent(info->voltage_mv);
+    info->state = charging ? ESPAPERPLAY_BATTERY_CHARGING
+                           : (full ? ESPAPERPLAY_BATTERY_FULL
+                                   : ESPAPERPLAY_BATTERY_DISCHARGING);
+    info->usb_present = charging || full;
+    return ESP_OK;
+}
+
 esp_err_t espaperplay_power_init(void) {
-    ESP_LOGI(TAG, "Power management init");
+    if (s_battery_ready) return ESP_OK;
+    /* 充电状态回读：输入、无内部上下拉（板上 100K 上拉至常供 3V3）。 */
+    gpio_config_t stat_cfg = {
+        .pin_bit_mask = BIT64(ESPAPERPLAY_PIN_CHRG_STAT) | BIT64(ESPAPERPLAY_PIN_STANDBY_STAT),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    esp_err_t ret = gpio_config(&stat_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "charge status GPIO config failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* 电池电压 ADC：BAT_SENSE（ADC1_CH0），分压后满量程约 1.05V，
+     * DB_12 衰减足够且留有裕量。校准曲线创建失败时读数走粗略回退。 */
+    const adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id = ESPAPERPLAY_POWER_BAT_ADC_UNIT,
+    };
+    ret = adc_oneshot_new_unit(&unit_cfg, &s_bat_adc_unit);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "battery ADC unit init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    const adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    ret = adc_oneshot_config_channel(s_bat_adc_unit, ESPAPERPLAY_POWER_BAT_ADC_CHANNEL, &chan_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "battery ADC channel config failed: %s", esp_err_to_name(ret));
+        adc_oneshot_del_unit(s_bat_adc_unit);
+        s_bat_adc_unit = NULL;
+        return ret;
+    }
+    const adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id = ESPAPERPLAY_POWER_BAT_ADC_UNIT,
+        .chan = ESPAPERPLAY_POWER_BAT_ADC_CHANNEL,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    (void)adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_bat_adc_cali);
+    s_battery_ready = true;
+
+    espaperplay_battery_info_t bat;
+    if (espaperplay_power_get_battery_info(&bat) == ESP_OK) {
+        ESP_LOGI(TAG, "Power management init: battery %u mV (%u%%), %s%s", (unsigned)bat.voltage_mv,
+                 (unsigned)bat.percent, bat.usb_present ? "usb present, " : "",
+                 bat.state == ESPAPERPLAY_BATTERY_CHARGING
+                     ? "charging"
+                     : (bat.state == ESPAPERPLAY_BATTERY_FULL ? "full" : "discharging"));
+    }
     return ESP_OK;
 }
 
@@ -258,13 +411,15 @@ esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* 唤醒源固定为设备输入引脚 + 调试串口：
+    /* 唤醒源固定为设备输入引脚：
      *   - 触摸 INT（GPIO3，低电平有效）：触摸唤醒；
      *   - BOOT 按键（GPIO0，低电平有效）：按键唤醒；
-     *   - UART0：开发期用监视器发送字符唤醒。
+     *   - VOL+ / VOL- 按键（GPIO2 / GPIO5，低电平有效）：任意按键唤醒
+     *     （v2.0 板 UART0 引脚已让位给音量键 / 功放控制，日志走 USB
+     *     Serial/JTAG，串口唤醒随之取消）。
      * 睡眠期间 GPIO 电平保持，唤醒后外设状态完整恢复。
      *
-     * 注意：两个输入引脚已由各自驱动（touch_init / input_init）配置为
+     * 注意：输入引脚已由各自驱动（touch_init / input_init）配置为
      * 输入（含上拉），此处仅使能唤醒，不再调用 gpio_set_direction，
      * 以免重置触摸 INT 的中断配置（ISR 已在 touch_init 中安装）。 */
 
@@ -276,12 +431,19 @@ esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *
         return ret;
     }
 
-    /* BOOT 按键引脚：低电平唤醒（空闲为高，内部上拉）。 */
-    ret = gpio_wakeup_enable((gpio_num_t)ESPAPERPLAY_PIN_KEY_BOOT, GPIO_INTR_LOW_LEVEL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "BOOT key (GPIO%d) wakeup enable failed: %s", ESPAPERPLAY_PIN_KEY_BOOT,
-                 esp_err_to_name(ret));
-        return ret;
+    /* 按键引脚：低电平唤醒（BOOT 内部上拉；VOL± 外部 10K 上拉）。 */
+    const int wakeup_key_gpios[] = {
+        ESPAPERPLAY_PIN_KEY_BOOT,
+        ESPAPERPLAY_PIN_KEY_VOL_UP,
+        ESPAPERPLAY_PIN_KEY_VOL_DOWN,
+    };
+    for (size_t i = 0; i < sizeof(wakeup_key_gpios) / sizeof(wakeup_key_gpios[0]); i++) {
+        ret = gpio_wakeup_enable((gpio_num_t)wakeup_key_gpios[i], GPIO_INTR_LOW_LEVEL);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "key (GPIO%d) wakeup enable failed: %s", wakeup_key_gpios[i],
+                     esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     /* 统一使能 GPIO 唤醒（须在全部 gpio_wakeup_enable 之后调用一次）。 */
@@ -289,13 +451,6 @@ esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "gpio wakeup enable failed: %s", esp_err_to_name(ret));
         return ret;
-    }
-
-    /* 调试串口唤醒（开发期便于用监视器唤醒；失败不致命）。 */
-    ret = esp_sleep_enable_uart_wakeup(UART_NUM_0);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "UART wakeup enable failed: %s (debug wakeup disabled)",
-                 esp_err_to_name(ret));
     }
 
     /* 可选：定时器周期唤醒（用于睡眠期间周期刷新，如主界面更新时钟）。
@@ -308,8 +463,9 @@ esp_err_t espaperplay_power_configure_wakeup(const espaperplay_wakeup_config_t *
     }
 
     s_wakeup_configured = true;
-    ESP_LOGI(TAG, "wakeup configured: touch INT(GPIO%d) + BOOT(GPIO%d) + UART0",
-             ESPAPERPLAY_PIN_TOUCH_INT, ESPAPERPLAY_PIN_KEY_BOOT);
+    ESP_LOGI(TAG, "wakeup configured: touch INT(GPIO%d) + BOOT(GPIO%d) + VOL+(GPIO%d) + VOL-(GPIO%d)",
+             ESPAPERPLAY_PIN_TOUCH_INT, ESPAPERPLAY_PIN_KEY_BOOT, ESPAPERPLAY_PIN_KEY_VOL_UP,
+             ESPAPERPLAY_PIN_KEY_VOL_DOWN);
     return ESP_OK;
 }
 
@@ -317,6 +473,13 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
     if (!s_wakeup_configured) {
         ESP_LOGE(TAG, "wakeup not configured, call espaperplay_power_configure_wakeup() first");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    /* 音频子系统下电（未建流为无操作）：浅睡眠会停 I2S 时钟/DMA，
+     * 在途流必然中断；主动收尾同时确保 AUDIO_3V3 轨不带着功放过夜。 */
+    if (espaperplay_audio_is_active()) {
+        ESP_LOGW(TAG, "audio stream still active, tearing down before sleep");
+        (void)espaperplay_audio_stop();
     }
 
     /* 冻结 GUI 刷新管线：从现在到 esp_light_sleep_start 之间不允许再有任何
@@ -382,7 +545,7 @@ esp_err_t espaperplay_power_enter_light_sleep(void) {
             ESP_LOGW(TAG, "timer wakeup enable failed: %s", esp_err_to_name(tw));
         }
     }
-    ESP_LOGI(TAG, "entering light sleep (wakeup: touch/key/uart%s, next=%u ms)",
+    ESP_LOGI(TAG, "entering light sleep (wakeup: touch/key%s, next=%u ms)",
              timer_ms > 0 ? "/timer" : "", (unsigned)timer_ms);
 
     /* 睡眠前置守卫：触摸 INT 仍处于有效电平（低）时进入睡眠会被低电平
@@ -515,6 +678,11 @@ static void power_auto_sleep_task(void *arg) {
             /* 外部活动（Web 客户端心跳）保持唤醒：窗口内跳过本轮睡眠判定
              * （WiFi 保持连接，心跳可持续到达）。 */
             if (power_ext_activity_fresh()) {
+                continue;
+            }
+            /* 音频流活跃（播放 / 录音进行中）同样保持唤醒：浅睡眠会打断
+             * I2S 流；会话结束（调用方 stop）后本判定自然放行入睡。 */
+            if (espaperplay_audio_is_active()) {
                 continue;
             }
             ESP_LOGI(TAG, "idle %llu ms >= threshold %u ms -> light sleep", idle_ms,
@@ -680,6 +848,27 @@ esp_err_t espaperplay_power_start_auto_sleep(void) {
 }
 
 esp_err_t espaperplay_power_enter_sleep(void) {
-    ESP_LOGW(TAG, "power_enter_sleep (deep sleep) not implemented yet");
-    return ESP_ERR_NOT_SUPPORTED;
+    /* 先验证唤醒配置；失败时尚未改变外设供电或网络状态。 */
+    esp_err_t ret = esp_sleep_enable_ext0_wakeup(ESPAPERPLAY_PIN_KEY_BOOT, 0);
+    if (ret != ESP_OK) return ret;
+    ESP_LOGW(TAG, "entering deep sleep (power-off): peripherals rail down");
+    (void)espaperplay_audio_stop();
+
+    /* 与浅睡眠一样冻结刷新管线，防止 EPD 睡眠后又排入新帧。 */
+    espaperplay_gui_set_frozen(true);
+    ret = espaperplay_epd_sleep();
+    if (ret != ESP_OK) {
+        espaperplay_gui_set_frozen(false);
+        (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT0);
+        return ret;
+    }
+    espaperplay_wifi_suspend_for_sleep();
+    espaperplay_diaglog_write("PWR", "deep sleep (power-off): rail off, wake=BOOT GPIO%d",
+                              ESPAPERPLAY_PIN_KEY_BOOT);
+    /* 关机仅允许 BOOT 唤醒，不沿用浅睡眠的分钟定时器及触摸 GPIO 唤醒。 */
+    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    espaperplay_board_peripheral_rail_set(false);
+    esp_deep_sleep_start();
+    return ESP_OK;
 }
