@@ -8,9 +8,12 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
+#include "espaperplay_audio.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
+#include "espaperplay_system.h"
 #include "espaperplay_ui.h"
 
 #include "lvgl.h"
@@ -19,6 +22,23 @@ static const char *TAG = "ESPaperPlay_UI";
 
 /** 按键泵周期（毫秒）：LVGL 线程内 lv_timer 排空按键队列的间隔。 */
 #define UI_KEY_PUMP_PERIOD_MS 20
+
+/** VOL+/- 键单次调节的音量步进（百分比）。 */
+#define UI_VOLUME_STEP_PERCENT 10
+
+static TaskHandle_t s_volume_task;
+
+/* LVGL 栈位于 PSRAM，NVS 写入必须交给内部 RAM 栈任务。通知合并连续按键，
+ * 音频增益立即变化，后台保存最新值，避免阻塞输入泵。 */
+static void ui_volume_persist_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        const uint8_t volume = (uint8_t)espaperplay_audio_get_volume_percent();
+        const esp_err_t err = espaperplay_system_set_speaker_volume(volume);
+        if (err != ESP_OK) ESP_LOGW(TAG, "volume persist failed: %s", esp_err_to_name(err));
+    }
+}
 
 #if ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST
 #define ESPAPERPLAY_UI_SELFTEST_TASK_STACK_SIZE 3072
@@ -42,6 +62,39 @@ static const char *TAG = "ESPaperPlay_UI";
  * espaperplay_ui_page_*_lv()，无需 espaperplay_gui_lv_call 往返。
  */
 
+/**
+ * VOL+ / VOL- 键的全局音量处理（LVGL 线程内调用）。
+ *
+ * 单击与长按保持（HOLD 已在 input 层节流到 ~2 次/秒）均调节一步，
+ * 持久化到系统配置（NVS）并立即作用于音频驱动的软件增益。音量为全局
+ * 状态，不区分页面；此处处理后不再把音量键转发给页面 on_key（页面
+ * 现有按键逻辑全部针对 BOOT 键，转发只会造成语义混淆）。
+ */
+static void ui_volume_key_handle(const espaperplay_input_event_t *event) {
+    if (event->key_action != ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK &&
+        event->key_action != ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_HOLD) {
+        return;
+    }
+
+    const int current = espaperplay_audio_get_volume_percent();
+    int target = current + (event->key_id == ESPAPERPLAY_INPUT_KEY_ID_VOL_UP
+                                ? UI_VOLUME_STEP_PERCENT
+                                : -UI_VOLUME_STEP_PERCENT);
+    if (target < ESPAPERPLAY_AUDIO_VOLUME_MIN) {
+        target = ESPAPERPLAY_AUDIO_VOLUME_MIN;
+    }
+    if (target > ESPAPERPLAY_AUDIO_VOLUME_MAX) {
+        target = ESPAPERPLAY_AUDIO_VOLUME_MAX;
+    }
+    if (target == current) {
+        return; /* 已到边界：不写 NVS 不刷日志 */
+    }
+
+    (void)espaperplay_audio_set_volume_percent(target);
+    xTaskNotifyGive(s_volume_task);
+    ESP_LOGI(TAG, "speaker volume %d%% -> %d%%", current, target);
+}
+
 /** 按键泵（LVGL 线程内周期执行）：排空按键队列，逐条转发页面 on_key。 */
 static void ui_key_pump_timer_cb(lv_timer_t *timer) {
     (void)timer;
@@ -49,6 +102,13 @@ static void ui_key_pump_timer_cb(lv_timer_t *timer) {
     while (espaperplay_input_try_get_key(&event) == ESP_OK) {
         ESP_LOGI(TAG, "key event: id=%u action=%s press=%u ms", event.key_id,
                  espaperplay_input_key_action_str(event.key_action), event.key_press_time_ms);
+
+        /* 音量键：全局处理，不进入页面分发。 */
+        if (event.key_id == ESPAPERPLAY_INPUT_KEY_ID_VOL_UP ||
+            event.key_id == ESPAPERPLAY_INPUT_KEY_ID_VOL_DOWN) {
+            ui_volume_key_handle(&event);
+            continue;
+        }
         espaperplay_ui_page_handle_key_lv(&event);
     }
 }
@@ -154,6 +214,11 @@ static void ui_key_selftest_task(void *arg) {
 #endif /* ESPAPERPLAY_UI_ENABLE_KEY_SELFTEST */
 
 esp_err_t espaperplay_ui_input_start(void) {
+    if (s_volume_task == NULL &&
+        xTaskCreateWithCaps(ui_volume_persist_task, "ui_volume", 4096, NULL, 4,
+                            &s_volume_task, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+        return ESP_ERR_NO_MEM;
+    }
     /* 按键泵定时器必须在 LVGL 线程内创建（lv_timer 非线程安全）。
      * 超时放宽至 3000ms：首帧渲染（FreeType 栅格化）可能耗时较长，
      * 避免 LVGL 任务忙于绘制时投递超时。 */

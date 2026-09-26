@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 
 #include "espaperplay_auth.h"
+#include "espaperplay_audio.h"
 #include "espaperplay_board.h"
 #include "espaperplay_clock.h"
 #include "espaperplay_config.h"
@@ -178,6 +179,13 @@ void app_main(void) {
 
     /* 板级 GPIO / SPI 总线（EPD 与触摸初始化的前置）。 */
     ESP_ERROR_CHECK(espaperplay_board_init());
+
+    /* 音频子系统：仅落 GPIO 静态电平（音频轨关断、功放静音），建立流 /
+     * 上电由使用方按需调用 espaperplay_audio_start()；音量取系统配置
+     * （VOL+/- 键调节、NVS 持久化）。 */
+    ESP_ERROR_CHECK(espaperplay_audio_init());
+    (void)espaperplay_audio_set_volume_percent(
+        espaperplay_system_get_config()->speaker_volume);
 
     s_boot_events = xEventGroupCreate();
     if (s_boot_events == NULL) {

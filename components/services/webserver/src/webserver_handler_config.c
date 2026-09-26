@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 
+#include "espaperplay_audio.h"
 #include "espaperplay_diaglog.h"
 #include "espaperplay_epd.h"
 #include "espaperplay_gui.h"
@@ -130,6 +131,8 @@ esp_err_t webserver_handle_config_get(httpd_req_t *req) {
     cJSON_AddBoolToObject(root, "reader_img_gray4", cfg->reader_img_gray4);
     /* SD 卡日志捕获最低等级（error / warning / info）。 */
     cJSON_AddStringToObject(root, "sd_log_level", sd_log_level_str(cfg->sd_log_level));
+    /* 扬声器音量百分比（0-100，VOL+/- 键同步调节）。 */
+    cJSON_AddNumberToObject(root, "speaker_volume", (double)cfg->speaker_volume);
     /* 和风天气：API Key 不回传明文，仅报告是否已配置；位置与 API Host 非机密，原样返回。 */
     cJSON_AddBoolToObject(root, "weather_api_key_set", cfg->weather_api_key[0] != '\0');
     cJSON_AddStringToObject(root, "weather_location", cfg->weather_location);
@@ -189,6 +192,9 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
     char sd_log_level_s[12] = {0}; /* SD 卡日志捕获最低等级（error / warning / info） */
     const bool has_sd_log_level =
         webserver_form_get_field(body, "sd_log_level", sd_log_level_s, sizeof(sd_log_level_s));
+    char speaker_volume_s[8] = {0}; /* 扬声器音量百分比（0-100） */
+    const bool has_speaker_volume =
+        webserver_form_get_field(body, "speaker_volume", speaker_volume_s, sizeof(speaker_volume_s));
     const bool clear_sta_password = webserver_form_get_flag(body, "clear_sta_password");
     const bool clear_ap_password = webserver_form_get_flag(body, "clear_ap_password");
     /* 和风天气字段（API Key 留空且未勾选清除 = 保持不变；位置留空 = 自动定位；
@@ -375,6 +381,20 @@ esp_err_t webserver_handle_config_post(httpd_req_t *req) {
         err = espaperplay_system_set_sd_log_level(level);
         if (err == ESP_OK) {
             espaperplay_diaglog_set_level(level);
+        }
+    }
+
+    /* 扬声器音量百分比（0-100）；持久化后立即作用于音频驱动软件增益。 */
+    if (err == ESP_OK && has_speaker_volume) {
+        char *end = NULL;
+        long vol = strtol(speaker_volume_s, &end, 10);
+        if (end == speaker_volume_s || *end != '\0' || vol < 0 || vol > 100) {
+            webserver_send_json_err(req, "无效的 speaker_volume（0-100）");
+            return ESP_FAIL;
+        }
+        err = espaperplay_system_set_speaker_volume((uint8_t)vol);
+        if (err == ESP_OK) {
+            (void)espaperplay_audio_set_volume_percent((int)vol);
         }
     }
 

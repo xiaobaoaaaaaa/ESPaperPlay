@@ -47,8 +47,11 @@ static const char *TAG = "ESPaperPlay_INPUT";
 
 static QueueHandle_t s_key_queue;   /*!< 按键事件队列 */
 static QueueHandle_t s_touch_queue; /*!< 触摸事件队列 */
-static button_handle_t s_boot_button;
-static uint32_t s_last_hold_ms = 0; /*!< 上次投递 HOLD 的时刻（esp_timer 毫秒） */
+
+/** 板载按键表：key_id -> 驱动句柄（init 时按序创建）。 */
+#define ESPAPERPLAY_INPUT_BUTTON_COUNT 3
+static button_handle_t s_buttons[ESPAPERPLAY_INPUT_BUTTON_COUNT];
+static uint32_t s_last_hold_ms[ESPAPERPLAY_INPUT_BUTTON_COUNT]; /*!< 上次投递 HOLD 的时刻（esp_timer 毫秒） */
 
 static uint16_t s_touch_seq = 0; /*!< 触摸帧序号（每帧递增，同帧各点共享） */
 
@@ -147,53 +150,46 @@ static void input_touch_event_cb(const espaperplay_touch_point_t *points, uint8_
 }
 
 /**
- * @brief espressif/button 通用回调。
+ * @brief espressif/button 通用回调（三键共用，usr_data 携带 key_id）。
  *
  * @param button_handle 触发事件的按键句柄（由驱动传入）。
- * @param usr_data      用户数据（未使用）。
+ * @param usr_data      按键标识（intptr_t 包装的 key_id）。
  */
-static void boot_button_event_cb(void *button_handle, void *usr_data) {
-    (void)usr_data;
+static void button_event_cb(void *button_handle, void *usr_data) {
+    const uint8_t key_id = (uint8_t)(intptr_t)usr_data;
 
     const button_event_t btn_event = iot_button_get_event(button_handle);
     const uint16_t press_time = (uint16_t)iot_button_get_pressed_time(button_handle);
 
     switch (btn_event) {
     case BUTTON_PRESS_DOWN:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT, ESPAPERPLAY_INPUT_KEY_ACTION_PRESS_DOWN,
-                             press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_PRESS_DOWN, press_time);
         break;
     case BUTTON_PRESS_UP:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT, ESPAPERPLAY_INPUT_KEY_ACTION_PRESS_UP,
-                             press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_PRESS_UP, press_time);
         break;
     case BUTTON_SINGLE_CLICK:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT,
-                             ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK, press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_SINGLE_CLICK, press_time);
         break;
     case BUTTON_DOUBLE_CLICK:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT,
-                             ESPAPERPLAY_INPUT_KEY_ACTION_DOUBLE_CLICK, press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_DOUBLE_CLICK, press_time);
         break;
     case BUTTON_LONG_PRESS_START:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT,
-                             ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_START, press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_START, press_time);
         break;
     case BUTTON_LONG_PRESS_HOLD: {
         /* 节流：丢弃过密的 HOLD（驱动每 20ms 触发一次），防止事件洪泛
          * 淹没 LONG_PRESS_UP 等关键事件。无符号减法天然处理回绕。 */
         const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        if (now_ms - s_last_hold_ms < ESPAPERPLAY_INPUT_HOLD_MIN_INTERVAL_MS) {
+        if (now_ms - s_last_hold_ms[key_id] < ESPAPERPLAY_INPUT_HOLD_MIN_INTERVAL_MS) {
             return;
         }
-        s_last_hold_ms = now_ms;
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT,
-                             ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_HOLD, press_time);
+        s_last_hold_ms[key_id] = now_ms;
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_HOLD, press_time);
         break;
     }
     case BUTTON_LONG_PRESS_UP:
-        input_post_key_event(ESPAPERPLAY_INPUT_KEY_ID_BOOT,
-                             ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_UP, press_time);
+        input_post_key_event(key_id, ESPAPERPLAY_INPUT_KEY_ACTION_LONG_PRESS_UP, press_time);
         break;
     default:
         /* 未归一化的事件（PRESS_REPEAT / MULTIPLE_CLICK / PRESS_END 等）不投递。 */
@@ -201,17 +197,13 @@ static void boot_button_event_cb(void *button_handle, void *usr_data) {
     }
 }
 
-/**
- * @brief 为按键注册指定事件的回调。
- */
-static esp_err_t register_button_event(button_handle_t button, button_event_t event) {
-    const esp_err_t ret = iot_button_register_cb(button, event, NULL, boot_button_event_cb, NULL);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "register callback for event %s failed: %s", iot_button_get_event_str(event),
-                 esp_err_to_name(ret));
-    }
-    return ret;
-}
+/** 单个按键的静态配置（引脚 / 有效电平 / key_id）。 */
+typedef struct {
+    uint8_t key_id;
+    int gpio_num;
+    int active_level;
+    uint16_t long_press_time_ms;
+} input_button_desc_t;
 
 esp_err_t espaperplay_input_init(void) {
     /* 双队列（按键 / 触摸物理隔离，LVGL 线程分别直读）。 */
@@ -238,53 +230,94 @@ esp_err_t espaperplay_input_init(void) {
                  esp_err_to_name(touch_cb_ret));
     }
 
-    /* BOOT 按键：GPIO0，按下为低电平，使能内部上拉（disable_pull = false）。
+    /* 板载三键：BOOT（GPIO0，内部上拉）/ VOL+（GPIO2，外部上拉）/
+     * VOL-（GPIO5，外部上拉），均按下为低电平。
      * enable_power_save 开启：使按键 GPIO 在浅睡眠期间保持可唤醒配置，
-     * 配合电源组件的 GPIO 唤醒源（GPIO0 低电平）实现按键唤醒。
-     * 长按判定时间取系统配置（Web 可配置，NVS 持久化，默认 1000ms），
-     * 覆盖驱动编译期默认值（CONFIG_BUTTON_LONG_PRESS_TIME_MS=1500）。 */
-    const button_config_t btn_cfg = {
-        .long_press_time = (uint16_t)espaperplay_system_get_config()->boot_long_press_time_ms,
-    };
-    const button_gpio_config_t btn_gpio_cfg = {
-        .gpio_num = ESPAPERPLAY_PIN_KEY_BOOT,
-        .active_level = ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
-        .enable_power_save = true,
-        .disable_pull = false,
+     * 配合电源组件的 GPIO 唤醒源（低电平）实现按键唤醒。
+     * BOOT 长按判定时间取系统配置（Web 可配置，NVS 持久化，默认 1000ms），
+     * 覆盖驱动编译期默认值（CONFIG_BUTTON_LONG_PRESS_TIME_MS=1500）；
+     * 音量键保持驱动默认（1500ms），仅单击 / 长按保持参与音量调节。 */
+    const input_button_desc_t button_descs[ESPAPERPLAY_INPUT_BUTTON_COUNT] = {
+        {
+            .key_id = ESPAPERPLAY_INPUT_KEY_ID_BOOT,
+            .gpio_num = ESPAPERPLAY_PIN_KEY_BOOT,
+            .active_level = ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
+            .long_press_time_ms =
+                (uint16_t)espaperplay_system_get_config()->boot_long_press_time_ms,
+        },
+        {
+            .key_id = ESPAPERPLAY_INPUT_KEY_ID_VOL_UP,
+            .gpio_num = ESPAPERPLAY_PIN_KEY_VOL_UP,
+            .active_level = ESPAPERPLAY_KEY_VOL_UP_ACTIVE_LEVEL,
+            .long_press_time_ms = 0, /* 0=沿用驱动默认 */
+        },
+        {
+            .key_id = ESPAPERPLAY_INPUT_KEY_ID_VOL_DOWN,
+            .gpio_num = ESPAPERPLAY_PIN_KEY_VOL_DOWN,
+            .active_level = ESPAPERPLAY_KEY_VOL_DOWN_ACTIVE_LEVEL,
+            .long_press_time_ms = 0,
+        },
     };
 
-    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &s_boot_button);
-    if (ret != ESP_OK || s_boot_button == NULL) {
-        ESP_LOGE(TAG, "failed to create BOOT button on GPIO%d (ret: %s)", ESPAPERPLAY_PIN_KEY_BOOT,
-                 esp_err_to_name(ret));
-        vQueueDelete(s_touch_queue);
-        vQueueDelete(s_key_queue);
-        s_touch_queue = s_key_queue = NULL;
-        return (ret != ESP_OK) ? ret : ESP_FAIL;
-    }
-
-    /* 归一化并投递的按键事件集合。 */
     const button_event_t events[] = {
         BUTTON_PRESS_DOWN,       BUTTON_PRESS_UP,        BUTTON_SINGLE_CLICK,  BUTTON_DOUBLE_CLICK,
         BUTTON_LONG_PRESS_START, BUTTON_LONG_PRESS_HOLD, BUTTON_LONG_PRESS_UP,
     };
-    for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
-        ret = register_button_event(s_boot_button, events[i]);
-        if (ret != ESP_OK) {
-            iot_button_delete(s_boot_button);
-            s_boot_button = NULL;
+
+    for (size_t b = 0; b < ESPAPERPLAY_INPUT_BUTTON_COUNT; b++) {
+        const input_button_desc_t *desc = &button_descs[b];
+
+        button_config_t btn_cfg = { 0 };
+        if (desc->long_press_time_ms > 0) {
+            btn_cfg.long_press_time = desc->long_press_time_ms;
+        }
+        const button_gpio_config_t btn_gpio_cfg = {
+            .gpio_num = desc->gpio_num,
+            .active_level = desc->active_level,
+            .enable_power_save = true,
+            .disable_pull = false,
+        };
+
+        esp_err_t ret =
+            iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &s_buttons[b]);
+        if (ret != ESP_OK || s_buttons[b] == NULL) {
+            ESP_LOGE(TAG, "failed to create button key%u on GPIO%d (ret: %s)", desc->key_id,
+                     desc->gpio_num, esp_err_to_name(ret));
+            for (size_t j = 0; j < b; j++) {
+                iot_button_delete(s_buttons[j]);
+                s_buttons[j] = NULL;
+            }
             vQueueDelete(s_touch_queue);
             vQueueDelete(s_key_queue);
             s_touch_queue = s_key_queue = NULL;
-            return ret;
+            return (ret != ESP_OK) ? ret : ESP_FAIL;
+        }
+
+        for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
+            ret = iot_button_register_cb(s_buttons[b], events[i], NULL, button_event_cb,
+                                         (void *)(intptr_t)desc->key_id);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "register event %s for key%u failed: %s",
+                         iot_button_get_event_str(events[i]), desc->key_id,
+                         esp_err_to_name(ret));
+                for (size_t j = 0; j <= b; j++) {
+                    iot_button_delete(s_buttons[j]);
+                    s_buttons[j] = NULL;
+                }
+                vQueueDelete(s_touch_queue);
+                vQueueDelete(s_key_queue);
+                s_touch_queue = s_key_queue = NULL;
+                return ret;
+            }
         }
     }
 
     ESP_LOGI(TAG,
-             "Input subsystem ready: BOOT key on GPIO%d (active level %d), "
+             "Input subsystem ready: BOOT(GPIO%d) + VOL+(GPIO%d) + VOL-(GPIO%d), "
              "key queue %d + touch queue %d (read by LVGL thread)",
-             ESPAPERPLAY_PIN_KEY_BOOT, ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL,
-             ESPAPERPLAY_INPUT_KEY_QUEUE_LEN, ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN);
+             ESPAPERPLAY_PIN_KEY_BOOT, ESPAPERPLAY_PIN_KEY_VOL_UP,
+             ESPAPERPLAY_PIN_KEY_VOL_DOWN, ESPAPERPLAY_INPUT_KEY_QUEUE_LEN,
+             ESPAPERPLAY_INPUT_TOUCH_QUEUE_LEN);
     return ESP_OK;
 }
 
@@ -375,13 +408,14 @@ esp_err_t espaperplay_input_set_boot_long_press_time_ms(uint32_t time_ms) {
         time_ms > ESPAPERPLAY_INPUT_LONG_PRESS_TIME_MAX_MS) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_boot_button == NULL) {
+    const button_handle_t boot_button = s_buttons[ESPAPERPLAY_INPUT_KEY_ID_BOOT];
+    if (boot_button == NULL) {
         ESP_LOGW(TAG, "BOOT button not initialized yet, long-press time applied at init");
         return ESP_ERR_INVALID_STATE;
     }
     /* 驱动以"值即毫秒"语义接收（内部除以扫描周期得到 tick 数）。 */
     const esp_err_t ret =
-        iot_button_set_param(s_boot_button, BUTTON_LONG_PRESS_TIME_MS, (void *)(intptr_t)time_ms);
+        iot_button_set_param(boot_button, BUTTON_LONG_PRESS_TIME_MS, (void *)(intptr_t)time_ms);
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "BOOT long-press time set to %u ms", (unsigned)time_ms);
     } else {

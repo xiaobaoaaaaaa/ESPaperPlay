@@ -89,6 +89,9 @@ extern "C" {
 #define ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MIN ESP_LOG_ERROR
 #define ESPAPERPLAY_SYSTEM_SD_LOG_LEVEL_MAX ESP_LOG_INFO
 
+/** 出厂默认扬声器音量（百分比，0-100；音频驱动软件增益范围）。 */
+#define ESPAPERPLAY_SYSTEM_DEFAULT_SPEAKER_VOLUME 40
+
 /**
  * @brief BOOT 键长按的全局默认动作（Web 管理页可配置，NVS 持久化）。
  *
@@ -148,6 +151,7 @@ typedef struct {
                                                                */
     bool reader_img_gray4; /*!< 阅读器：插图页自动触发一次灰度（GRAY4）刷新 */
     esp_log_level_t sd_log_level; /*!< SD 卡日志捕获最低等级（仅捕获通道；显式诊断事件不受限） */
+    uint8_t speaker_volume; /*!< 扬声器音量百分比（VOL+/- 键调整，音频驱动软件增益） */
     bool setup_done; /*!< 首次开机引导是否已完成（false=下次开机仍进入引导页） */
 } espaperplay_system_config_t;
 
@@ -342,6 +346,24 @@ bool espaperplay_system_get_reader_img_gray4(void);
  * @return 成功返回 ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
  */
 esp_err_t espaperplay_system_set_sd_log_level(esp_log_level_t level);
+
+/**
+ * @brief 设置扬声器音量百分比并持久化。
+ *
+ * 由 UI 按键分发在 VOL+ / VOL- 键触发时调用；修改后可调用
+ * espaperplay_audio_set_volume_percent() 立即生效（无需重启）。
+ *
+ * @param percent 音量（0-100）。
+ * @return ESP_OK；越界返回 ESP_ERR_INVALID_ARG；NVS 写入失败返回错误码。
+ */
+esp_err_t espaperplay_system_set_speaker_volume(uint8_t percent);
+
+/**
+ * @brief 获取当前扬声器音量百分比。
+ *
+ * @return 当前音量（0-100）。
+ */
+uint8_t espaperplay_system_get_speaker_volume(void);
 
 bool espaperplay_system_is_setup_done(void);
 

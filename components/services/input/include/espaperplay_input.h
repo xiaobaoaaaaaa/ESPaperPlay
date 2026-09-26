@@ -45,8 +45,10 @@ typedef enum {
     ESPAPERPLAY_INPUT_EVENT_MAX,
 } espaperplay_input_event_type_t;
 
-/** BOOT 按键（GPIO0）的按键标识。 */
-#define ESPAPERPLAY_INPUT_KEY_ID_BOOT 0
+/** 按键标识（对应原理图 POWER 页 SW2-SW4；SW1 接 EN 芯片复位脚，不走 GPIO）。 */
+#define ESPAPERPLAY_INPUT_KEY_ID_BOOT 0     /*!< BOOT 键（SW2 / GPIO0） */
+#define ESPAPERPLAY_INPUT_KEY_ID_VOL_UP 1   /*!< 音量加键（SW4 / GPIO2） */
+#define ESPAPERPLAY_INPUT_KEY_ID_VOL_DOWN 2 /*!< 音量减键（SW3 / GPIO5） */
 
 /**
  * @brief BOOT 键长按判定时间的合法范围（毫秒）。
@@ -92,9 +94,12 @@ typedef struct {
  *
  * 注册触摸控制器（通过 espaperplay_touch_*）与物理按键，并创建内部事件队列。
  *
- * 物理按键使用板载 BOOT 按键（GPIO0，按下为低电平），基于官方
- * espressif/button 组件（v4.2.0）实现：按键事件经回调归一化后投递到
- * 内部事件队列，由 espaperplay_input_get_event() 消费。
+ * 物理按键基于官方 espressif/button 组件（v4.2.0）实现，事件经回调归一化
+ * 后投递到内部事件队列，由 espaperplay_input_get_event() 消费：
+ *   - BOOT（GPIO0，按下为低电平，内部上拉）；
+ *   - VOL+（GPIO2，外部 10K 上拉）；
+ *   - VOL-（GPIO5，外部 10K 上拉）。
+ * 三键共用同一套事件归一化与回调路径，仅 key_id 不同。
  *
  * @return 成功返回 ESP_OK，否则返回错误码。
  */

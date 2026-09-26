@@ -33,6 +33,7 @@ static const char *TAG = "ESPaperPlay_SYSTEM";
 #define NVS_KEY_SETUP_DONE "setup_done"
 #define NVS_KEY_READER_IMG_GRAY4 "rd_img_gray4"
 #define NVS_KEY_SD_LOG_LEVEL "sd_log_level"
+#define NVS_KEY_SPEAKER_VOLUME "spk_volume"
 
 /** 屏幕空闲睡眠超时上限（毫秒，24 小时）。 */
 #define ESPAPERPLAY_SYSTEM_EPD_IDLE_TIMEOUT_MAX_MS 86400000u
@@ -58,6 +59,7 @@ static espaperplay_system_config_t s_config = {
     .selected_font = ESPAPERPLAY_SYSTEM_DEFAULT_FONT_NAME,
     .reader_img_gray4 = ESPAPERPLAY_SYSTEM_DEFAULT_READER_IMG_GRAY4,
     .sd_log_level = ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL,
+    .speaker_volume = ESPAPERPLAY_SYSTEM_DEFAULT_SPEAKER_VOLUME,
     .setup_done = false, /* 出厂状态：首次开机进入引导页 */
 };
 
@@ -182,6 +184,9 @@ static esp_err_t system_save_all(void) {
     }
     if (err == ESP_OK) {
         err = nvs_set_u8(handle, NVS_KEY_SD_LOG_LEVEL, (uint8_t)s_config.sd_log_level);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, NVS_KEY_SPEAKER_VOLUME, s_config.speaker_volume);
     }
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -320,6 +325,19 @@ static esp_err_t system_load(void) {
             ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_SD_LOG_LEVEL, esp_err_to_name(err));
         }
         s_config.sd_log_level = ESPAPERPLAY_SYSTEM_DEFAULT_SD_LOG_LEVEL;
+        missing = true;
+    }
+
+    uint8_t speaker_volume = 0;
+    err = nvs_get_u8(handle, NVS_KEY_SPEAKER_VOLUME, &speaker_volume);
+    if (err == ESP_OK && speaker_volume <= 100) {
+        s_config.speaker_volume = speaker_volume;
+    } else {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to read '%s': %s", NVS_KEY_SPEAKER_VOLUME,
+                     esp_err_to_name(err));
+        }
+        s_config.speaker_volume = ESPAPERPLAY_SYSTEM_DEFAULT_SPEAKER_VOLUME;
         missing = true;
     }
 
@@ -487,6 +505,19 @@ esp_err_t espaperplay_system_set_sd_log_level(esp_log_level_t level) {
 }
 
 bool espaperplay_system_is_setup_done(void) { return s_config.setup_done; }
+
+esp_err_t espaperplay_system_set_speaker_volume(uint8_t percent) {
+    if (percent > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (percent != s_config.speaker_volume) {
+        ESP_LOGI(TAG, "speaker volume: %u%%", (unsigned)percent);
+        s_config.speaker_volume = percent;
+    }
+    return save_u8_field(NVS_KEY_SPEAKER_VOLUME, percent);
+}
+
+uint8_t espaperplay_system_get_speaker_volume(void) { return s_config.speaker_volume; }
 
 esp_err_t espaperplay_system_mark_setup_done(void) {
     if (!s_config.setup_done) {
