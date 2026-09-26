@@ -1,107 +1,57 @@
 # Reader (TXT / EPUB) · 阅读器
 
-> [← Back to README](../README.md) · ESPaperPlay documentation
->
-> [← 返回 README](../README.md) · ESPaperPlay 项目文档
+[← README](../README.md) · [引擎结构、支持范围和资源上限](reader-engine.md)
 
-<p align="center">
-  <a href="#en">English</a> · <a href="#zh">简体中文</a>
-</p>
-
----
-
-<a id="en"></a>
 ## English
 
-### Reader (TXT / EPUB)
+The reader presents TXT and EPUB through a shared chapter/block model. TXT uses
+bounded streaming segments with UTF-8, BOM-marked UTF-16/32 and GB18030 decoding.
+EPUB uses a validated ZIP index, EPUB 3 navigation or EPUB 2 NCX, spine order and
+in-document anchors. Chapters outside the TOC remain in the reading flow.
 
-The reader application (`components/applications/reader` + `screen_reader` /
-`screen_reader_home`) turns the device into an e-book reader:
+The parser implements a reading-oriented subset of XHTML and CSS, including
+headings, paragraphs, quotations, lists, linearized tables, ruby annotations,
+alignment, indentation and style inheritance. JPEG and non-interlaced PNG images
+are decoded into a bounded target buffer. It is not a browser or a fully conforming
+EPUB reading system; see the [engine reference](reader-engine.md) for limitations.
 
-- **Formats** — plain TXT and EPUB 2/3. EPUB parsing is memory-frugal: the ZIP
-  central directory is parsed once and entries (chapters / images / fonts) are
-  inflated on demand into PSRAM and freed after use; the book is never loaded
-  whole. Chapters are split by the table of contents (toc.ncx / nav), so
-  cover / colophon / appendix documents merge into the reading flow instead of
-  becoming fake "chapters".
-- **Block-model rendering** — XHTML is parsed in a single pass into a shared
-  block model (headings, bold/italic, quotes, images); a CSS subset applies
-  alignment, bold/italic and the CJK 2em paragraph indent. The same block
-  pipeline serves TXT. Rendering happens on the LVGL thread with **zero parse
-  work**: a prefetch worker (lower priority, own stack) inflates + parses the
-  next chapter into ready slots, with parsed results cached to SD keyed by
-  mtime/size.
-- **Pagination** — lazy: the page opens immediately while total page count is
-  computed in the background in ≤8 ms time slices. Page boundaries are cached
-  to SD (`/sdcard/system/cache/reader/*.pag`, keyed by book fingerprint + font
-  size + content area), so re-opening a book or returning to a swapped-out
-  chapter is instant (measured: 33 s first count of a heavy chapter → 0 ms on
-  re-open).
-- **Reading UI** — bottom toolbar: TOC / page-number jump / font size / gray
-  refresh; full-screen TOC panel (paged, auto-located to the current chapter);
-  tap zones + edge swipes + BOOT key for paging; progress is stored as
-  chapter + page-in-chapter so resume never re-counts prefix chapters.
-  The reader home (`screen_reader_home`) shows reading history and the SD book
-  shelf as a **cover grid**.
-- **Cover grid** — the reader home renders books as a grid of cover thumbnails
-  (file name below; history entries also show reading progress; TXT and
-  coverless books get a placeholder frame). Covers are located by priority:
-  EPUB3 manifest `properties~="cover-image"` → EPUB2 `<meta name="cover">` →
-  `cover.jpg/jpeg/png` in the manifest → first image in the first spine
-  document. Thumbnails are decoded in a background worker (low priority,
-  internal-RAM stack: SD writes must never run on a PSRAM stack), downsampled
-  into the tile budget, and cached to SD
-  (`/sdcard/system/cache/reader/covers/`, keyed by path hash ^ mtime ^ size;
-  "no cover" results are cached too, so coverless books never re-probe).
-  Flipping pages / leaving the screen cancels in-flight work.
-- **Images** — image blocks occupy their own page: JPEG decodes streamingly
-  via a vendored TJpgDec (MCU-by-MCU), PNG decodes row-by-row via zlib
-  (all color types / bit depths 1-16, palette + tRNS; peak memory ≈ target
-  RGB565 buffer + 2 scanlines). Images are scaled to fit the content area and
-  an automatic **GRAY4 full refresh** is triggered after rendering an
-  illustration page (noticeably finer gray levels), switching back to BW on
-  the next page turn. Configurable (default on) from the settings page or Web
-  console.
-- **Title** — the status bar shows the book title (EPUB `dc:title` / TXT file
-  name).
+A background worker prefetches EPUB chapters and writes parsed results to SD.
+Interactive loads use a ready result or cache first, then parse synchronously on
+a miss. Pagination is lazy and cached separately; a first layout pass still takes
+time for font measurement. Versioned cache keys prevent stale layouts from being
+used after a parser change.
 
----
+The reader home displays a list of cover thumbnails, book titles and reading
+progress. The reading toolbar provides TOC, page jump, font size, grayscale refresh
+and return controls. Tap zones, swipes and the BOOT key turn pages. Reading history
+stores the chapter and page within it. Illustration pages can request a GRAY4 refresh;
+subsequent page turns return to black and white.
 
-<a id="zh"></a>
+Run the actual C engines with host sanitizers:
+
+```sh
+python3 tools/reader/test_reader.py --sample '/path/to/book.epub'
+```
+
 ## 简体中文
 
-### 阅读器（TXT / EPUB）
+阅读器通过统一的“章节 → 内容块”模型呈现 TXT 与 EPUB。TXT 改为流式索引和
+有界分段，支持 UTF-8、带 BOM 的 UTF-16/32，以及 GB18030。EPUB 根据校验后的
+ZIP 索引、EPUB3 nav / EPUB2 NCX、spine 阅读顺序和文档内锚点组织章节；目录外的
+正文与插图仍保留在阅读流中。
 
-阅读器应用（`components/applications/reader` + `screen_reader` /
-`screen_reader_home`）把设备变成电子书阅读器：
+正文实现适合电子书阅读的 XHTML / CSS 子集，包括标题、段落、引用、列表、线性化
+表格、Ruby 注音、对齐、缩进和样式继承。JPEG 与非交错 PNG 直接解码到尺寸受限的
+目标缓冲。它不是浏览器，也不声明完整 EPUB 阅读系统一致性；详细边界见
+[引擎说明](reader-engine.md)。
 
-- **格式**——纯文本 TXT 与 EPUB 2/3。EPUB 解析极度省内存：ZIP 只解析
-  中央目录，条目（章节 / 图片 / 字体）按需 inflate 到 PSRAM、用后释放，
-  绝不整书载入。章节按目录（toc.ncx / nav）切分，封面 / 版权页 / 附录
-  等目录外文档并入阅读流，不再变成假「章节」。
-- **块模型渲染**——XHTML 单遍解析为统一块模型（标题层级、粗斜体、引用、
-  图片），CSS 子集支持对齐、粗斜体与 CJK 段落 2em 首行缩进；TXT 走同一条
-  块流水线。LVGL 线程渲染时**零解析开销**：预取 worker（更低优先级、独立
-  栈）把下一章解压 + 解析进就绪槽，解析结果按 mtime/size 键缓存到 SD。
-- **分页**——惰性：打开即显示，总页数后台按 ≤8ms 时间片统计。页边界
-  缓存到 SD（`/sdcard/system/cache/reader/*.pag`，键含书指纹 + 字号 +
-  内容区尺寸），重开书籍或回到被换出的章节即时完成（实测：重章节首次
-  统计 33s → 二开 0ms）。
-- **阅读界面**——底边栏：目录 / 页码跳转 / 字号 / 灰度刷新；全屏目录面板
- （分页显示，自动定位当前章）；点按区 + 边缘滑动 + BOOT 键翻页；进度按
-  「章 + 章内页」存储，续读无需重数前缀章节。阅读器主页
- （`screen_reader_home`）以**封面网格**呈现阅读历史与 SD 卡书架。
-- **封面网格**——主页条目按网格块展示封面缩略图（块下为文件名；历史块另
-  带阅读进度；TXT 与无封面书显示占位框）。封面定位优先级：EPUB3 manifest
-  `properties~="cover-image"` → EPUB2 `<meta name="cover">` → manifest 中
-  `cover.jpg/jpeg/png` → spine 首文档内首个图片。缩略图由后台 worker 解码
-  （低优先级、内部 RAM 栈：SD 写期间栈不能放 PSRAM），按网格预算降采样后
-  缓存到 SD（`/sdcard/system/cache/reader/covers/`，键 = 路径哈希 ^ mtime ^
-  size；「无封面」负结果同样缓存，无封面书不会反复空探）。翻页 / 离开页面
-  即作废在途请求。
-- **图片**——图片块独占一页：JPEG 经自持 TJpgDec 逐 MCU 流式解码，PNG 经
-  zlib 逐行流式解码（全颜色类型 / 1-16 位深、调色板 + tRNS；峰值内存 ≈
-  目标 RGB565 缓冲 + 2 行扫描线）。图片等比缩放内接内容区，插图页渲染完
-  自动触发一次 **GRAY4 全屏刷新**（灰阶明显更细腻），翻页恢复黑白。可在
-  设置页或 Web 管理页开关（默认开）。
-- **标题**——状态栏显示书名（EPUB `dc:title` / TXT 文件名）。
+EPUB 后台任务预取章节并写入 SD 缓存。交互加载优先采用预取结果或缓存，未命中时
+同步解析。分页惰性计算并单独缓存，首次字体测量和排版仍需要时间；缓存键包含
+引擎版本，解析行为变化后不会误用旧排版。
+
+阅读器主页以封面缩略图、书名和进度列表展示图书。阅读工具栏提供目录、页码跳转、
+字号、灰度刷新和返回；支持点按、滑动和 BOOT 键翻页。历史按章节与章内页保存。
+插图页可触发 GRAY4 刷新，后续翻页恢复黑白。
+
+主机回归直接编译实际 C 引擎，启用 AddressSanitizer / UndefinedBehaviorSanitizer；
+可用上方命令添加本地 EPUB 样本。最终交付还需要固件构建、烧录和实机阅读验证。
