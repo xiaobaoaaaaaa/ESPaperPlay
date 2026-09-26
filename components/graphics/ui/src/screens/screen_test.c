@@ -13,7 +13,9 @@
 #include "espaperplay_input.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_ui_touch.h"
+#include "espaperplay_ui_util.h"
 
 #include "lvgl.h"
 
@@ -196,21 +198,10 @@ static void test_enter(void) {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
 
-    lv_obj_t *title = lv_label_create(scr);
-    /* FreeType 矢量字体渲染验证：标题使用 fonts 分区的 Noto Sans SC 子集，
-     * 中文正常显示即证明「mmap 分区 -> LVGL FS 盘符 -> FreeType 栅格化」链路可用。 */
-    lv_font_t *ft_font = espaperplay_fonts_load(espaperplay_system_get_config()->selected_font, 24,
-                                                ESPAPERPLAY_FONT_STYLE_NORMAL);
-    if (ft_font != NULL) {
-        lv_obj_set_style_text_font(title, ft_font, 0);
-        lv_label_set_text(title, "UI Test · FreeType 字体渲染正常");
-    } else {
-        lv_label_set_text(title, "UI Test (freetype font load failed)");
-    }
-    lv_obj_set_style_text_color(title, lv_color_black(), 0);
-    lv_obj_set_width(title, lv_pct(100));
-    lv_obj_set_pos(title, 0, lv_pct(3));
-    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    espaperplay_ui_status_bar_t *status =
+        espaperplay_ui_status_bar_create(scr, ESPAPERPLAY_UI_HEADER_H, "设备测试", false);
+    espaperplay_ui_status_bar_refresh(status);
 
     /* ---- 左列：压力测试区（x 2% 起） ---- */
     s_cnt_label = lv_label_create(scr);
@@ -222,6 +213,10 @@ static void test_enter(void) {
     s_bar = lv_bar_create(scr);
     lv_obj_set_size(s_bar, lv_pct(25), lv_pct(6));
     lv_obj_set_pos(s_bar, lv_pct(2), lv_pct(20));
+    lv_obj_set_style_bg_color(s_bar, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_bar, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_bar, ESPAPERPLAY_UI_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_bar, lv_color_black(), LV_PART_INDICATOR);
     lv_bar_set_range(s_bar, 0, 100);
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
 
@@ -244,20 +239,20 @@ static void test_enter(void) {
     lv_obj_set_pos(s_pad, lv_pct(2), lv_pct(53));
     lv_obj_set_style_bg_color(s_pad, lv_color_white(), 0);
     lv_obj_set_style_border_color(s_pad, lv_color_black(), 0);
-    lv_obj_set_style_border_width(s_pad, 2, 0);
-    lv_obj_set_style_radius(s_pad, 0, 0);
+    espaperplay_ui_card_style(s_pad);
     lv_obj_remove_flag(s_pad, LV_OBJ_FLAG_SCROLLABLE); /* 纯绘制容器 */
 
     /* ---- 右列：按键测试区（x 52% 起） ---- */
-    lv_obj_t *key_title = lv_label_create(scr);
-    lv_label_set_text(key_title, "key test");
+    lv_obj_t *key_title = espaperplay_ui_label_create(scr, "", 20, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(key_title, "按键测试");
     lv_obj_set_style_text_color(key_title, lv_color_black(), 0);
     lv_obj_set_pos(key_title, lv_pct(52), lv_pct(10));
 
     s_last_key_label = lv_label_create(scr);
     lv_label_set_text(s_last_key_label, "last: (none)");
     lv_obj_set_style_text_color(s_last_key_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(s_last_key_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_last_key_label, espaperplay_ui_font(16), 0);
+    lv_obj_set_width(s_last_key_label, lv_pct(46));
     lv_obj_set_pos(s_last_key_label, lv_pct(52), lv_pct(18));
 
     s_key_count_label = lv_label_create(scr);
@@ -266,8 +261,8 @@ static void test_enter(void) {
     lv_obj_set_pos(s_key_count_label, lv_pct(52), lv_pct(42));
 
     /* ---- 右列：触摸测试区 ---- */
-    lv_obj_t *touch_title = lv_label_create(scr);
-    lv_label_set_text(touch_title, "touch test");
+    lv_obj_t *touch_title = espaperplay_ui_label_create(scr, "", 20, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(touch_title, "触摸测试");
     lv_obj_set_style_text_color(touch_title, lv_color_black(), 0);
     lv_obj_set_pos(touch_title, lv_pct(52), lv_pct(54));
 
@@ -279,33 +274,19 @@ static void test_enter(void) {
     s_touch_pos_label = lv_label_create(scr);
     lv_label_set_text(s_touch_pos_label, "x=- y=-");
     lv_obj_set_style_text_color(s_touch_pos_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(s_touch_pos_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_touch_pos_label, espaperplay_ui_font(16), 0);
+    lv_obj_set_width(s_touch_pos_label, lv_pct(46));
     lv_obj_set_pos(s_touch_pos_label, lv_pct(52), lv_pct(70));
 
-    /* back 按钮：经 LVGL 指针 indev 点击返回上一页（验证控件级点击链路）。 */
-    lv_obj_t *back_btn = lv_button_create(scr);
-    lv_obj_set_size(back_btn, lv_pct(20), lv_pct(8));
-    lv_obj_set_pos(back_btn, lv_pct(52), lv_pct(78));
-    lv_obj_t *back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "back");
-    lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_btn, test_back_clicked_cb, LV_EVENT_CLICKED, NULL);
-
-    /* clear 按钮：清空画板轨迹（同样经 LVGL 指针 indev 点击）。 */
-    lv_obj_t *clear_btn = lv_button_create(scr);
-    lv_obj_set_size(clear_btn, lv_pct(20), lv_pct(8));
-    lv_obj_set_pos(clear_btn, lv_pct(74), lv_pct(78));
-    lv_obj_t *clear_label = lv_label_create(clear_btn);
-    lv_label_set_text(clear_label, "clear");
-    lv_obj_center(clear_label);
-    lv_obj_add_event_cb(clear_btn, test_clear_clicked_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "dbl-click: rotate\nlong-press: back");
-    lv_obj_set_style_text_color(hint, lv_color_black(), 0);
+    int32_t scr_w, scr_h;
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
+    espaperplay_ui_modal_button(scr, "返回", scr_w * 52 / 100, scr_h * 78 / 100, scr_w * 20 / 100,
+                                ESPAPERPLAY_UI_BUTTON_H, false, test_back_clicked_cb, NULL);
+    espaperplay_ui_modal_button(scr, "清空", scr_w * 74 / 100, scr_h * 78 / 100, scr_w * 20 / 100,
+                                ESPAPERPLAY_UI_BUTTON_H, false, test_clear_clicked_cb, NULL);
+    lv_obj_t *hint = espaperplay_ui_label_create(scr, "双击按键旋转屏幕", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_width(hint, lv_pct(46));
-    lv_obj_set_pos(hint, lv_pct(52), lv_pct(87));
-    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(hint, lv_pct(52), lv_pct(89));
 
     s_test_timer = lv_timer_create(test_timer_cb, TEST_UI_PERIOD_MS, NULL);
     s_last_tick_ms = (uint32_t)(esp_timer_get_time() / 1000);

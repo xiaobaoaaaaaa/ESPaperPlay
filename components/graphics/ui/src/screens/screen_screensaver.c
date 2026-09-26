@@ -66,12 +66,12 @@ static const char *TAG = "ESPaperPlay_UI";
 #define SAV_LV_CALL_MS 4000     /* 跨线程投递超时（含同步渲染耗时） */
 #define SAV_FLUSH_WAIT_MS 4000  /* 落屏等待（覆盖局刷 ~0.4s 与强制全刷 ~2s） */
 
-#define SAV_MARGIN 12       /* 屏幕四周外边距 */
+#define SAV_MARGIN ESPAPERPLAY_UI_MARGIN /* 屏幕四周外边距 */
 #define SAV_GAP 10          /* 盒间距 */
 #define SAV_HEADER_H 32     /* 头部行高 */
 #define SAV_FOOTER_H 22     /* 页脚行高 */
-#define SAV_BORDER 2        /* 盒边框线宽 */
-#define SAV_RADIUS 8        /* 盒圆角 */
+#define SAV_BORDER ESPAPERPLAY_UI_BORDER /* 盒边框线宽 */
+#define SAV_RADIUS ESPAPERPLAY_UI_RADIUS /* 盒圆角 */
 #define SAV_BOX_PAD 6       /* 月历盒内边距 */
 #define SAV_TITLE_H 26      /* 月历年月标题行高 */
 #define SAV_WEEK_H 26       /* 月历星期表头行高 */

@@ -300,8 +300,8 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
     lv_obj_remove_flag(bar->bar, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, height_px - 2);
+    lv_obj_set_size(line, LV_PCT(100), 1);
+    lv_obj_set_pos(line, 0, height_px - 1);
     lv_obj_set_style_bg_color(line, lv_color_black(), 0);
     lv_obj_set_style_border_width(line, 0, 0);
     lv_obj_set_style_radius(line, 0, 0);
@@ -315,8 +315,8 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
         lv_obj_set_style_text_font(bar->time, bar_font16, 0);
     }
     lv_obj_set_style_text_align(bar->time, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_width(bar->time, LV_PCT(100));
-    lv_obj_set_pos(bar->time, 12, 4);
+    lv_obj_set_width(bar->time, 64);
+    lv_obj_align(bar->time, LV_ALIGN_LEFT_MID, ESPAPERPLAY_UI_MARGIN, -1);
 
     /* 居中标题（20px）：始终创建标签，便于页面后续经 set_title 动态更新
      * （如天气页位置名）。无初始标题时文本为空，不占用视觉空间。 */
@@ -328,8 +328,11 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
         lv_obj_set_style_text_font(bar->title, bar_font20, 0);
     }
     lv_obj_set_style_text_align(bar->title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_width(bar->title, LV_PCT(100));
-    lv_obj_set_pos(bar->title, 0, 3);
+    lv_obj_set_width(bar->title,
+                     lv_display_get_horizontal_resolution(lv_display_get_default()) - 176);
+    lv_obj_set_height(bar->title, 28);
+    lv_label_set_long_mode(bar->title, LV_LABEL_LONG_DOT);
+    lv_obj_align(bar->title, LV_ALIGN_CENTER, 0, -1);
     if (title != NULL && title[0] != '\0') {
         strlcpy(bar->prev_title, title, sizeof(bar->prev_title));
     }
@@ -337,13 +340,13 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
     /* 右侧 WiFi 强度图标（16x16 A8，默认黑色绘制） */
     bar->wifi = lv_image_create(bar->bar);
     lv_image_set_src(bar->wifi, &icon_wifi_off_16);
-    lv_obj_align(bar->wifi, LV_ALIGN_TOP_RIGHT, -12, 7);
+    lv_obj_align(bar->wifi, LV_ALIGN_RIGHT_MID, -ESPAPERPLAY_UI_MARGIN, -1);
     bar->prev_wifi = &icon_wifi_off_16;
 
     /* 右侧睡眠/节能指示图标（默认隐藏，位于 WiFi 左侧） */
     bar->sleep = lv_image_create(bar->bar);
     lv_image_set_src(bar->sleep, &icon_leaf_16);
-    lv_obj_align(bar->sleep, LV_ALIGN_TOP_RIGHT, -32, 7);
+    lv_obj_align(bar->sleep, LV_ALIGN_RIGHT_MID, -ESPAPERPLAY_UI_MARGIN - 24, -1);
     lv_obj_add_flag(bar->sleep, LV_OBJ_FLAG_HIDDEN);
     bar->prev_sleep_shown = false;
 
@@ -353,9 +356,9 @@ espaperplay_ui_status_bar_t *espaperplay_ui_status_bar_create(lv_obj_t *scr, int
 
 /** 按右侧图标显隐重布局（仅睡眠图标显隐变化时调用，避免无谓重绘）。 */
 static void ui_bar_layout_icons(espaperplay_ui_status_bar_t *bar) {
-    lv_obj_align(bar->wifi, LV_ALIGN_TOP_RIGHT, -12, 7);
+    lv_obj_align(bar->wifi, LV_ALIGN_RIGHT_MID, -ESPAPERPLAY_UI_MARGIN, -1);
     if (bar->prev_sleep_shown) {
-        lv_obj_align(bar->sleep, LV_ALIGN_TOP_RIGHT, -32, 7);
+        lv_obj_align(bar->sleep, LV_ALIGN_RIGHT_MID, -ESPAPERPLAY_UI_MARGIN - 24, -1);
     }
 }
 

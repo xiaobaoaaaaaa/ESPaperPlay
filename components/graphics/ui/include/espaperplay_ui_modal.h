@@ -45,8 +45,8 @@ void espaperplay_ui_modal_card_title(lv_obj_t *card, const char *text, int y, in
 void espaperplay_ui_modal_card_msg(lv_obj_t *card, const char *text, int y, int w);
 
 /**
- * @brief 主/次按钮工厂：primary=黑底白字（无边框），否则白底黑边 2px；
- * 圆角 8，20px 居中标签。
+ * @brief 主/次按钮工厂：primary=黑底白字，否则白底黑边 1px；
+ * 圆角和字号沿用统一 UI 规范。
  */
 lv_obj_t *espaperplay_ui_modal_button(lv_obj_t *parent, const char *text, int x, int y, int w,
                                       int h, bool primary, lv_event_cb_t cb, void *user_data);
@@ -60,6 +60,7 @@ typedef struct {
     const char *title;      /*!< 面板标题（DOT 截断） */
     const char *init_text;  /*!< 初始文本（NULL = 空） */
     int max_len;            /*!< 最大输入长度（字符） */
+    bool numeric;           /*!< 数字键盘，仅接受 0-9；默认 false */
     bool password;          /*!< 密码模式（true 时自动加「显示/隐藏」切换按钮，
                                  标题宽度自动让位至右侧按钮） */
     const char *ok_text;    /*!< 确定按钮文案（NULL = "确定"） */

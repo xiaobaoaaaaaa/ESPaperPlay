@@ -19,6 +19,7 @@
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_ui_util.h"
 
 #include "lvgl.h"
 
@@ -44,7 +45,7 @@
 #define BOOT_TITLE_FONT_PX 36 /*!< 标题字号 */
 #define BOOT_SUB_FONT_PX 16   /*!< 版本/副标题字号 */
 #define BOOT_LOG_FONT_PX 16   /*!< 日志字号 */
-#define BOOT_MARGIN 24        /*!< 页边距 */
+#define BOOT_MARGIN ESPAPERPLAY_UI_MARGIN /*!< 页边距 */
 
 static const char *TAG = "ESPaperPlay_BOOT";
 
@@ -137,8 +138,9 @@ static void boot_build_cb(void *arg) {
     lv_obj_set_pos(sub, BOOT_MARGIN, scr_h * 155 / 1000);
 
     lv_obj_t *line = lv_obj_create(scr);
-    lv_obj_set_size(line, LV_PCT(100), 2);
-    lv_obj_set_pos(line, 0, scr_h * 205 / 1000);
+    lv_obj_set_size(
+        line, lv_display_get_horizontal_resolution(lv_display_get_default()) - 2 * BOOT_MARGIN, 1);
+    lv_obj_set_pos(line, BOOT_MARGIN, scr_h * 205 / 1000);
     lv_obj_set_style_bg_color(line, lv_color_black(), 0);
     lv_obj_set_style_border_width(line, 0, 0);
     lv_obj_set_style_radius(line, 0, 0);

@@ -44,12 +44,7 @@ lv_obj_t *espaperplay_ui_modal_card_create(lv_obj_t *overlay, int w, int h) {
     lv_obj_t *card = lv_obj_create(overlay);
     lv_obj_set_size(card, w, h);
     lv_obj_center(card);
-    lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(card, 2, 0);
-    lv_obj_set_style_radius(card, 12, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    espaperplay_ui_card_style(card);
     return card;
 }
 
@@ -72,19 +67,30 @@ lv_obj_t *espaperplay_ui_modal_button(lv_obj_t *parent, const char *text, int x,
     lv_obj_t *btn = lv_button_create(parent);
     lv_obj_set_size(btn, w, h);
     lv_obj_set_pos(btn, x, y);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_set_style_shadow_width(btn, 0, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    /* 禁用态保留纯黑白，避免主题半透明在 1bpp 下变成断线。 */
+    lv_obj_set_style_opa(btn, LV_OPA_COVER, LV_STATE_DISABLED);
+    lv_obj_set_style_recolor_opa(btn, LV_OPA_TRANSP, LV_STATE_DISABLED);
     if (primary) {
         lv_obj_set_style_bg_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_border_color(btn, lv_color_black(), 0);
+        lv_obj_set_style_border_width(btn, ESPAPERPLAY_UI_BORDER, 0);
     } else {
         lv_obj_set_style_bg_color(btn, lv_color_white(), 0);
         lv_obj_set_style_border_color(btn, lv_color_black(), 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_border_width(btn, ESPAPERPLAY_UI_BORDER, 0);
     }
-    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_radius(btn, ESPAPERPLAY_UI_RADIUS, 0);
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_color(label, primary ? lv_color_white() : lv_color_black(), 0);
     lv_obj_set_style_text_font(label, espaperplay_ui_font(20), 0);
+    lv_obj_set_width(label, w - 12);
+    lv_obj_set_height(label, 28);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(label);
     if (cb != NULL) {
         lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
@@ -117,14 +123,7 @@ static void kb_toggle_cb(lv_event_t *e) {
 }
 
 /** 面板样式（白底黑边圆角、无内边距、禁滚动）。 */
-static void kb_panel_style(lv_obj_t *panel) {
-    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
-    lv_obj_set_style_border_color(panel, lv_color_black(), 0);
-    lv_obj_set_style_border_width(panel, 2, 0);
-    lv_obj_set_style_radius(panel, 12, 0);
-    lv_obj_set_style_pad_all(panel, 0, 0);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-}
+static void kb_panel_style(lv_obj_t *panel) { espaperplay_ui_card_style(panel); }
 
 lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     if (cfg == NULL || cfg->title == NULL || cfg->on_cancel == NULL) {
@@ -166,6 +165,7 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     lv_textarea_set_one_line(ta, true);
     lv_textarea_set_max_length(ta, cfg->max_len);
     lv_textarea_set_password_mode(ta, cfg->password);
+    if (cfg->numeric) lv_textarea_set_accepted_chars(ta, "0123456789");
     lv_textarea_set_text(ta, cfg->init_text != NULL ? cfg->init_text : "");
     lv_obj_set_style_text_color(ta, lv_color_black(), 0);
     lv_font_t *ta_font = espaperplay_ui_font(20);
@@ -173,7 +173,7 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
         lv_obj_set_style_text_font(ta, ta_font, 0);
     }
     lv_obj_set_style_border_color(ta, lv_color_black(), 0);
-    lv_obj_set_style_border_width(ta, 2, 0);
+    lv_obj_set_style_border_width(ta, ESPAPERPLAY_UI_BORDER, 0);
     lv_obj_set_style_radius(ta, 6, 0);
     lv_obj_set_style_pad_left(ta, 8, 0);
     /* 墨水屏：光标闪烁会触发连续局部刷新，禁用（anim_duration=0 即不闪烁）。
@@ -184,7 +184,8 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
 
     /* 提示/校验行（默认空，页面经 status_out 指针写入）。 */
     lv_obj_t *status = espaperplay_ui_label_create(panel, "", 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_width(status, LV_PCT(100));
+    lv_obj_set_width(status, panel_w - 2 * pad - 4);
+    lv_obj_set_height(status, status_h);
     lv_label_set_long_mode(status, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(status, pad + 2, pad + title_h + 6 + ta_h + 4);
 
@@ -203,7 +204,7 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
         lv_obj_set_pos(toggle, panel_w - 124, pad);
         lv_obj_set_style_bg_color(toggle, lv_color_white(), 0);
         lv_obj_set_style_border_color(toggle, lv_color_black(), 0);
-        lv_obj_set_style_border_width(toggle, 2, 0);
+        lv_obj_set_style_border_width(toggle, ESPAPERPLAY_UI_BORDER, 0);
         lv_obj_set_style_radius(toggle, 6, 0);
         lv_obj_t *tl = lv_label_create(toggle);
         lv_label_set_text(tl, "显示");
@@ -217,7 +218,15 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     lv_obj_t *kb = lv_keyboard_create(modal);
     lv_obj_set_size(kb, panel_w, kb_h);
     lv_obj_align(kb, LV_ALIGN_TOP_LEFT, cfg->margin, kb_y);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_obj_set_style_bg_color(kb, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(kb, lv_color_white(), LV_PART_ITEMS);
+    lv_obj_set_style_text_color(kb, lv_color_black(), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(kb, ESPAPERPLAY_UI_BORDER, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(kb, lv_color_black(), LV_PART_ITEMS);
+    lv_obj_set_style_border_opa(kb, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb, 6, LV_PART_ITEMS);
+    lv_obj_set_style_shadow_width(kb, 0, LV_PART_ITEMS);
+    lv_keyboard_set_mode(kb, cfg->numeric ? LV_KEYBOARD_MODE_NUMBER : LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(kb, ta);
 
     if (cfg->ta_out != NULL) {

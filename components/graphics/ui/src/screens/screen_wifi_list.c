@@ -65,7 +65,7 @@ static const char *TAG = "ESPaperPlay_UI";
 #define WIFI_LIST_REF_H 800                /* 基准逻辑高度（缩放参考） */
 #define WIFI_LIST_BAR_H 30                 /* 标题栏高度（基准） */
 #define WIFI_LIST_MIN_H 24                 /* 标题栏最小高度 */
-#define WIFI_LIST_MARGIN 16                /* 内容与屏幕边缘间距 */
+#define WIFI_LIST_MARGIN ESPAPERPLAY_UI_MARGIN /* 内容与屏幕边缘间距 */
 #define WIFI_LIST_ROW_H 44                 /* 列表行高度（基准） */
 #define WIFI_LIST_BTN_H 52                 /* 按钮高度（基准） */
 #define WIFI_LIST_POLL_PERIOD_MS 500       /* 连接状态轮询周期 */
@@ -151,10 +151,7 @@ static int wifi_list_btn_h(void) {
 }
 
 /** 标题栏高度（缩放 + 下限）。 */
-static int wifi_list_bar_h(void) {
-    const int h = espaperplay_ui_scaled(WIFI_LIST_BAR_H);
-    return h < WIFI_LIST_MIN_H ? WIFI_LIST_MIN_H : h;
-}
+static int wifi_list_bar_h(void) { return ESPAPERPLAY_UI_HEADER_H; }
 
 /** 更新状态提示行（仅文本变化时写入，EPD 上避免无谓刷新）。 */
 static void wifi_list_status_set(const char *text) {
@@ -471,12 +468,7 @@ static void wifi_list_build_list_view(lv_obj_t *parent, int32_t scr_w, int32_t s
     s_list_card = lv_obj_create(parent);
     lv_obj_set_size(s_list_card, scr_w - 2 * WIFI_LIST_MARGIN, card_h);
     lv_obj_set_pos(s_list_card, WIFI_LIST_MARGIN, espaperplay_ui_scaled(40));
-    lv_obj_set_style_bg_color(s_list_card, lv_color_white(), 0);
-    lv_obj_set_style_border_color(s_list_card, lv_color_black(), 0);
-    lv_obj_set_style_border_width(s_list_card, 2, 0);
-    lv_obj_set_style_radius(s_list_card, 12, 0);
-    lv_obj_set_style_pad_all(s_list_card, 0, 0);
-    lv_obj_remove_flag(s_list_card, LV_OBJ_FLAG_SCROLLABLE);
+    espaperplay_ui_card_style(s_list_card);
 
     /* 内嵌滚动列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
     s_list = lv_obj_create(s_list_card);

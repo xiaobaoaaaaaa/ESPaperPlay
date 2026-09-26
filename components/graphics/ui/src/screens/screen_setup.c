@@ -69,7 +69,7 @@ static const char *TAG = "ESPaperPlay_UI";
 #define SETUP_REF_H 800              /* 基准逻辑高度（缩放参考） */
 #define SETUP_BAR_H 30               /* 标题栏高度（基准） */
 #define SETUP_MIN_H 24               /* 标题栏最小高度 */
-#define SETUP_MARGIN 16              /* 内容与屏幕边缘间距 */
+#define SETUP_MARGIN ESPAPERPLAY_UI_MARGIN /* 内容与屏幕边缘间距 */
 #define SETUP_BTN_H 52               /* 主按钮高度（基准） */
 #define SETUP_BTN_GAP 16             /* 按钮纵向间距（基准） */
 #define SETUP_POLL_PERIOD_MS 500     /* 连接状态轮询周期 */
@@ -168,10 +168,7 @@ static int32_t s_content_h = 0;
 
 /** 基准值按屏高缩放（取整）。 */
 /** 标题栏高度（缩放 + 下限）。 */
-static int setup_bar_h(void) {
-    const int h = espaperplay_ui_scaled(SETUP_BAR_H);
-    return h < SETUP_MIN_H ? SETUP_MIN_H : h;
-}
+static int setup_bar_h(void) { return ESPAPERPLAY_UI_HEADER_H; }
 
 /** 按钮高度（缩放 + 下限，保证可点按面积）。 */
 static int setup_btn_h(void) {
@@ -316,8 +313,7 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
     lv_obj_set_pos(title, 0, espaperplay_ui_scaled(56));
 
     lv_obj_t *body = espaperplay_ui_label_create(
-        parent, "首次使用需要先完成基本配置。\n设备已开启热点，请选择一种配置方式：", 16,
-        LV_TEXT_ALIGN_CENTER);
+        parent, "选择一种方式完成设备配置。\n也可以稍后在设置中继续。", 16, LV_TEXT_ALIGN_CENTER);
     lv_obj_set_pos(body, 0, espaperplay_ui_scaled(110));
 
     /* 两个路径按钮靠下排布（跳过入口贴底，基于内容区高度）。 */
@@ -336,7 +332,7 @@ static void setup_build_welcome(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) 
     lv_obj_set_pos(skip, SETUP_MARGIN, skip_y);
     lv_obj_set_style_bg_color(skip, lv_color_white(), 0);
     lv_obj_set_style_border_width(skip, 0, 0);
-    lv_obj_set_style_radius(skip, 8, 0);
+    lv_obj_set_style_radius(skip, ESPAPERPLAY_UI_RADIUS, 0);
     lv_obj_t *skip_label = lv_label_create(skip);
     lv_label_set_text(skip_label, "跳过引导，直接开始");
     lv_obj_set_style_text_color(skip_label, lv_color_black(), 0);
@@ -352,8 +348,14 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     setup_web_url(url, sizeof(url));
 
     char ap_line[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 48];
-    snprintf(ap_line, sizeof(ap_line), "1. 手机连接设备热点「%s」",
-             espaperplay_system_get_config()->ap_ssid);
+    espaperplay_wifi_status_t wifi;
+    if (espaperplay_wifi_get_status(&wifi) == ESP_OK && wifi.mode == ESPAPERPLAY_WIFI_MODE_STA &&
+        wifi.connected) {
+        snprintf(ap_line, sizeof(ap_line), "1. 手机与设备连接同一个 WiFi");
+    } else {
+        snprintf(ap_line, sizeof(ap_line), "1. 手机连接设备热点「%s」",
+                 espaperplay_system_get_config()->ap_ssid);
+    }
 
     const int btn_y = setup_bottom_btn_y();
     const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
@@ -399,8 +401,8 @@ static void setup_build_web(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
              "%s\n2. 扫描二维码，或浏览器打开上方地址\n3. 在网页向导中完成配置后，回到这里点「完成配置」",
              ap_line);
     lv_obj_t *steps_label = espaperplay_ui_label_create(parent, steps, 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_style_pad_left(steps_label, SETUP_MARGIN, 0);
-    lv_obj_set_pos(steps_label, 0, y);
+    lv_obj_set_width(steps_label, scr_w - 2 * SETUP_MARGIN);
+    lv_obj_set_pos(steps_label, SETUP_MARGIN, y);
 
     espaperplay_ui_modal_button(parent, "返回", SETUP_MARGIN, btn_y, btn_w, setup_btn_h(), false,
                  setup_btn_back_cb, NULL);
@@ -577,11 +579,13 @@ static void setup_build_input(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
     lv_obj_set_scrollbar_mode(s_input_list, LV_SCROLLBAR_MODE_OFF);
     lv_obj_remove_flag(s_input_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
 
-    const int btn_w = (scr_w - 2 * SETUP_MARGIN - 12) / 2;
-    espaperplay_ui_modal_button(parent, "手动输入", SETUP_MARGIN, btn_y, btn_w, btn_h, false,
-                 setup_btn_manual_cb, NULL);
-    espaperplay_ui_modal_button(parent, "重新扫描", SETUP_MARGIN + btn_w + 12, btn_y, btn_w, btn_h, false,
-                 setup_btn_rescan_cb, NULL);
+    const int btn_w = (scr_w - 2 * SETUP_MARGIN - 24) / 3;
+    espaperplay_ui_modal_button(parent, "返回", SETUP_MARGIN, btn_y, btn_w, btn_h, false,
+                               setup_btn_back_cb, NULL);
+    espaperplay_ui_modal_button(parent, "手动输入", SETUP_MARGIN + btn_w + 12, btn_y, btn_w,
+                               btn_h, false, setup_btn_manual_cb, NULL);
+    espaperplay_ui_modal_button(parent, "重新扫描", SETUP_MARGIN + 2 * (btn_w + 12), btn_y,
+                               btn_w, btn_h, false, setup_btn_rescan_cb, NULL);
 
     /* 扫描进行中保持空列表等回调；否则用缓存结果即时重建。 */
     if (!s_scan_busy) {

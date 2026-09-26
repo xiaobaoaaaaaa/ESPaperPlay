@@ -35,107 +35,16 @@
 #include "espaperplay_wifi.h"
 
 #include "lvgl.h"
+#include "icons_data.h"
 
 static const char *TAG = "ESPaperPlay_UI";
 
-/* ====================================================================
- * 设置页（系统设置管理，UI 风格与主界面 / 天气页统一）
- * ====================================================================
- *
- * 墨水屏不适合滚动：设置项按内容量分页，分页粒度是子类（一个子类的行不
- * 拆开）：卡片放得下就整卡一页；放不下拆成片段跨页——有后续的片段省略
- * 卡片下边框、有前序的片段省略上边框（且不再重复标题头），墨水屏上即可
- * 肉眼辨认"此卡未完 / 接上页"；左右滑动切换分页（与主界面 / 天气页一致），
- * 点击整行触发操作（滑动优先于点击，互不冲突）。
- *
- * 布局：顶部标题栏（"设置"居中）+ 分页内容（自页顶起排）+ 底部页面指示点。
- * 每个大类一个「标题头 + 卡片」块：
- *   - 大类标题头在卡片外：左侧黑色竖条 + 粗体大字（页内最强层级）；
- *   - 圆角卡片内：子类标题（粗体小字 + 右侧细线延伸）+ 设置行；
- *   - 可点行（步进 / 循环 / 字体 / 动作）值区右侧带 ">" 箭头，纯展示行
- *     （Web 提示 / 信息）无箭头——墨水屏仅黑白双色（阈值判定下浅灰=白
- *     不可见），用"有无箭头"区分可点 / 只读，两种刷新模式下都成立。
- *
- * 交互：
- *   - 数值步进行：点击打开编辑模态（大号数值 + [-] [+] 步进 + 完成），
- *     修改立即持久化到 NVS 并同步应用到运行中的服务（EPD 睡眠超时 /
- *     GUI 全刷阈值 / 按键长按时间），无需重启；
- *   - 循环行：点击切到下一选项并立即持久化（BOOT 长按动作 UI 分发实时
- *     读取，立即生效）；WiFi 模式切换先弹二级确认（网络会重新连接，
- *     IP 可能变化），确认后自动重新应用网络；
- *   - Web 提示行：仅展示当前状态，提示到 Web 管理页配置（设备无键盘，
- *     SSID / 密码 / API Key 等长文本不适合在墨水屏上输入）；
- *   - 字体行：点击打开字体列表（出厂内置 + SD 卡），选择后需重启生效；
- *   - 软件版本行：仅展示当前固件版本；
- *   - 屏幕左/右边缘向内滑动返回主页（安卓边缘手势）；中间左右滑动切换
- *     分页；点击行触发操作（滑动优先，不误触）；
- *   - 物理按键单击返回；模态打开时单击先关闭模态。
- *
- * 行点击在页面 on_touch 中判定（与主界面一致）：按下时记录起点并做整行
- * 命中检测，释放时横向位移达阈值 -> 切页，小位移且起点在行内 -> 触发
- * 该行操作。不依赖 LVGL CLICKED 事件（滚动/滑动会误触），因此整行都可
- * 点击，且滑动切页优先于点击。
- *
- * 风格统一（主界面设计基准）：FreeType 中文（16 / 20 / 24 档）、白底
- * 黑字、圆角卡片（与屏幕边缘保持间距）。
- */
-
-#define SETTINGS_MARGIN 16            /* 卡片与屏幕边缘间距 */
-#define SETTINGS_CARD_PAD 16          /* 卡片左右内边距（上下各用其半） */
-#define SETTINGS_HEADER_GAP 10        /* 大类标题头与卡片间距 */
-#define SETTINGS_UI_PERIOD_MS 5000    /* 周期刷新（Web 端改配置后同步显示） */
-
-/* ---- 尺寸缩放（方案 1：行高/间距按屏高缩放，支持横屏与小屏） ----
- * 基准逻辑高度 800px（本项目竖屏 480x800）。所有垂直尺寸按
- * scale = scr_h / 800 缩放并设最小下限（保证 16px 字号可读）；
- * 宽度方向本就按 scr_w 自适应。字号保持固定档位（16/20/24/32），
- * 避免 FreeType 缓存（6 项）被缩放字号挤爆。 */
-#define SETTINGS_REF_H 800           /* 基准逻辑高度（缩放参考） */
-#define SETTINGS_BAR_H 30            /* 标题栏高度（基准） */
-#define SETTINGS_SECTION_TITLE_H 36  /* 大类标题头高度（基准，竖条+粗体20px） */
-#define SETTINGS_SUBGROUP_TITLE_H 32 /* 子类标题区高度（基准，粗体16px+细线） */
-#define SETTINGS_HINT_H 30           /* 页底提示区高度（基准） */
-#define SETTINGS_ROW_H 52            /* 设置行高度（基准） */
-#define SETTINGS_MIN_H 24            /* 提示区最小高度（16px 字行高约 19px） */
-#define SETTINGS_MIN_ROW_H 40        /* 行最小高度 */
-
-
-/** 基准值按屏高缩放（取整）。 */
-/** 标题栏高度（缩放 + 下限）。 */
-static int settings_bar_h(void) {
-    int h = espaperplay_ui_scaled(SETTINGS_BAR_H);
-    return h < SETTINGS_MIN_H ? SETTINGS_MIN_H : h;
-}
-
-/** 大类标题头高度（缩放 + 下限；粗体 20px 字行高约 26px）。 */
-static int settings_section_title_h(void) {
-    int h = espaperplay_ui_scaled(SETTINGS_SECTION_TITLE_H);
-    return h < 30 ? 30 : h;
-}
-
-/** 子类标题区高度（缩放 + 下限；粗体 16px 字行高约 21px）。 */
-static int settings_subgroup_title_h(void) {
-    int h = espaperplay_ui_scaled(SETTINGS_SUBGROUP_TITLE_H);
-    return h < 26 ? 26 : h;
-}
-
-/** 卡片内边距（缩放 + 下限；上下方向各用其半）。 */
-static int settings_card_pad(void) {
-    int p = espaperplay_ui_scaled(SETTINGS_CARD_PAD);
-    return p < 12 ? 12 : p;
-}
-
-/** 页底提示区高度（缩放 + 下限）。 */
-static int settings_hint_h(void) {
-    int h = espaperplay_ui_scaled(SETTINGS_HINT_H);
-    return h < SETTINGS_MIN_H ? SETTINGS_MIN_H : h;
-}
-
-/** 设置行高度（缩放 + 下限）。 */
-static int settings_row_h(void) {
-    int h = espaperplay_ui_scaled(SETTINGS_ROW_H);
-    return h < SETTINGS_MIN_ROW_H ? SETTINGS_MIN_ROW_H : h;
-}
+/* 分类列表和二级详情沿用 Android 设置的阅读顺序。
+ * 不使用惯性滚动：每类设置在一屏内呈现，返回先回分类，再回首页。
+ * 设置应用仍由内部 RAM 栈任务执行，编辑弹窗确认后才持久化。 */
+#define SETTINGS_MARGIN ESPAPERPLAY_UI_MARGIN
+#define SETTINGS_REF_H 800
+#define SETTINGS_UI_PERIOD_MS 5000
 
 #define SETTINGS_FONT_MAX 16 /* 字体列表上限（内置 + SD 卡） */
 
@@ -161,6 +70,7 @@ typedef struct {
     settings_row_type_t type;                             /*!< 行类型 */
     lv_obj_t *row_obj;                                    /*!< 行对象（命中检测用，构建时填充） */
     lv_obj_t *value_label;                                /*!< 值标签（构建时填充） */
+    char last_value[64]; /* 原始值缓存：LVGL 的省略号模式会临时改写标签文本。 */
     int32_t min, max, step;                               /*!< STEPPER：范围与步进 */
     int32_t (*get_value)(void);                           /*!< STEPPER/CYCLE：读取当前值 */
     esp_err_t (*set_value)(int32_t);                      /*!< STEPPER/CYCLE：写入新值 */
@@ -345,6 +255,11 @@ static void settings_open_test(void) {
     espaperplay_ui_page_push_lv(&espaperplay_ui_page_test);
 }
 
+/* 预览不修改自动睡眠配置；任意触摸即可返回设置页。 */
+static void settings_open_screensaver(void) {
+    espaperplay_ui_page_push_lv(&espaperplay_ui_page_screensaver);
+}
+
 static void settings_open_setup(void) {
     ESP_LOGI(TAG, "settings: open setup wizard");
     espaperplay_ui_page_push_lv(&espaperplay_ui_page_setup);
@@ -382,7 +297,7 @@ static void settings_fmt_weather_host(int32_t v, char *buf, size_t size) {
 /* 行定义（顺序与分页一致，见 s_pages）。 */
 static settings_row_t s_rows[] = {
     /* 设备：显示 */
-    {.name = "屏幕空闲自动睡眠",
+    {.name = "显示驱动休眠",
      .type = SETTINGS_ROW_STEPPER,
      .min = 0,
      .max = 86400,
@@ -421,7 +336,8 @@ static settings_row_t s_rows[] = {
      .set_value = settings_set_reader_img_gray4,
      .fmt_value = settings_fmt_reader_img_gray4,
      .options = s_reader_img_gray4_options,
-     .option_count = (int)(sizeof(s_reader_img_gray4_options) / sizeof(s_reader_img_gray4_options[0]))},
+     .option_count =
+         (int)(sizeof(s_reader_img_gray4_options) / sizeof(s_reader_img_gray4_options[0]))},
     /* 系统：网络 */
     {.name = "WiFi 模式",
      .type = SETTINGS_ROW_CYCLE,
@@ -445,83 +361,40 @@ static settings_row_t s_rows[] = {
      .options = s_sd_log_level_options,
      .option_count = (int)(sizeof(s_sd_log_level_options) / sizeof(s_sd_log_level_options[0]))},
     {.name = "测试页", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_test},
+    {.name = "屏保预览", .type = SETTINGS_ROW_ACTION, .on_action = settings_open_screensaver},
     /* 服务：天气 */
     {.name = "天气 API Key", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_weather_key},
     {.name = "天气位置", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_weather_loc},
     {.name = "天气 API Host", .type = SETTINGS_ROW_WEB, .fmt_value = settings_fmt_weather_host},
 };
 
-/* ------------------------------------------------------------------ */
-/* 大类定义（动态分页：按可用高度自动决定每页放几个大类）                   */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-    const char *title; /*!< 子类标题（细分类，如 显示 / 按键） */
-    int row_start;     /*!< 组内首行在 s_rows 中的下标 */
-    int row_count;     /*!< 组内行数 */
-} settings_subgroup_t;
-
-typedef struct {
-    const char *title;                    /*!< 大类名称（横线分隔符呈现） */
-    const settings_subgroup_t *subgroups; /*!< 子类列表 */
-    int subgroup_count;                   /*!< 子类数 */
-    const char *hint;                     /*!< 页底提示（Web 配置项提示，可为 NULL） */
-} settings_section_t;
-
-static const settings_subgroup_t s_dev_subgroups[] = {
-    {"显示", 0, 2},
-    {"按键", 2, 2},
-    {"阅读器", 4, 1},
-};
-
-static const settings_subgroup_t s_sys_subgroups[] = {
-    {"网络", 5, 4},
-    {"字体", 9, 1},
-    {"开发者", 10, 3},
-};
-
-static const settings_subgroup_t s_svc_subgroups[] = {
-    {"天气", 13, 3},
-};
-
-/* 全部大类（顺序即显示顺序）。 */
-static const settings_section_t s_sections[] = {
-    {"设备", s_dev_subgroups, 2, NULL},
-    {"系统", s_sys_subgroups, 3, NULL},
-    {"服务", s_svc_subgroups, 1, "请在 Web 管理页配置"},
-};
-
 #define SETTINGS_ROW_CNT (int)(sizeof(s_rows) / sizeof(s_rows[0]))
-#define SETTINGS_SECTION_CNT (int)(sizeof(s_sections) / sizeof(s_sections[0]))
-#define SETTINGS_PAGE_MAX 8 /* 分页上限（动态分组，最坏每个子类独占一页=7） */
-
-/* 卡片段：一个大类在一页上的连续子类区间。整卡一页 = 单片段（前后无边框
- * 省略）；跨页 = 多片段，边框语言见 settings_page_create。 */
 typedef struct {
-    const settings_section_t *sec; /*!< 所属大类 */
-    int sg_start;                  /*!< 首个子类下标（sec->subgroups 内） */
-    int sg_count;                  /*!< 片段内子类数 */
-    bool has_prev;                 /*!< 前序片段在上一页（省略标题头与上边框） */
-    bool has_next;                 /*!< 后续片段在下一页（省略下边框） */
-    bool hint;                     /*!< 片段含页底提示（跟随大类末个子类） */
-} settings_frag_t;
-
-/* 运行时分页分组：每页若干卡片段（settings_enter 按可用高度构建）。
- * 每页片段数 <= 大类数：同一大类在一页上至多一个片段（子类不拆散）。 */
-static settings_frag_t s_page_frags[SETTINGS_PAGE_MAX][SETTINGS_SECTION_CNT];
-static int s_page_frag_cnt[SETTINGS_PAGE_MAX];
-static int s_page_count = 0;                 /*!< 实际分页数 */
-static bool s_page_built[SETTINGS_PAGE_MAX]; /*!< 分页控件是否已构建（隐藏页惰性构建） */
-static int s_area_y = 0;                     /*!< 分页容器顶部 y（enter 时计算，惰性构建用） */
-static int s_area_h = 0;                     /*!< 分页容器高度 */
-
-/* ------------------------------------------------------------------ */
-/* 页面状态                                                             */
-/* ------------------------------------------------------------------ */
-
-static lv_obj_t *s_page_objs[SETTINGS_PAGE_MAX];  /*!< 分页容器 */
-static lv_obj_t *s_dots[SETTINGS_PAGE_MAX];       /*!< 页面指示点 */
-static int s_page = 0;                            /*!< 当前分页索引 */
+    const char *title;
+    const char *summary;
+    const lv_image_dsc_t *icon;
+    int rows[4];
+    int count;
+    const char *hint;
+} settings_category_t;
+static const settings_category_t s_categories[] = {
+    {"网络与连接", "Wi-Fi、连接方式与设备配置", &icon_wifi_16, {5, 6, 7, 8}, 4,
+     "Wi-Fi 名称和密码可在 Web 管理页配置。"},
+    {"显示", "屏幕刷新、字体与屏保", &icon_settings_64, {0, 1, 9, 13}, 4,
+     "屏幕休眠只关闭显示驱动，不影响设备联网。"},
+    {"按键", "长按动作与响应时间", &icon_debug_64, {2, 3}, 2, NULL},
+    {"阅读器", "图像显示与阅读偏好", &icon_reader_64, {4}, 1,
+     "字体大小可在阅读时通过底部工具栏调整。"},
+    {"天气服务", "位置与服务配置", &icon_weather_64, {14, 15, 16}, 3,
+     "请在 Web 管理页配置天气服务。"},
+    {"系统", "版本、日志与设备测试", &icon_debug_64, {10, 11, 12}, 3, NULL},
+};
+#define SETTINGS_CATEGORY_CNT (int)(sizeof(s_categories) / sizeof(s_categories[0]))
+static int s_category = -1;
+static bool s_resume_category = false;
+static lv_obj_t *s_content = NULL;
+static lv_obj_t *s_category_rows[SETTINGS_CATEGORY_CNT];
+static int s_detail_row_h;
 static lv_timer_t *s_timer = NULL;                /*!< 周期刷新定时器 */
 static lv_obj_t *s_modal = NULL;                  /*!< 模态覆盖层（NULL=未打开） */
 static settings_row_t *s_modal_row = NULL;        /*!< 模态正在编辑的行 */
@@ -549,17 +422,6 @@ static void settings_row_trigger(settings_row_t *row);
 /* 工具函数                                                             */
 /* ------------------------------------------------------------------ */
 
-/** FreeType 字体按需加载（与主界面共用缓存字号档）。 */
-/** FreeType 粗体（大类/子类标题层级用；缓存按 (名,号,式) 取项，不挤常规档）。 */
-static lv_font_t *settings_font_bold(int size_px) {
-    return espaperplay_fonts_load(SETTINGS_FONT_NAME, (uint32_t)size_px,
-                                  ESPAPERPLAY_FONT_STYLE_BOLD);
-}
-
-/** 通用标签：白底黑字 + FreeType 字体 + 禁用 LVGL 滚动（防误滑页面）。 */
-/** 逻辑分辨率（旋转后）。 */
-/** 点在矩形内（逻辑坐标）。 */
-/** 对象相对屏幕的坐标（累加父级偏移；LVGL 的 get_x/y 只返回相对父）。 */
 /** 刷新单行值标签（仅文本变化时更新，EPD 上避免无谓刷新）。 */
 static void settings_row_refresh(settings_row_t *row) {
     if (row->value_label == NULL || row->fmt_value == NULL) {
@@ -567,7 +429,10 @@ static void settings_row_refresh(settings_row_t *row) {
     }
     char buf[64];
     row->fmt_value(row->get_value ? row->get_value() : 0, buf, sizeof(buf));
-    espaperplay_ui_label_set_text_dedup(row->value_label, buf);
+    if (strcmp(row->last_value, buf) != 0) {
+        strlcpy(row->last_value, buf, sizeof(row->last_value));
+        lv_label_set_text(row->value_label, buf);
+    }
 }
 
 /** 刷新全部行（进入页面 / 周期刷新 / 修改后调用）。 */
@@ -702,262 +567,103 @@ static bool settings_row_tappable(const settings_row_t *row) {
            row->type == SETTINGS_ROW_FONT || row->type == SETTINGS_ROW_ACTION;
 }
 
-/** 构建一个设置行：名称（左）+ 值（右）+ 可点行箭头。整行命中检测由页面 on_touch 完成。 */
+/** 设置项采用上下两行：名称和当前值分别完整占用行宽。 */
 static void settings_row_create(lv_obj_t *parent, settings_row_t *row, int x, int y, int w) {
-    const bool tappable = settings_row_tappable(row);
-    const int arrow_w = tappable ? 24 : 0; /* 值区为箭头预留的宽度 */
-
-    lv_obj_t *row_obj = lv_obj_create(parent);
-    lv_obj_set_size(row_obj, w, settings_row_h() - 4);
-    lv_obj_set_pos(row_obj, x, y);
-    lv_obj_set_style_bg_color(row_obj, lv_color_white(), 0);
-    lv_obj_set_style_border_width(row_obj, 0, 0);
-    lv_obj_set_style_radius(row_obj, 0, 0);
-    lv_obj_set_style_pad_all(row_obj, 0, 0);
-    lv_obj_remove_flag(row_obj, LV_OBJ_FLAG_SCROLLABLE);
-    row->row_obj = row_obj;
-
-    /* 名称（左，垂直居中与右侧值对齐）；值标签宽度随屏宽缩放防窄屏溢出 */
-    const int value_w = w < 300 ? w / 3 : (w < 400 ? 140 : 160);
-    lv_obj_t *name = espaperplay_ui_label_create(row_obj, row->name, 16, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_width(name, w - value_w - 8 - arrow_w);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 4, 0);
-
-    /* 值（右，垂直居中，超长省略号截断；可点行左移为箭头让位） */
-    lv_obj_t *value = espaperplay_ui_label_create(row_obj, "", 16, LV_TEXT_ALIGN_RIGHT);
-    lv_obj_set_width(value, value_w);
-    lv_obj_align(value, LV_ALIGN_RIGHT_MID, -4 - arrow_w, 0);
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, w, s_detail_row_h);
+    espaperplay_ui_card_style(obj);
+    lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_BOTTOM, 0);
+    row->row_obj = obj;
+    lv_obj_t *name = espaperplay_ui_label_create(obj, row->name, 20, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(name, 8, 12); lv_obj_set_width(name, w - 44);
+    lv_obj_t *value = espaperplay_ui_label_create(obj, row->type == SETTINGS_ROW_ACTION ? "点击打开" : "", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(value, 8, 44); lv_obj_set_size(value, w - 44, 24);
     lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
     row->value_label = value;
-
-    if (tappable) {
-        lv_obj_t *arrow = lv_label_create(row_obj);
-        lv_label_set_text(arrow, ">");
-        lv_obj_set_style_text_color(arrow, lv_color_black(), 0);
-        lv_font_t *font = espaperplay_ui_font(16);
-        if (font != NULL) {
-            lv_obj_set_style_text_font(arrow, font, 0);
-        }
-        lv_obj_align(arrow, LV_ALIGN_RIGHT_MID, -6, 0);
+    row->last_value[0] = '\0';
+    if (settings_row_tappable(row)) {
+        espaperplay_ui_chevron_create(obj, w - 32, (s_detail_row_h - 20) / 2, false);
     }
 }
 
-/** 大类标题头：左侧黑色竖条 + 粗体大字（页内最强层级，位于卡片外）。 */
-static void settings_section_title_create(lv_obj_t *parent, const char *text, int x, int y, int w) {
-    lv_obj_t *head = lv_obj_create(parent);
-    lv_obj_set_size(head, w, settings_section_title_h());
-    lv_obj_set_pos(head, x, y);
-    lv_obj_set_style_bg_color(head, lv_color_white(), 0);
-    lv_obj_set_style_border_width(head, 0, 0);
-    lv_obj_set_style_radius(head, 0, 0);
-    lv_obj_set_style_pad_all(head, 0, 0);
-    lv_obj_remove_flag(head, LV_OBJ_FLAG_SCROLLABLE);
-
-    const int bar_h = espaperplay_ui_scaled(22) < 16 ? 16 : espaperplay_ui_scaled(22);
-    lv_obj_t *bar = lv_obj_create(head);
-    lv_obj_set_size(bar, 4, bar_h);
-    lv_obj_align(bar, LV_ALIGN_LEFT_MID, 4, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *label = lv_label_create(head);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = settings_font_bold(20);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
+static void settings_content_build(void) {
+    for (int i = 0; i < SETTINGS_ROW_CNT; i++) {
+        s_rows[i].row_obj = NULL;
+        s_rows[i].value_label = NULL;
     }
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 20, 0);
-}
-
-/** 子类标题：粗体小字 + 右侧细线延伸（弱于大类标题头、强于普通行）。
- * 替代原黑底白字条：黑条数量多时互相抢视线，大类反而被淹没。 */
-static void settings_subgroup_title_create(lv_obj_t *parent, const char *text, int x, int y,
-                                           int w) {
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, w, settings_subgroup_title_h());
-    lv_obj_set_pos(row, x, y);
-    lv_obj_set_style_bg_color(row, lv_color_white(), 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_radius(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    lv_obj_t *label = lv_label_create(row);
-    lv_label_set_text(label, text);
-    lv_obj_set_style_text_color(label, lv_color_black(), 0);
-    lv_font_t *font = settings_font_bold(16);
-    if (font != NULL) {
-        lv_obj_set_style_text_font(label, font, 0);
+    memset(s_category_rows, 0, sizeof(s_category_rows));
+    if (s_content) lv_obj_delete(s_content);
+    int32_t w, h; espaperplay_ui_screen_size(&w, &h);
+    s_content = lv_obj_create(lv_screen_active());
+    lv_obj_set_pos(s_content, 0, ESPAPERPLAY_UI_HEADER_H);
+    lv_obj_set_size(s_content, w, h - ESPAPERPLAY_UI_HEADER_H);
+    espaperplay_ui_card_style(s_content);
+    lv_obj_set_style_border_width(s_content, 0, 0);
+    lv_obj_set_style_radius(s_content, 0, 0);
+    if (h < 700) {
+        lv_obj_add_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scroll_dir(s_content, LV_DIR_VER);
     }
-    lv_obj_set_style_pad_right(label, 10, 0);
-
-    /* 右侧细线（flex 伸展占满剩余空间） */
-    lv_obj_t *line = lv_obj_create(row);
-    lv_obj_set_height(line, 1);
-    lv_obj_set_flex_grow(line, 1);
-    lv_obj_set_style_bg_color(line, lv_color_black(), 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_remove_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-}
-
-/** 卡片段高度：标题头（仅片段含大类开头时）+ 卡片[上下内边距 + 子类 + 行 + 提示]。 */
-static int settings_frag_h(const settings_frag_t *f) {
-    int h = f->has_prev ? 0 : settings_section_title_h() + SETTINGS_HEADER_GAP;
-    h += settings_card_pad(); /* 上下内边距各半 */
-    for (int g = 0; g < f->sg_count; g++) {
-        h += settings_subgroup_title_h();
-        h += f->sec->subgroups[f->sg_start + g].row_count * settings_row_h();
-    }
-    if (f->hint) {
-        h += settings_hint_h();
-    }
-    return h;
-}
-
-/** 构建一个分页：依序布局各卡片段，自页顶起排（接续片段直接顶到页首，
- * 延续"从上页流下来"的阅读感）。
- * 片段边框语言（border_side 是位标志，须按位或组合，单写一边只会画那条线）：
- * 有后续 -> 上+左+右（缺下）；有前序 -> 下+左+右（缺上，且不重复标题头）；
- * 跨页中段（前后皆续）-> 无边框。墨水屏黑白下靠"缺口"辨认接续。 */
-static void settings_page_create(lv_obj_t *parent, const settings_frag_t *frags,
-                                 int frag_count) {
-    int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
-    const int card_w = scr_w - 2 * SETTINGS_MARGIN;
-    const int pad = settings_card_pad();
-    const int inner_w = card_w - 2 * pad;
-    int y = 8;
-
-    for (int i = 0; i < frag_count; i++) {
-        const settings_frag_t *f = &frags[i];
-        const int head_h = f->has_prev ? 0 : settings_section_title_h() + SETTINGS_HEADER_GAP;
-
-        if (!f->has_prev) {
-            settings_section_title_create(parent, f->sec->title, SETTINGS_MARGIN, y, card_w);
-        }
-        y += head_h;
-
-        const int card_h = settings_frag_h(f) - head_h;
-        lv_obj_t *card = lv_obj_create(parent);
-        lv_obj_set_size(card, card_w, card_h);
-        lv_obj_set_pos(card, SETTINGS_MARGIN, y);
-        lv_obj_set_style_bg_color(card, lv_color_white(), 0);
-        lv_obj_set_style_border_color(card, lv_color_black(), 0);
-        lv_obj_set_style_border_width(card, 2, 0);
-        lv_border_side_t side = LV_BORDER_SIDE_FULL;
-        if (f->has_prev && f->has_next) {
-            side = LV_BORDER_SIDE_NONE;
-        } else if (f->has_prev) {
-            side = LV_BORDER_SIDE_BOTTOM | LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT;
-        } else if (f->has_next) {
-            side = LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT;
-        }
-        lv_obj_set_style_border_side(card, side, 0);
-        lv_obj_set_style_radius(card, 12, 0);
-        lv_obj_set_style_pad_all(card, 0, 0);
-        lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-        /* 子类（粗体+细线）-> 行（行间 1px 分隔线），左右缩进卡片内边距 */
-        int ry = pad / 2;
-        for (int g = 0; g < f->sg_count; g++) {
-            const settings_subgroup_t *sg = &f->sec->subgroups[f->sg_start + g];
-            settings_subgroup_title_create(card, sg->title, pad, ry, inner_w);
-            ry += settings_subgroup_title_h();
-            for (int r = 0; r < sg->row_count; r++) {
-                settings_row_t *row = &s_rows[sg->row_start + r];
-                settings_row_create(card, row, pad, ry, inner_w);
-                if (r < sg->row_count - 1) {
-                    lv_obj_t *sep = lv_obj_create(card);
-                    lv_obj_set_size(sep, inner_w, 1);
-                    lv_obj_set_pos(sep, pad, ry + settings_row_h() - 3);
-                    lv_obj_set_style_bg_color(sep, lv_color_black(), 0);
-                    lv_obj_set_style_border_width(sep, 0, 0);
-                    lv_obj_set_style_radius(sep, 0, 0);
-                    lv_obj_remove_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
-                }
-                ry += settings_row_h();
+    espaperplay_ui_chevron_create(s_content, 26, 30, true);
+    const settings_category_t *cat = s_category >= 0 ? &s_categories[s_category] : NULL;
+    lv_obj_t *title = espaperplay_ui_label_create(s_content, cat ? cat->title : "设置", 32, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(title, 76, 18); lv_obj_set_width(title, w - 96);
+    lv_obj_t *summary = espaperplay_ui_label_create(s_content,
+        cat ? cat->summary : "让设备更合你的习惯", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(summary, 24, 80); lv_obj_set_width(summary, w - 48);
+    if (!cat) {
+        int row_h = (h - ESPAPERPLAY_UI_HEADER_H - 132) / SETTINGS_CATEGORY_CNT;
+        if (row_h < 88) row_h = 88;
+        for (int i = 0; i < SETTINGS_CATEGORY_CNT; i++) {
+            const settings_category_t *c = &s_categories[i];
+            lv_obj_t *row = lv_obj_create(s_content);
+            lv_obj_set_pos(row, 16, 120 + i * row_h); lv_obj_set_size(row, w - 32, row_h);
+            espaperplay_ui_card_style(row); lv_obj_set_style_border_width(row, 0, 0);
+            s_category_rows[i] = row;
+            if (i == 2 || i == 5) {
+                lv_obj_t *symbol = lv_obj_create(row);
+                espaperplay_ui_card_style(symbol);
+                lv_obj_set_size(symbol, i == 2 ? 24 : 32, 32);
+                lv_obj_set_pos(symbol, i == 2 ? 16 : 12, (row_h - 32) / 2);
+                lv_obj_set_style_radius(symbol, i == 2 ? 5 : LV_RADIUS_CIRCLE, 0);
+                lv_obj_set_style_border_width(symbol, 2, 0);
+                lv_obj_t *mark = espaperplay_ui_label_create(symbol, i == 2 ? "-" : "i", 20, LV_TEXT_ALIGN_CENTER);
+                lv_obj_set_size(mark, i == 2 ? 20 : 28, 28);
+                lv_obj_center(mark);
+            } else {
+                lv_obj_t *icon = lv_image_create(row);
+                lv_image_set_src(icon, c->icon); lv_image_set_pivot(icon, 0, 0);
+                lv_image_set_scale(icon, c->icon->header.w == 16 ? 512 : 128);
+                lv_obj_set_pos(icon, 12, (row_h - 32) / 2);
             }
+            lv_obj_t *name = espaperplay_ui_label_create(row, c->title, 24, LV_TEXT_ALIGN_LEFT);
+            lv_obj_set_pos(name, 64, (row_h - 66) / 2); lv_obj_set_width(name, w - 136);
+            lv_obj_t *sub = espaperplay_ui_label_create(row, c->summary, 16, LV_TEXT_ALIGN_LEFT);
+            lv_obj_set_pos(sub, 64, (row_h - 66) / 2 + 38); lv_obj_set_width(sub, w - 136);
+            espaperplay_ui_chevron_create(row, w - 64, (row_h - 20) / 2, false);
         }
-        /* 页底提示（Web 配置项提示，跟随大类末个子类所在片段） */
-        if (f->hint) {
-            lv_obj_t *hint = espaperplay_ui_label_create(card, f->sec->hint, 16, LV_TEXT_ALIGN_CENTER);
-            lv_obj_set_width(hint, inner_w);
-            lv_obj_set_pos(hint, pad, ry + 4);
+    } else {
+        s_detail_row_h = (h - ESPAPERPLAY_UI_HEADER_H - 220) / cat->count;
+        if (s_detail_row_h > 96) s_detail_row_h = 96;
+        if (s_detail_row_h < 72) s_detail_row_h = 72;
+        for (int i = 0; i < cat->count; i++) {
+            settings_row_create(s_content, &s_rows[cat->rows[i]], 16,
+                                124 + i * s_detail_row_h, w - 32);
         }
-        y += card_h;
+        if (cat->hint) {
+            lv_obj_t *hint = espaperplay_ui_label_create(s_content, cat->hint, 16, LV_TEXT_ALIGN_LEFT);
+            lv_obj_set_pos(hint, 24, 146 + cat->count * s_detail_row_h);
+            lv_obj_set_width(hint, w - 48);
+        }
     }
+    settings_refresh_all();
 }
 
-/** 按可用高度把子类动态装箱到各页（贪心）：卡片放得下整卡一页，放不下
- * 从子类边界拆成片段跨页（单个子类超高时独占一页强装，防御极端小屏）。 */
-static void settings_build_pages(int avail_h) {
-    s_page_count = 0;
-    for (int i = 0; i < SETTINGS_PAGE_MAX; i++) {
-        s_page_frag_cnt[i] = 0;
-    }
-    int cur_h = 0;
-
-    for (int s = 0; s < SETTINGS_SECTION_CNT; s++) {
-        const settings_section_t *sec = &s_sections[s];
-        int g = 0;
-        while (g < sec->subgroup_count) {
-            const bool has_prev = (g > 0); /* 前序子类在上一页：本片段无标题头 */
-            const int head_h = has_prev ? 0 : settings_section_title_h() + SETTINGS_HEADER_GAP;
-
-            /* 至少要装下第一个子类：本页非空且放不下 -> 开新页重试。 */
-            const bool first_is_last = (g + 1 == sec->subgroup_count);
-            const int min_need = head_h + settings_card_pad() +
-                                 settings_subgroup_title_h() +
-                                 sec->subgroups[g].row_count * settings_row_h() +
-                                 (first_is_last && sec->hint != NULL ? settings_hint_h() : 0);
-            if (cur_h > 0 && cur_h + min_need > avail_h) {
-                if (++s_page_count >= SETTINGS_PAGE_MAX) {
-                    ESP_LOGE(TAG, "settings: page overflow (>%d pages)", SETTINGS_PAGE_MAX);
-                    return;
-                }
-                cur_h = 0;
-                continue;
-            }
-
-            /* 从 g 起贪心多装子类（提示只跟末个子类）。 */
-            int take = 1;
-            int need = min_need;
-            while (g + take < sec->subgroup_count) {
-                const bool is_last = (g + take == sec->subgroup_count - 1);
-                const int extra = settings_subgroup_title_h() +
-                                  sec->subgroups[g + take].row_count * settings_row_h() +
-                                  (is_last && sec->hint != NULL ? settings_hint_h() : 0);
-                if (cur_h + need + extra > avail_h) {
-                    break;
-                }
-                need += extra;
-                take++;
-            }
-
-            settings_frag_t *f = &s_page_frags[s_page_count][s_page_frag_cnt[s_page_count]++];
-            f->sec = sec;
-            f->sg_start = g;
-            f->sg_count = take;
-            f->has_prev = has_prev;
-            f->has_next = (g + take < sec->subgroup_count);
-            f->hint = (!f->has_next && sec->hint != NULL);
-
-            cur_h += need;
-            g += take;
-        }
-    }
-    s_page_count++;
-    int frag_total = 0;
-    for (int p = 0; p < s_page_count; p++) {
-        frag_total += s_page_frag_cnt[p];
-    }
-    ESP_LOGI(TAG, "settings: %d sections -> %d pages, %d frags (avail %d px)",
-             SETTINGS_SECTION_CNT, s_page_count, frag_total, avail_h);
+static void settings_back(void) {
+    if (s_category >= 0) { s_category = -1; settings_content_build(); }
+    else if (espaperplay_ui_page_depth() > 1) { s_resume_category = false; espaperplay_ui_page_pop_lv(); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1082,61 +788,36 @@ static void settings_stepper_modal_open(settings_row_t *row) {
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层（点空白关闭）+ 居中卡片（尺寸按屏高缩放）。 */
-    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
-    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, espaperplay_ui_scaled(340),
-                                                      espaperplay_ui_scaled(280));
-
-    /* 标题 */
-    espaperplay_ui_modal_card_title(card, row->name, espaperplay_ui_scaled(14), 0);
-
-    /* 大号数值 */
-    s_modal_value_label = espaperplay_ui_label_create(card, "", 32, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(s_modal_value_label, LV_PCT(100));
-    lv_obj_set_pos(s_modal_value_label, 0, espaperplay_ui_scaled(66));
-
-    /* [-] [+] 步进按钮 */
-    lv_obj_t *minus = lv_button_create(card);
-    lv_obj_set_size(minus, espaperplay_ui_scaled(72), espaperplay_ui_scaled(52));
-    lv_obj_set_pos(minus, espaperplay_ui_scaled(30), espaperplay_ui_scaled(150));
-    lv_obj_set_style_bg_color(minus, lv_color_white(), 0);
-    lv_obj_set_style_border_color(minus, lv_color_black(), 0);
-    lv_obj_set_style_border_width(minus, 2, 0);
-    lv_obj_set_style_radius(minus, 8, 0);
-    lv_obj_t *minus_label = lv_label_create(minus);
-    lv_label_set_text(minus_label, "-");
-    lv_obj_set_style_text_color(minus_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(minus_label, espaperplay_ui_font(24), 0);
-    lv_obj_center(minus_label);
-    lv_obj_add_event_cb(minus, settings_modal_minus_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *plus = lv_button_create(card);
-    lv_obj_set_size(plus, espaperplay_ui_scaled(72), espaperplay_ui_scaled(52));
-    lv_obj_set_pos(plus, espaperplay_ui_scaled(238), espaperplay_ui_scaled(150));
-    lv_obj_set_style_bg_color(plus, lv_color_white(), 0);
-    lv_obj_set_style_border_color(plus, lv_color_black(), 0);
-    lv_obj_set_style_border_width(plus, 2, 0);
-    lv_obj_set_style_radius(plus, 8, 0);
-    lv_obj_t *plus_label = lv_label_create(plus);
-    lv_label_set_text(plus_label, "+");
-    lv_obj_set_style_text_color(plus_label, lv_color_black(), 0);
-    lv_obj_set_style_text_font(plus_label, espaperplay_ui_font(24), 0);
-    lv_obj_center(plus_label);
-    lv_obj_add_event_cb(plus, settings_modal_plus_cb, LV_EVENT_CLICKED, NULL);
-
-    /* 完成按钮 */
-    lv_obj_t *done = lv_button_create(card);
-    lv_obj_set_size(done, espaperplay_ui_scaled(140), espaperplay_ui_scaled(44));
-    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, -espaperplay_ui_scaled(12));
-    lv_obj_set_style_bg_color(done, lv_color_black(), 0);
-    lv_obj_set_style_border_width(done, 0, 0);
-    lv_obj_set_style_radius(done, 8, 0);
-    lv_obj_t *done_label = lv_label_create(done);
-    lv_label_set_text(done_label, "完成");
-    lv_obj_set_style_text_color(done_label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(done_label, espaperplay_ui_font(20), 0);
-    lv_obj_center(done_label);
-    lv_obj_add_event_cb(done, settings_modal_done_cb, LV_EVENT_CLICKED, NULL);
+    const int w = scr_w - 48;
+    /* 数值与步进按钮放在同一控制组；打开时的释放事件不关闭背景。 */
+    s_modal = espaperplay_ui_modal_overlay_create(false, NULL);
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, w, 300);
+    lv_obj_t *title = espaperplay_ui_label_create(card, row->name, 24, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(title, 24, 20); lv_obj_set_width(title, w - 48);
+    const char *help = row->get_value == settings_get_sleep_timeout
+        ? "仅关闭显示驱动，设备保持联网。\n设为 0 可关闭显示驱动休眠。"
+        : "调整数值后点击保存，取消不会应用修改。";
+    lv_obj_t *hint = espaperplay_ui_label_create(card, help, 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(hint, 24, 66); lv_obj_set_width(hint, w - 48);
+    lv_obj_t *control = lv_obj_create(card);
+    lv_obj_set_pos(control, 24, 130); lv_obj_set_size(control, w - 48, 72);
+    espaperplay_ui_card_style(control);
+    lv_obj_t *minus = espaperplay_ui_modal_button(control, "-", 6, 9, 52, 52,
+        false, settings_modal_minus_cb, NULL);
+    lv_obj_t *plus = espaperplay_ui_modal_button(control, "+", w - 108, 9, 52, 52,
+        false, settings_modal_plus_cb, NULL);
+    lv_obj_set_style_border_width(minus, 0, 0);
+    lv_obj_set_style_border_width(plus, 0, 0);
+    s_modal_value_label = espaperplay_ui_label_create(control, "", 32, LV_TEXT_ALIGN_CENTER);
+    lv_obj_set_size(s_modal_value_label, w - 180, 48);
+    lv_obj_align(s_modal_value_label, LV_ALIGN_CENTER, 0, 0);
+    const int bw = (w - 60) / 2;
+    lv_obj_t *cancel = espaperplay_ui_modal_button(card, "取消", 24, 232, bw, 44,
+        false, settings_confirm_cancel_cb, NULL);
+    lv_obj_set_style_border_width(cancel, 0, 0);
+    lv_obj_t *save = espaperplay_ui_modal_button(card, "保存", 36 + bw, 232, bw, 44,
+        true, settings_modal_done_cb, NULL);
+    lv_obj_set_style_radius(save, 22, 0);
 
     char buf[32];
     row->fmt_value(s_modal_value, buf, sizeof(buf));
@@ -1304,81 +985,16 @@ static void settings_row_trigger(settings_row_t *row) {
     }
 }
 
-/** 命中检测：返回按下点命中的行（当前分页内，仅可交互行）。 */
+static bool settings_hit(lv_obj_t *obj, const lv_point_t *p) {
+    if (!obj) return false;
+    lv_area_t area; lv_obj_get_coords(obj, &area);
+    return espaperplay_ui_point_in(p, area.x1, area.y1, lv_area_get_width(&area), lv_area_get_height(&area));
+}
+
 static settings_row_t *settings_hit_row(const lv_point_t *p) {
-    for (int i = 0; i < s_page_frag_cnt[s_page]; i++) {
-        const settings_frag_t *f = &s_page_frags[s_page][i];
-        for (int g = 0; g < f->sg_count; g++) {
-            const settings_subgroup_t *sg = &f->sec->subgroups[f->sg_start + g];
-            for (int r = 0; r < sg->row_count; r++) {
-                settings_row_t *row = &s_rows[sg->row_start + r];
-                if (row->row_obj == NULL) {
-                    continue;
-                }
-                /* 仅可交互行响应点击。 */
-                if (row->type != SETTINGS_ROW_STEPPER && row->type != SETTINGS_ROW_CYCLE &&
-                    row->type != SETTINGS_ROW_FONT && row->type != SETTINGS_ROW_ACTION) {
-                    continue;
-                }
-                const int x = espaperplay_ui_obj_screen_x(row->row_obj);
-                const int y = espaperplay_ui_obj_screen_y(row->row_obj);
-                if (espaperplay_ui_point_in(p, x, y, lv_obj_get_width(row->row_obj),
-                                      lv_obj_get_height(row->row_obj))) {
-                    return row;
-                }
-            }
-        }
-    }
+    for (int i = 0; i < SETTINGS_ROW_CNT; i++)
+        if (settings_row_tappable(&s_rows[i]) && settings_hit(s_rows[i].row_obj, p)) return &s_rows[i];
     return NULL;
-}
-
-/** 分页容器顶部 y / 高度（enter 时计算，惰性构建复用）。 */
-static int settings_area_y(void) { return s_area_y; }
-static int settings_area_h(void) { return s_area_h; }
-
-/** 构建一个分页的全部控件（卡片 + 大类 + 行）。首次显示该页时调用。 */
-static void settings_page_build(int idx) {
-    if (idx < 0 || idx >= s_page_count || s_page_built[idx]) {
-        return;
-    }
-    s_page_objs[idx] = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_page_objs[idx],
-                    lv_display_get_horizontal_resolution(lv_display_get_default()),
-                    settings_area_h());
-    lv_obj_set_pos(s_page_objs[idx], 0, settings_area_y());
-    lv_obj_set_style_bg_color(s_page_objs[idx], lv_color_white(), 0);
-    lv_obj_set_style_border_width(s_page_objs[idx], 0, 0);
-    lv_obj_set_style_radius(s_page_objs[idx], 0, 0);
-    lv_obj_set_style_pad_all(s_page_objs[idx], 0, 0);
-    lv_obj_remove_flag(s_page_objs[idx], LV_OBJ_FLAG_SCROLLABLE);
-    settings_page_create(s_page_objs[idx], s_page_frags[idx], s_page_frag_cnt[idx]);
-    /* 新建的分页默认盖在当前页之上：非当前页立即隐藏。 */
-    if (idx != s_page) {
-        lv_obj_add_flag(s_page_objs[idx], LV_OBJ_FLAG_HIDDEN);
-    }
-    s_page_built[idx] = true;
-}
-
-/** 切换分页：容器显隐 + 指示点刷新（LVGL 线程内）。 */
-static void settings_show_page(int idx) {
-    if (idx < 0 || idx >= s_page_count || idx == s_page) {
-        return;
-    }
-    settings_page_build(idx); /* 惰性构建：首次显示才创建控件 */
-    s_page = idx;
-    for (int i = 0; i < s_page_count; i++) {
-        /* 未构建的分页没有控件（指针无效），跳过显隐操作。 */
-        if (!s_page_built[i]) {
-            continue;
-        }
-        if (i == idx) {
-            lv_obj_remove_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_page_objs[i], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    espaperplay_ui_pager_dots_set(s_dots, s_page_count, idx);
-    ESP_LOGI(TAG, "settings: page %d/%d", idx + 1, s_page_count);
 }
 
 /** 周期刷新（LVGL 线程内，lv_timer 驱动）：Web 端改配置后同步显示。 */
@@ -1403,29 +1019,11 @@ static void settings_enter(void) {
 
     /* 按屏高计算缩放因子（基准 800；横屏 480 高 -> 0.6，小屏 600 -> 0.75）。 */
     espaperplay_ui_scale_init(SETTINGS_REF_H);
-    const int bar_h = settings_bar_h();
-
-    /* 统一状态栏：左侧时间、居中"设置"、右侧 WiFi/睡眠图标 */
-    s_bar = espaperplay_ui_status_bar_create(scr, bar_h, "设置", false);
-
-    /* 动态分页：按可用高度把子类装箱到各页（卡片可跨页，边框表达接续）。 */
-    for (int i = 0; i < SETTINGS_PAGE_MAX; i++) {
-        s_page_frag_cnt[i] = 0;
-        s_page_built[i] = false;
-    }
-    s_area_y = bar_h;
-    s_area_h = scr_h - s_area_y - 24;
-    settings_build_pages(s_area_h - 8); /* 卡片顶部留 8px 边距 */
-
-    /* 惰性构建：仅立即构建第 0 页，其余分页首次显示时才创建控件
-     * （设置页控件量大，全量构建明显拖慢进入速度）。 */
-    s_page = 0;
-    settings_page_build(0);
-
-    /* 指示点 */
-    espaperplay_ui_pager_dots_create(s_dots, s_page_count, scr_w, scr_h - 18, 0);
-    /* 未构建的分页没有控件，仅指示点需要着色（当前页黑、其余白）。 */
-    espaperplay_ui_pager_dots_set(s_dots, s_page_count, 0);
+    s_bar = espaperplay_ui_status_bar_create(scr, ESPAPERPLAY_UI_HEADER_H, "", false);
+    if (!s_resume_category) s_category = -1;
+    s_resume_category = false;
+    s_content = NULL;
+    settings_content_build();
 
     s_modal = NULL;
     s_modal_row = NULL;
@@ -1451,6 +1049,7 @@ static void settings_exit(void) {
         s_timer = NULL;
     }
     settings_modal_close();
+    s_content = NULL;
     /* 页面对象已删除：清空行对象/值标签指针，防止设置应用任务回刷时访问已释放对象。 */
     for (int i = 0; i < SETTINGS_ROW_CNT; i++) {
         s_rows[i].row_obj = NULL;
@@ -1489,25 +1088,27 @@ static void settings_on_touch(const espaperplay_input_event_t *event) {
             int32_t scr_w = lv_display_get_horizontal_resolution(lv_display_get_default());
             if ((s_touch_start.x < UI_GESTURE_EDGE_PX && dx > 0) ||
                 (s_touch_start.x > scr_w - UI_GESTURE_EDGE_PX && dx < 0)) {
-                if (espaperplay_ui_page_depth() > 1) {
-                    ESP_LOGI(TAG, "settings: edge swipe -> pop back");
-                    espaperplay_ui_page_pop_lv();
-                }
+                settings_back();
                 s_touch_row = NULL;
                 return;
             }
         }
 
-        /* 中间横向滑动：切换分页（优先于点击）。 */
-        if (adx > UI_GESTURE_SWIPE_PX && adx > ady * UI_GESTURE_SWIPE_MIN_RATIO) {
-            settings_show_page(s_page + (dx < 0 ? 1 : -1));
-            s_touch_row = NULL;
-            return;
-        }
-
-        /* 小位移 + 起点在行内：点击触发该行操作。 */
-        if (s_touch_row != NULL && adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
-            settings_row_trigger(s_touch_row);
+        if (adx <= UI_GESTURE_CLICK_MAX_PX && ady <= UI_GESTURE_CLICK_MAX_PX) {
+            if (s_touch_start.y < ESPAPERPLAY_UI_HEADER_H + 72 && s_touch_start.x < 72) {
+                settings_back();
+            } else if (s_category < 0) {
+                for (int i = 0; i < SETTINGS_CATEGORY_CNT; i++) {
+                    if (settings_hit(s_category_rows[i], &s_touch_start)) {
+                        s_category = i;
+                        settings_content_build();
+                        break;
+                    }
+                }
+            } else if (s_touch_row) {
+                s_resume_category = s_touch_row->type == SETTINGS_ROW_ACTION;
+                settings_row_trigger(s_touch_row);
+            }
         }
         s_touch_row = NULL;
     }
@@ -1522,10 +1123,7 @@ static void settings_on_key(const espaperplay_input_event_t *event) {
         settings_modal_close();
         return;
     }
-    if (espaperplay_ui_page_depth() > 1) {
-        ESP_LOGI(TAG, "settings: single click -> pop back");
-        espaperplay_ui_page_pop_lv();
-    }
+    settings_back();
 }
 
 /** 设置页页面实例（页面栈用）。 */

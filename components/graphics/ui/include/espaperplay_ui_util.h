@@ -16,6 +16,32 @@
 extern "C" {
 #endif
 
+/* 黑白墨水屏设计基准：颜色不承担唯一语义，状态用轮廓/反色表达。 */
+#define ESPAPERPLAY_UI_MARGIN 16
+#define ESPAPERPLAY_UI_HEADER_H 30
+#define ESPAPERPLAY_UI_RADIUS 10
+#define ESPAPERPLAY_UI_BORDER 1
+#define ESPAPERPLAY_UI_BUTTON_H 44
+
+/** 白底细黑边卡片；调用方随后设置所需内边距。 */
+void espaperplay_ui_card_style(lv_obj_t *obj);
+
+/** 墨水屏底部导航：24px 线条图标、16px 标签、选中下划线。 */
+typedef enum {
+    ESPAPERPLAY_UI_ICON_FOLDER_UP, ESPAPERPLAY_UI_ICON_FOLDER_ADD,
+    ESPAPERPLAY_UI_ICON_HISTORY, ESPAPERPLAY_UI_ICON_BOOK,
+    ESPAPERPLAY_UI_ICON_LIST, ESPAPERPLAY_UI_ICON_SMALL_TEXT,
+    ESPAPERPLAY_UI_ICON_LARGE_TEXT, ESPAPERPLAY_UI_ICON_CONTRAST,
+    ESPAPERPLAY_UI_ICON_BACK,
+} espaperplay_ui_icon_t;
+lv_obj_t *espaperplay_ui_nav_button(lv_obj_t *parent, const char *text,
+    espaperplay_ui_icon_t icon, int x, int y, int w, int h,
+    lv_event_cb_t cb, void *user_data);
+void espaperplay_ui_nav_select(lv_obj_t *button, bool selected);
+/** 线条箭头不依赖字体字形。 */
+void espaperplay_ui_chevron_create(lv_obj_t *parent, int x, int y, bool back);
+void espaperplay_ui_file_icon_create(lv_obj_t *parent, int x, int y, bool folder);
+
 /* ------------------------------------------------------------------ */
 /* 屏幕尺寸 / 屏高缩放                                                   */
 /* ------------------------------------------------------------------ */
