@@ -57,13 +57,14 @@ extern "C" {
  * EPD SPI 接口（独占 SPI2 主机；SD 卡走独立 SDIO/SDMMC，见下方 SD 节）
  * ==================================================================== */
 
-#define ESPAPERPLAY_PIN_EPD_SCLK 12 /*!< SPI 时钟 */
-#define ESPAPERPLAY_PIN_EPD_MOSI 11 /*!< SPI MOSI */
+/* 2026-09 PCB GPIO remap: synchronized with schematic/PCB; FPC pinout unchanged. */
+#define ESPAPERPLAY_PIN_EPD_SCLK 16 /*!< SPI 时钟 */
+#define ESPAPERPLAY_PIN_EPD_MOSI 15 /*!< SPI MOSI */
 #define ESPAPERPLAY_PIN_EPD_MISO -1 /*!< SPI MISO（EPD 只写不读，未使用） */
-#define ESPAPERPLAY_PIN_EPD_CS 10   /*!< EPD 片选 */
-#define ESPAPERPLAY_PIN_EPD_DC 9    /*!< EPD 数据 / 命令 */
+#define ESPAPERPLAY_PIN_EPD_CS 17   /*!< EPD 片选 */
+#define ESPAPERPLAY_PIN_EPD_DC 18   /*!< EPD 数据 / 命令 */
 #define ESPAPERPLAY_PIN_EPD_RST 8   /*!< EPD 硬件复位 */
-#define ESPAPERPLAY_PIN_EPD_BUSY 7  /*!< EPD 忙状态输入 */
+#define ESPAPERPLAY_PIN_EPD_BUSY 9  /*!< EPD 忙状态输入 */
 
 /** EPD 默认 SPI 时钟频率，单位 Hz。 */
 #define ESPAPERPLAY_EPD_SPI_CLK_HZ 4000000
@@ -75,10 +76,10 @@ extern "C" {
  * 触摸（GT911，I2C）
  * ==================================================================== */
 
-#define ESPAPERPLAY_PIN_TOUCH_SDA 4 /*!< I2C SDA */
-#define ESPAPERPLAY_PIN_TOUCH_SCL 5 /*!< I2C SCL */
-#define ESPAPERPLAY_PIN_TOUCH_INT 3 /*!< GT911 触摸中断（输入） */
-#define ESPAPERPLAY_PIN_TOUCH_RST 2 /*!< GT911 复位（输出） */
+#define ESPAPERPLAY_PIN_TOUCH_SDA 10 /*!< I2C SDA */
+#define ESPAPERPLAY_PIN_TOUCH_SCL 13 /*!< I2C SCL */
+#define ESPAPERPLAY_PIN_TOUCH_INT 3  /*!< GT911 触摸中断（输入） */
+#define ESPAPERPLAY_PIN_TOUCH_RST 14 /*!< GT911 复位（输出） */
 
 /**
  * GT911 I2C 设备地址（7 位）。
@@ -103,34 +104,31 @@ extern "C" {
  * ESP32-S3 集成 SDMMC 主机（SOC_SDMMC_HOST_SUPPORTED）：slot 1 支持
  * 1/4-bit，slot 0 仅 1-bit。所有 SDMMC 信号经 GPIO 矩阵路由，可任意选脚。
  *
- * 引脚分配避开已占用 / 不可用的 GPIO：
- *   - EPD SPI（7-13）、触摸（2-5：INT=3 / RST=2）、BOOT 键 0；
- *   - **GPIO19/20 是芯片内置 USB D-/D+ 焊盘**，被板载 USB（烧录 / 调试 /
- *     次级 USB-Serial-JTAG 串口）占用，严禁用作 SD 信号；
- *   - 43/44 为 UART0 串口。CLK/CMD 沿用 IDF 默认 14/15，D0-D3 收敛到
- *     16-18 + 21（21 原是 SPI 方案假定的片选脚，最可能已连到 SD 卡座）。
+ * 2026-09 PCB 重映射：CLK=38、CMD=39、D0=47、D1=48、D2=41、D3=40。
+ * GPIO19/20 保留给 USB；GPIO35/36/37 为 N16R8 模组内部 PSRAM，禁用。
+ * UART0 日志已迁到 USB Serial/JTAG，GPIO43/44 分别用于音频输出 / 充电状态。
  *
  * 4-bit 模式要求 CMD/D0-D3 外接 10kΩ 上拉，驱动同时开启内部上拉
  * （SDMMC_SLOT_FLAG_INTERNAL_PULLUP）作为补充。上电前请务必对照原理图
  * 核对引脚。
  *
  * @note v2.0 板：TOUCH / EPD / SD 三个部件的供电挂在可控外设轨 3V3_PER 上
- *       （由 POWER_EN 控制通断，见下方定义；驱动接入待后续版本），深睡
- *       关机时随轨断电。
+ *       （由 POWER_EN 控制通断，见下方定义；board 组件在板级初始化最早期
+ *       开轨），深睡关机时随轨断电（power 服务负责）。
  * ==================================================================== */
 
-#define ESPAPERPLAY_PIN_SD_CLK 14 /*!< SDMMC 时钟线（CLK） */
-#define ESPAPERPLAY_PIN_SD_CMD 15 /*!< SDMMC 命令线（CMD） */
-#define ESPAPERPLAY_PIN_SD_D0 16  /*!< SDMMC 数据线 D0 */
-#define ESPAPERPLAY_PIN_SD_D1 17  /*!< SDMMC 数据线 D1 */
-#define ESPAPERPLAY_PIN_SD_D2 18  /*!< SDMMC 数据线 D2 */
-#define ESPAPERPLAY_PIN_SD_D3 21  /*!< SDMMC 数据线 D3 */
+#define ESPAPERPLAY_PIN_SD_CLK 38 /*!< SDMMC 时钟线（CLK） */
+#define ESPAPERPLAY_PIN_SD_CMD 39 /*!< SDMMC 命令线（CMD） */
+#define ESPAPERPLAY_PIN_SD_D0 47  /*!< SDMMC 数据线 D0 */
+#define ESPAPERPLAY_PIN_SD_D1 48  /*!< SDMMC 数据线 D1 */
+#define ESPAPERPLAY_PIN_SD_D2 41  /*!< SDMMC 数据线 D2 */
+#define ESPAPERPLAY_PIN_SD_D3 40  /*!< SDMMC 数据线 D3 */
 
 /** SDMMC 主机槽位（ESP32-S3：slot 1 支持 4-bit，slot 0 仅 1-bit）。 */
 #define ESPAPERPLAY_SDMMC_HOST_SLOT 1
 
 /** SD 卡 SDMMC 总线宽度（1 或 4；4 线最高 40MHz SDR）。 */
-#define ESPAPERPLAY_SD_BUS_WIDTH 4
+#define ESPAPERPLAY_SD_BUS_WIDTH 1
 
 /** SD 卡默认 SDMMC 时钟频率，单位 Hz（SDMMC 默认 20MHz，上限 40MHz）。 */
 #define ESPAPERPLAY_SD_CLK_HZ 20000000
@@ -171,21 +169,78 @@ extern "C" {
 #define ESPAPERPLAY_READER_SD_DIR ESPAPERPLAY_STORAGE_MOUNT_POINT "/books"
 
 /* ====================================================================
- * 物理按键（BOOT）
+ * 物理按键（BOOT / VOL+ / VOL-，均按下为低电平、外部 10K 上拉 + 100nF 滤波）
+ *
+ * v2.0 板四个轻触键（原理图 POWER 页 SW1-SW4）：
+ *   - SW1 -> EN（复位 / 深睡关机后的物理唤醒，纯硬件不走 GPIO）；
+ *   - SW2 -> GPIO0（BOOT：烧录 / 全局长按动作）；
+ *   - SW3 -> GPIO5（VOL-，音量减）；
+ *   - SW4 -> GPIO2（VOL+，音量加）。日志使用 USB Serial/JTAG。
  * ==================================================================== */
 
 #define ESPAPERPLAY_PIN_KEY_BOOT 0          /*!< BOOT 按键（板载，按下为低电平） */
 #define ESPAPERPLAY_KEY_BOOT_ACTIVE_LEVEL 0 /*!< BOOT 按键按下时的电平 */
+#define ESPAPERPLAY_PIN_KEY_VOL_UP 2        /*!< 音量加按键（SW4，按下为低电平） */
+#define ESPAPERPLAY_KEY_VOL_UP_ACTIVE_LEVEL 0
+#define ESPAPERPLAY_PIN_KEY_VOL_DOWN 5 /*!< 音量减按键（SW3，按下为低电平） */
+#define ESPAPERPLAY_KEY_VOL_DOWN_ACTIVE_LEVEL 0
+
+/* ====================================================================
+ * 音频（原理图 AUDIO 页：ICS-43434 麦克风 + MAX98357A 功放 + TLV62569 独立轨）
+ *
+ * I2S 总线为全双工共享时钟：ESP32-S3 作主机，BCLK / WS 同时接到麦克风
+ * 与功放；MIC_DOUT 仅左声道（ICS-43434 的 LR 引脚接地），SPK_DIN 由
+ * MAX98357A 内部混为单声道输出。音频供电挂在独立降压轨 AUDIO_3V3
+ * （TLV62569，EN=AUDIO_PWR_EN，复位默认下拉=关），MIC_3V3 经磁珠 FB1
+ * 自 AUDIO_3V3 派生；功放 SD_MODE# 经 2K 电阻接 GPIO6、板上 100K 下拉
+ * （复位默认关断防爆音）。
+ * ==================================================================== */
+
+#define ESPAPERPLAY_PIN_I2S_BCLK 12 /*!< I2S 位时钟（ICS-43434 SCK + MAX98357A BCLK） */
+#define ESPAPERPLAY_PIN_I2S_WS 7    /*!< I2S 帧时钟（ICS-43434 WS + MAX98357A LRCLK） */
+#define ESPAPERPLAY_PIN_MIC_DOUT 11 /*!< I2S 数据入（ICS-43434 SD，左声道） */
+#define ESPAPERPLAY_PIN_SPK_DIN 43  /*!< I2S 数据出（MAX98357A DIN） */
+#define ESPAPERPLAY_PIN_AUDIO_PWR_EN                                                               \
+    4                                 /*!< 音频轨 AUDIO_3V3 使能（高=开轨；板上 100K 下拉默认关） */
+#define ESPAPERPLAY_PIN_AMP_SD_MODE 6 /*!< 功放 SD_MODE#（高=解除关断；经 2K 串阻 + 100K 下拉） */
+
+/** 音频子系统默认采样率（Hz）。I2S 槽位固定 32-bit 立体声，BCLK=64×fs。 */
+#define ESPAPERPLAY_AUDIO_DEFAULT_SAMPLE_RATE 16000
+
+/** 功放解除关断前音频轨的稳定等待（毫秒，覆盖 TLV62569 软启动）。 */
+#define ESPAPERPLAY_AUDIO_RAIL_STABILIZE_MS 10
+
+/** 开轨后麦克风的预热等待（毫秒，ICS-43434 上电到输出稳定约 10-50ms）。 */
+#define ESPAPERPLAY_AUDIO_MIC_WARMUP_MS 50
+
+/** 关断前静音保持（毫秒）：先拉低 SD_MODE# 再断轨，避免爆音。 */
+#define ESPAPERPLAY_AUDIO_AMP_MUTE_HOLD_MS 10
 
 /* ====================================================================
  * 电源控制与监测（v2.0 板：主控常供电，"关机"= 深睡 + 外设轨关断）
+ *
+ * 充电状态推断：板上无独立 VBUS 检测 GPIO（v1 的 USB_PRES 已取消）；TP4056 的 CHRG#/STDBY#
+ * 任一拉低即视为 USB 在位（无 USB 时 TP4056 无 VCC、两脚开漏悬空被上拉为高）。
  * ==================================================================== */
 
-#define ESPAPERPLAY_PIN_POWER_EN 41 /*!< 外设电源轨 3V3_PER 使能（低电平开轨；复位默认悬空=关，由板上 R20 上拉关断） */
-#define ESPAPERPLAY_PIN_BAT_SENSE 1 /*!< 电池电压分压（ADC1_CH0；板上 10M/3.3M 分压，比例 0.248） */
-#define ESPAPERPLAY_PIN_USB_PRES 6  /*!< VBUS 在位检测（板上 1M/1.5M 分压，比例 0.6，高=在位） */
-#define ESPAPERPLAY_PIN_CHRG_STAT 39    /*!< 充电中回读（TP4056 CHRG#，开漏输出，低=充电中；板上 100K 上拉 3V3） */
-#define ESPAPERPLAY_PIN_STANDBY_STAT 40 /*!< 充电完成回读（TP4056 STDBY#，开漏输出，低=充满待机；板上 100K 上拉 3V3） */
+#define ESPAPERPLAY_PIN_POWER_EN                                                                   \
+    21 /*!< 外设电源轨 3V3_PER 使能（低电平开轨；复位默认悬空=关，由板上 R20 上拉关断） */
+#define ESPAPERPLAY_POWER_EN_ACTIVE_LEVEL 0 /*!< 开轨电平（PMOS 栅极经 470R 拉低导通） */
+#define ESPAPERPLAY_PIN_BAT_SENSE                                                                  \
+    1 /*!< 电池电压分压（ADC1_CH0；板上 10M/3.3M 分压，比例 0.248）                \
+       */
+#define ESPAPERPLAY_PIN_CHRG_STAT                                                                  \
+    44 /*!< 充电中回读（TP4056 CHRG#，开漏输出，低=充电中；板上 100K 上拉 3V3） */
+#define ESPAPERPLAY_PIN_STANDBY_STAT                                                               \
+    42 /*!< 充电完成回读（TP4056 STDBY#，开漏输出，低=充满待机；板上 100K 上拉 3V3） */
+
+/** 电池分压上臂电阻（KΩ，板上 R23）。 */
+#define ESPAPERPLAY_BAT_DIVIDER_R_UPPER_KOHM 10000
+/** 电池分压下臂电阻（KΩ，板上 R24）。 */
+#define ESPAPERPLAY_BAT_DIVIDER_R_LOWER_KOHM 3300
+
+/** 外设轨（3V3_PER）上电稳定等待（毫秒）：EPD / 触摸 / SD 挂载前先等轨稳。 */
+#define ESPAPERPLAY_PERIPHERAL_RAIL_STABILIZE_MS 20
 
 /* ====================================================================
  * 默认总线参数
