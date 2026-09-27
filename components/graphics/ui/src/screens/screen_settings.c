@@ -168,7 +168,7 @@ static void settings_fmt_boot_lp_time(int32_t v, char *buf, size_t size) {
 
 /* ---- 设备组：阅读器 ---- */
 
-static const char *const s_reader_img_gray4_options[] = {"开", "关"};
+static const char *const s_reader_img_gray4_options[] = {"关", "开"};
 
 static int32_t settings_get_reader_img_gray4(void) {
     return espaperplay_system_get_reader_img_gray4() ? 1 : 0;
