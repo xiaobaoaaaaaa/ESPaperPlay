@@ -180,6 +180,10 @@ esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
 int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *blocks,
                                   uint16_t *lines, int max_cnt);
 
+/** Read a validated cached chapter count without loading its text or page table.
+ * Returns 0 on a miss; TXT uses chapter 0. */
+int espaperplay_reader_pagen_count(int chapter, uint32_t font_key);
+
 /** 异步保存章节分页缓存（内部 worker 落盘）。 */
 void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
                                          const uint32_t *blocks, const uint16_t *lines);

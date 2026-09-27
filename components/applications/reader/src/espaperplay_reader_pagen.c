@@ -7,6 +7,7 @@
 #include "espaperplay_reader_pagen.h"
 #include "espcache.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -33,7 +34,9 @@ static const char *TAG = "ESPaperPlay_READER";
 #define PAGEN_WORKER_STACK 4096 /* 内部 RAM 后备栈（PSRAM 栈优先） */
 #define PAGEN_WORKER_PRIO 4
 
-/* 单槽落盘任务（数组已堆复制）；mutex 保护，worker 消费 */
+#define PAGEN_QUEUE_LEN 16
+
+/* 有界落盘队列（数组已堆复制）；mutex 保护，worker 消费。 */
 typedef struct {
     uint32_t token;
     int chapter;
@@ -47,8 +50,8 @@ static SemaphoreHandle_t s_mutex;
 static SemaphoreHandle_t s_sem;
 static TaskHandle_t s_task;
 static uint8_t s_task_state; /* 0=未创建 1=运行 2=不可用 */
-static pagen_job_t s_job;
-static volatile bool s_job_pending = false;
+static pagen_job_t s_jobs[PAGEN_QUEUE_LEN];
+static int s_head, s_tail, s_count;
 
 static void pagen_lock(void) {
     if (s_mutex == NULL) {
@@ -88,10 +91,15 @@ static espcache_result_t pagen_read_fn(FILE *f, void *ud) {
         return ESPCACHE_CORRUPT;
     }
     if (hdr[0] != PAGEN_MAGIC || hdr[1] != PAGEN_VER || hdr[2] != ctx->token ||
-        hdr[3] != ctx->font_key || hdr[4] != (uint32_t)ctx->chapter || hdr[5] == 0) {
+        hdr[3] != ctx->font_key || hdr[4] != (uint32_t)ctx->chapter || hdr[5] == 0 ||
+        hdr[5] > (uint32_t)((INT_MAX - 24) / 6)) {
         return ESPCACHE_CORRUPT;
     }
     const int n = (int)hdr[5];
+    /* Count-only reads must reject truncated tables too. */
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0) return ESPCACHE_KEEP;
+    if (st.st_size != 24 + (off_t)n * 6) return ESPCACHE_CORRUPT;
     if (n > ctx->max_cnt) {
         /* 缓存有效但调用方表容量不足：返回所需容量（负值），由调用方
          * 扩表后重读；绝不删除文件（大章节否则会被误删反复重算） */
@@ -146,14 +154,17 @@ static bool pagen_write_fn(FILE *f, void *ud) {
            fwrite(w->lines, sizeof(uint16_t), (size_t)w->cnt, f) == (size_t)w->cnt;
 }
 
-/** worker：把单槽任务写盘（临时文件 + rename 原子替换）。 */
+/** worker：消费有界队列，完整写入后发布缓存。 */
 static void pagen_worker_task(void *arg) {
     (void)arg;
     for (;;) {
         xSemaphoreTake(s_sem, portMAX_DELAY);
         pagen_lock();
-        pagen_job_t job = s_job;
-        s_job_pending = false;
+        if (s_count == 0) { pagen_unlock(); continue; }
+        pagen_job_t job = s_jobs[s_head];
+        memset(&s_jobs[s_head], 0, sizeof(s_jobs[s_head]));
+        s_head = (s_head + 1) % PAGEN_QUEUE_LEN;
+        s_count--;
         pagen_unlock();
         if (job.blocks == NULL || job.lines == NULL || job.cnt <= 0) {
             heap_caps_free(job.blocks);
@@ -185,7 +196,7 @@ static void pagen_worker_ensure(void) {
         s_mutex = xSemaphoreCreateMutex();
     }
     if (s_sem == NULL) {
-        s_sem = xSemaphoreCreateBinary();
+        s_sem = xSemaphoreCreateCounting(PAGEN_QUEUE_LEN, 0);
     }
     if (s_mutex == NULL || s_sem == NULL || s_task_state != 0) {
         return;
@@ -207,18 +218,12 @@ static void pagen_worker_ensure(void) {
 
 void espaperplay_pagen_save_async(uint32_t token, int chapter, uint32_t font_key, int cnt,
                                   const uint32_t *blocks, const uint16_t *lines) {
-    if (cnt <= 0) {
+    if (cnt <= 0 || blocks == NULL || lines == NULL) {
         return;
     }
     pagen_worker_ensure();
     if (s_task_state != 1) {
         return; /* worker 不可用：放弃缓存（下次重算） */
-    }
-    pagen_lock();
-    const bool busy = s_job_pending;
-    pagen_unlock();
-    if (busy) {
-        return; /* 上一任务未写完：放弃本次 */
     }
     uint32_t *bcpy =
         heap_caps_malloc((size_t)cnt * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -233,13 +238,16 @@ void espaperplay_pagen_save_async(uint32_t token, int chapter, uint32_t font_key
     memcpy(lcpy, lines, (size_t)cnt * sizeof(uint16_t));
 
     pagen_lock();
-    s_job.token = token;
-    s_job.chapter = chapter;
-    s_job.font_key = font_key;
-    s_job.cnt = cnt;
-    s_job.blocks = bcpy;
-    s_job.lines = lcpy;
-    s_job_pending = true;
+    if (s_count == PAGEN_QUEUE_LEN) {
+        pagen_unlock();
+        heap_caps_free(bcpy);
+        heap_caps_free(lcpy);
+        ESP_LOGW(TAG, "pagen: save queue full, ch%d will be recomputed", chapter + 1);
+        return;
+    }
+    s_jobs[s_tail] = (pagen_job_t){token, chapter, font_key, cnt, bcpy, lcpy};
+    s_tail = (s_tail + 1) % PAGEN_QUEUE_LEN;
+    s_count++;
     pagen_unlock();
     xSemaphoreGive(s_sem);
 }

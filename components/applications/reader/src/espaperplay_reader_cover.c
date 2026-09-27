@@ -32,7 +32,7 @@ static const char *TAG = "ESPaperPlay_READER_COVER";
 #define COVER_CACHE_VER 2u            /* 新图片解码器：旧缩略图/负缓存失效 */
 
 #define COVER_QUEUE_LEN 16 /* 单页网格容量上限 */
-#define COVER_RESULT_LEN 4
+#define COVER_RESULT_LEN COVER_QUEUE_LEN
 
 #define COVER_WORKER_STACK 16384 /* OPF / URI / SD 调用链需栈余量；SDMMC 不禁用 Flash cache */
 #define COVER_WORKER_PRIO 3      /* 低于 LVGL 与章节预取（解码秒级，尽量不抢 CPU） */
@@ -41,6 +41,7 @@ typedef struct {
     char path[ESPAPERPLAY_READER_COVER_PATH_MAX];
     int16_t max_w;
     int16_t max_h;
+    uint32_t gen;
 } cover_job_t;
 
 static SemaphoreHandle_t s_mutex;   /* 队列 / 结果 / 代际互斥 */
@@ -60,8 +61,9 @@ static uint32_t s_gen = 0; /* cancel 代际：作废在途任务 */
 /* ------------------------------------------------------------------ */
 
 /** 封面缓存路径（文件指纹 token，与章节/分页缓存同方案）。 */
-static void cover_cache_path(char *buf, size_t n, const char *path) {
-    snprintf(buf, n, "%s/%08x.cov", COVER_CACHE_DIR, (unsigned)espcache_file_token(path));
+static void cover_cache_path(char *buf, size_t n, const char *path, int max_w, int max_h) {
+    snprintf(buf, n, "%s/%08x.%dx%d.cov", COVER_CACHE_DIR,
+             (unsigned)espcache_file_token(path), max_w, max_h);
 }
 
 /** 读缓存上下文：结果出参 + 源指纹（头内必须一致）。 */
@@ -69,6 +71,7 @@ typedef struct {
     espaperplay_reader_cover_result_t *out;
     uint32_t src_size;
     uint32_t src_mtime;
+    int max_w, max_h;
 } cover_read_ctx_t;
 
 /** 读缓存回调：校验头并读出封面（含负缓存 w==0 无封面）。 */
@@ -91,12 +94,15 @@ static espcache_result_t cover_cache_read_fn(FILE *f, void *ud) {
         out->buf = NULL;
         return ESPCACHE_OK;
     }
-    if (w == 0 || h == 0 || w > 1024 || h > 1024) {
+    if (w == 0 || h == 0 || w > (uint32_t)ctx->max_w || h > (uint32_t)ctx->max_h) {
         return ESPCACHE_CORRUPT;
     }
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0) return ESPCACHE_KEEP;
+    if (st.st_size != 24 + (off_t)w * h * 2) return ESPCACHE_CORRUPT;
     uint8_t *buf = heap_caps_malloc((size_t)w * h * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (buf == NULL) {
-        return ESPCACHE_CORRUPT;
+        return ESPCACHE_KEEP;
     }
     if (fread(buf, 1, (size_t)w * h * 2, f) != (size_t)w * h * 2) {
         heap_caps_free(buf);
@@ -110,8 +116,9 @@ static espcache_result_t cover_cache_read_fn(FILE *f, void *ud) {
 
 /** 读缓存。命中返回 true（含负缓存：w==0 无封面）。 */
 static bool cover_cache_load(const char *cache_path, uint32_t src_size, uint32_t src_mtime,
-                             espaperplay_reader_cover_result_t *out) {
-    cover_read_ctx_t ctx = {.out = out, .src_size = src_size, .src_mtime = src_mtime};
+                             int max_w, int max_h, espaperplay_reader_cover_result_t *out) {
+    cover_read_ctx_t ctx = {.out = out, .src_size = src_size, .src_mtime = src_mtime,
+                           .max_w = max_w, .max_h = max_h};
     return espcache_read(cache_path, cover_cache_read_fn, &ctx) == ESPCACHE_OK;
 }
 
@@ -141,7 +148,8 @@ static void cover_cache_write(const char *cache_path, uint32_t src_size, uint32_
         .hdr = {COVER_CACHE_MAGIC, COVER_CACHE_VER, (uint32_t)w, (uint32_t)h, src_size, src_mtime},
         .data = data,
     };
-    espcache_write_atomic(cache_path, cover_cache_write_fn, &ctx);
+    if (espcache_write_atomic(cache_path, cover_cache_write_fn, &ctx))
+        ESP_LOGI(TAG, "cover: cached %dx%d", w, h);
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,7 +185,8 @@ static void cover_result_push(uint32_t gen, const espaperplay_reader_cover_resul
 }
 
 static void cover_process(const cover_job_t *job) {
-    const uint32_t gen = cover_gen_now();
+    const uint32_t gen = job->gen;
+    if (gen != cover_gen_now()) return;
 
     /* 源文件指纹（书变更自动换缓存名失效） */
     struct stat st;
@@ -187,14 +196,14 @@ static void cover_process(const cover_job_t *job) {
         src_size = (uint32_t)st.st_size;
         src_mtime = (uint32_t)st.st_mtime;
     }
-    char cache_path[64];
-    cover_cache_path(cache_path, sizeof(cache_path), job->path);
+    char cache_path[96];
+    cover_cache_path(cache_path, sizeof(cache_path), job->path, job->max_w, job->max_h);
 
     espaperplay_reader_cover_result_t res;
     memset(&res, 0, sizeof(res));
     strlcpy(res.path, job->path, sizeof(res.path));
 
-    if (cover_cache_load(cache_path, src_size, src_mtime, &res)) {
+    if (cover_cache_load(cache_path, src_size, src_mtime, job->max_w, job->max_h, &res)) {
         cover_result_push(gen, &res);
         return;
     }
@@ -279,8 +288,27 @@ static bool cover_pending_has(const char *path) {
     return false;
 }
 
+bool espaperplay_reader_cover_cached(const char *path, int max_w, int max_h,
+                                     espaperplay_reader_cover_result_t *out) {
+    if (!path || !out || strlen(path) >= sizeof(out->path) || max_w <= 0 || max_h <= 0 ||
+        !espaperplay_storage_is_mounted()) return false;
+    memset(out, 0, sizeof(*out));
+    struct stat st;
+    if (stat(path, &st) != 0) return false;
+    if (max_w > 512) max_w = 512;
+    if (max_h > 512) max_h = 512;
+    char cache_path[96];
+    cover_cache_path(cache_path, sizeof(cache_path), path, max_w, max_h);
+    if (!cover_cache_load(cache_path, (uint32_t)st.st_size, (uint32_t)st.st_mtime,
+                          max_w, max_h, out)) return false;
+    strlcpy(out->path, path, sizeof(out->path));
+    ESP_LOGI(TAG, "cover: thumbnail cache hit %dx%d", out->w, out->h);
+    return true;
+}
+
 esp_err_t espaperplay_reader_cover_request(const char *path, int max_w, int max_h) {
-    if (path == NULL || max_w <= 0 || max_h <= 0) {
+    if (path == NULL || strlen(path) >= ESPAPERPLAY_READER_COVER_PATH_MAX ||
+        max_w <= 0 || max_h <= 0) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!espaperplay_storage_is_mounted()) {
@@ -304,6 +332,7 @@ esp_err_t espaperplay_reader_cover_request(const char *path, int max_w, int max_
             strlcpy(job->path, path, sizeof(job->path));
             job->max_w = (int16_t)(max_w > 512 ? 512 : max_w);
             job->max_h = (int16_t)(max_h > 512 ? 512 : max_h);
+            job->gen = s_gen;
             s_job_tail = (s_job_tail + 1) % COVER_QUEUE_LEN;
             s_job_cnt++;
             xSemaphoreGive(s_job_sem);

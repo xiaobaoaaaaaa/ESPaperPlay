@@ -21,7 +21,7 @@ extern "C" {
  *
  * 供 UI 列表使用：request 入队 → worker 后台完成探测/解码/缓存 → poll 取就绪
  * 结果（LVGL 线程定时轮询，模式与分页缓存/阅读历史 worker 一致）。SD 缓存位
- * 于 /sdcard/system/cache/reader/covers/，键 = 路径哈希 ^ mtime ^ size（书变更
+ * 于 /sdcard/system/cache/reader/covers/，键包含路径哈希 ^ mtime ^ size 及目标尺寸（书变更
  * 自动失效）；探测失败的负结果同样缓存，避免反复空探。
  */
 
@@ -37,6 +37,12 @@ typedef struct {
     uint16_t h;
     uint8_t *buf;
 } espaperplay_reader_cover_result_t;
+
+/** Read only an existing bounded thumbnail, without EPUB parsing or decoding.
+ * A hit (including a cached missing cover) transfers buf ownership to caller.
+ * Use while building the list so warm covers appear in the first frame. */
+bool espaperplay_reader_cover_cached(const char *path, int max_w, int max_h,
+                                     espaperplay_reader_cover_result_t *out);
 
 /**
  * @brief 请求一本书的封面缩略图（非阻塞，可重复调用去重）。

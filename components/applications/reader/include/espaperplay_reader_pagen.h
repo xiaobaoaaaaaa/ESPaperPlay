@@ -30,7 +30,7 @@ extern "C" {
  * @param font_key 版式指纹（字号档位 + 内容区宽高）。
  * @param blocks   输出数组（每页起始块号，容量 max_cnt）。
  * @param lines    输出数组（每页起始块内行号，容量 max_cnt）。
- * @param max_cnt  数组容量。
+ * @param max_cnt  数组容量；0 且数组为 NULL 时只校验头与文件长度，返回 -页数。
  * @return 缓存页数（>0 命中）；0=无缓存；<0=读取失败（损坏文件已删除，
  *         或 -所需容量：缓存有效但 max_cnt 不足，调用方扩容后重读）。
  */
@@ -38,7 +38,7 @@ int espaperplay_pagen_load(uint32_t token, int chapter, uint32_t font_key, uint3
                            uint16_t *lines, int max_cnt);
 
 /**
- * @brief 异步保存章节分页缓存（数组复制后由 worker 落盘，原子替换写）。
+ * @brief 异步保存章节分页缓存（数组复制后由 worker 完整写入临时文件再发布）。
  *
  * @param token    书指纹。
  * @param chapter  章节号。

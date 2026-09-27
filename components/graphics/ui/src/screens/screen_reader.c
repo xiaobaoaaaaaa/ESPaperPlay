@@ -654,7 +654,7 @@ static bool rdr_advance_page(void) {
         for (int i = 0; i < s_pstart_cnt; i++)
             if (s_pstarts[i].line > UINT16_MAX) cacheable = false;
         /* 分页缓存异步落盘（字号/内容区变化经 font_key 自动失效） */
-        if (cacheable && reached_end && s_pstart_ch >= 0 && s_pstart_cnt > 1) {
+        if (cacheable && reached_end && s_pstart_ch >= 0 && s_pstart_cnt > 0) {
             uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint32_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint16_t),
@@ -1855,9 +1855,16 @@ static void reader_enter(void) {
         s_ch_pages = heap_caps_calloc(s_chapter_cnt, sizeof(uint32_t),
                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (s_ch_pages != NULL) {
+            const uint32_t started = lv_tick_get();
+            const uint32_t key = reader_layout_key();
+            int hits = 0;
             for (int i = 0; i < s_chapter_cnt; i++) {
-                s_ch_pages[i] = READER_CH_PAGES_UNSET;
+                const int pages = espaperplay_reader_pagen_count(i, key);
+                s_ch_pages[i] = pages > 0 ? (uint32_t)pages : READER_CH_PAGES_UNSET;
+                if (pages > 0) hits++;
             }
+            ESP_LOGI(TAG, "reader: restored page counts %d/%d in %u ms", hits,
+                     s_chapter_cnt, (unsigned)lv_tick_elaps(started));
         }
     }
 

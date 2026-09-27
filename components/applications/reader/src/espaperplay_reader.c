@@ -228,6 +228,11 @@ int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *bloc
     return espaperplay_pagen_load(token, chapter, font_key, blocks, lines, max_cnt);
 }
 
+int espaperplay_reader_pagen_count(int chapter, uint32_t font_key) {
+    const int n = espaperplay_reader_pagen_load(chapter, font_key, NULL, NULL, 0);
+    return n < 0 ? -n : 0;
+}
+
 void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
                                          const uint32_t *blocks, const uint16_t *lines) {
     if (!s_open) {

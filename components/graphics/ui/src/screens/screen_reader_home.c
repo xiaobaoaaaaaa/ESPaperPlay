@@ -234,6 +234,26 @@ static void rdh_grid_calc(void) {
 
 }
 
+/* The tile owns its descriptor and pixels for the full LVGL image lifetime. */
+static void rdh_cover_apply(rdh_tile_t *tile, const espaperplay_reader_cover_result_t *res) {
+    if (res->buf == NULL || tile->img == NULL) {
+        if (res->buf) heap_caps_free(res->buf);
+        return; /* 无封面：占位框保留原样 */
+    }
+    if (tile->cover_buf != NULL) {
+        heap_caps_free(tile->cover_buf);
+    }
+    tile->cover_buf = res->buf;
+    memset(&tile->dsc, 0, sizeof(tile->dsc));
+    tile->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    tile->dsc.header.w = res->w;
+    tile->dsc.header.h = res->h;
+    tile->dsc.header.stride = res->w * 2;
+    tile->dsc.data_size = (uint32_t)res->w * res->h * 2;
+    tile->dsc.data = res->buf;
+    lv_image_set_src(tile->img, &tile->dsc);
+}
+
 /** 构建当前页网格（含历史/图书内容 + 封面请求）。 */
 static void rdh_build_grid(void) {
     rdh_list_destroy();
@@ -330,7 +350,15 @@ static void rdh_build_grid(void) {
         if (espaperplay_reader_is_epub(t->path)) {
             t->img = lv_image_create(frame);
             lv_obj_center(t->img); /* 解码尺寸已适配封面框，居中即可 */
-            (void)espaperplay_reader_cover_request(t->path, s_cover_w, s_cover_h);
+            espaperplay_reader_cover_result_t cached;
+            const uint32_t started = lv_tick_get();
+            if (espaperplay_reader_cover_cached(t->path, s_cover_w, s_cover_h, &cached)) {
+                rdh_cover_apply(t, &cached);
+                ESP_LOGI(TAG, "bookshelf: cover ready before first frame in %u ms",
+                         (unsigned)lv_tick_elaps(started));
+            } else {
+                (void)espaperplay_reader_cover_request(t->path, s_cover_w, s_cover_h);
+            }
         } else {
             lv_obj_t *tx = espaperplay_ui_label_create(frame, "TXT", 16, LV_TEXT_ALIGN_CENTER);
             lv_obj_center(tx);
@@ -648,22 +676,7 @@ static void rdh_cover_timer_cb(lv_timer_t *t) {
             }
             continue;
         }
-        if (res.buf == NULL || tile->img == NULL) {
-            if (res.buf) heap_caps_free(res.buf);
-            continue; /* 无封面：占位框保留原样 */
-        }
-        if (tile->cover_buf != NULL) {
-            heap_caps_free(tile->cover_buf);
-        }
-        tile->cover_buf = res.buf;
-        memset(&tile->dsc, 0, sizeof(tile->dsc));
-        tile->dsc.header.cf = LV_COLOR_FORMAT_RGB565;
-        tile->dsc.header.w = res.w;
-        tile->dsc.header.h = res.h;
-        tile->dsc.header.stride = res.w * 2;
-        tile->dsc.data_size = (uint32_t)res.w * res.h * 2;
-        tile->dsc.data = res.buf;
-        lv_image_set_src(tile->img, &tile->dsc);
+        rdh_cover_apply(tile, &res);
     }
 }
 
