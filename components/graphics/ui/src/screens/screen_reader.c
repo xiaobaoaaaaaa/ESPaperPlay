@@ -12,17 +12,18 @@
 #include "esp_log.h"
 
 #include "espaperplay_fonts.h"
-#include "espaperplay_ui_util.h"
-#include "espaperplay_ui_gesture.h"
-#include "espaperplay_ui_modal.h"
 #include "espaperplay_gui.h"
 #include "espaperplay_gui_lv.h"
 #include "espaperplay_input.h"
 #include "espaperplay_reader.h"
 #include "espaperplay_reader_history.h"
+#include "espaperplay_reader_layout.h"
 #include "espaperplay_system.h"
 #include "espaperplay_ui.h"
+#include "espaperplay_ui_gesture.h"
+#include "espaperplay_ui_modal.h"
 #include "espaperplay_ui_touch.h"
+#include "espaperplay_ui_util.h"
 
 #include "lvgl.h"
 #include "lvgl_private.h"
@@ -60,7 +61,7 @@ static const int READER_FONT_SIZES[] = {16, 20, 24, 32};
 #define READER_FONT_DEFAULT_IDX 1 /* 20px */
 
 #define READER_PSTART_CAP_INIT 256  /* 章内页起点表初始容量 */
-#define READER_SEG_MAX 64           /* 单页片段数上限 */
+#define READER_SEG_MAX 384          /* 单页片段数上限 */
 #define READER_SPARSE_STEP 25       /* 稀疏检查点步长（页） */
 #define READER_SPARSE_MAX 160
 #define READER_CH_PAGES_UNSET 0xFFFFFFFFu
@@ -95,7 +96,7 @@ static bool s_ch_zero_pstart = false; /*!< 驻留章为空（无页） */
 /* 驻留章惰性分页表（LVGL 线程内串行访问） */
 typedef struct {
     uint32_t block; /*!< 页起始块号 */
-    uint16_t line;  /*!< 页起始块内行号 */
+    uint32_t line;  /*!< 页起始块内行号 */
 } reader_pos_t;
 static reader_pos_t *s_pstarts = NULL; /*!< pstarts[i] = 第 i 页起点 */
 static int s_pstart_ch = -1;          /*!< pstarts / 章总页数记录归属的章节（=当前驻留章） */
@@ -108,6 +109,7 @@ typedef struct {
     uint32_t off;    /*!< 文本段：章节 blob 内起始偏移 */
     uint32_t len;    /*!< 文本段：字节长度 */
     uint16_t flags;  /*!< 块样式 */
+    uint16_t scale;  /*!< 非零为已按行排好的 EPUB 样式片段 */
     int32_t image;   /*!< >=0 图片段 */
     int y;           /*!< 页内 y 偏移 */
     int x;           /*!< 页内 x 偏移 */
@@ -210,6 +212,37 @@ static lv_font_t *reader_block_font(uint16_t flags) {
     }
     return reader_font_styled(size, style);
 }
+
+/* Quantize author sizes to eight steps to bound persistent FreeType faces.
+ * Pagination and paint always use this exact same resolver. */
+static lv_font_t *s_span_fonts[8][4];
+static lv_font_t *reader_span_font(uint16_t flags, uint16_t scale) {
+    int size = (reader_base_size() * scale + 50) / 100;
+    size = (size + 2) / 4 * 4;
+    if (size < 12)
+        size = 12;
+    if (size > 40)
+        size = 40;
+    int style = ((flags & ESPAPERPLAY_READER_BLK_BOLD) ? ESPAPERPLAY_FONT_STYLE_BOLD : 0) |
+                ((flags & ESPAPERPLAY_READER_BLK_ITALIC) ? ESPAPERPLAY_FONT_STYLE_ITALIC : 0);
+    lv_font_t **slot = &s_span_fonts[(size - 12) / 4][style];
+    if (!*slot) {
+        lv_font_t *font = reader_font_styled(size, style);
+        *slot = font ? font : s_font;
+    }
+    return *slot;
+}
+static espaperplay_reader_glyph_t reader_measure(void *ctx, uint16_t flags, uint16_t scale,
+                                                 uint32_t cp, uint32_t next) {
+    (void)ctx;
+    lv_font_t *font = reader_span_font(flags, scale);
+    return (espaperplay_reader_glyph_t){.width = lv_font_get_glyph_width(font, cp, next),
+                                        .ascent = font->line_height - font->base_line,
+                                        .descent = font->base_line};
+}
+static int reader_metric(int value) { return value * reader_base_size() / 64; }
+/* One shared scratch line: the UI task paginates and renders serially. */
+static espaperplay_reader_line_t s_rich_line;
 
 /* ------------------------------------------------------------------ */
 /* 章内惰性分页                                                         */
@@ -400,6 +433,8 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
     }
 
     int nsegs = 0;
+    int span_cnt = 0;
+    const espaperplay_reader_span_t *spans = espaperplay_reader_spans(&span_cnt);
 
     /* 图片块独占一页 */
     if (blocks[pos.block].image >= 0) {
@@ -407,6 +442,7 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
         s_segs[nsegs].off = 0;
         s_segs[nsegs].len = 0;
         s_segs[nsegs].flags = 0;
+        s_segs[nsegs].scale = 0;
         s_segs[nsegs].image = blocks[pos.block].image;
         s_segs[nsegs].y = 0;
         s_segs[nsegs].x = 0;
@@ -420,7 +456,7 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
 
     int y = 0;
     uint32_t b = pos.block;
-    uint16_t li = pos.line;
+    uint32_t li = pos.line;
     while ((int)b < blk_cnt && nsegs < READER_SEG_MAX) {
         const espaperplay_reader_block_t *blk = &blocks[b];
         if (blk->image >= 0) {
@@ -432,6 +468,84 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
             b++;
             li = 0;
             if (y > s_content_h) {
+                break;
+            }
+            continue;
+        }
+
+        if (span_cnt > 0) {
+            const uint32_t end = blk->off + blk->len;
+            uint32_t p = blk->off;
+            uint32_t line = 0;
+            int quote = (blk->flags & ESPAPERPLAY_READER_BLK_QUOTE) ? READER_QUOTE_INDENT : 0;
+            int indent = reader_metric(blk->indent);
+            int hang = indent < 0 ? -indent : 0;
+            int base_width = s_content_w - 2 * quote;
+            if (hang > base_width / 2)
+                hang = base_width / 2;
+            if (indent > base_width / 2)
+                indent = base_width / 2;
+            int before =
+                (blk->layout & ESPAPERPLAY_READER_LAYOUT_BEFORE) ? reader_metric(blk->before) : 0;
+            if (before > s_content_h / 3)
+                before = s_content_h / 3;
+            if (!li && y > 0)
+                y += before;
+            while (p < end) {
+                int inset = line == 0 ? (indent > 0 ? indent : 0) : hang;
+                int width = base_width - inset;
+                if (!espaperplay_reader_layout_line(text, p, end, spans, span_cnt, blk->flags,
+                                                    blk->scale, width, reader_measure, NULL,
+                                                    &s_rich_line))
+                    break;
+                if (line < li) {
+                    p = s_rich_line.next;
+                    line++;
+                    continue;
+                }
+                int lh = s_rich_line.height + READER_LINE_SPACE;
+                if (blk->line_height) {
+                    int requested = reader_metric(blk->line_height);
+                    /* Never overlap glyphs when a book requests a tiny line height. */
+                    lh = requested > s_rich_line.height ? requested : s_rich_line.height;
+                }
+                if ((y + lh > s_content_h && nsegs > 0) ||
+                    nsegs + s_rich_line.count > READER_SEG_MAX)
+                    break;
+                int align = 0;
+                if (blk->flags & ESPAPERPLAY_READER_BLK_CENTER)
+                    align = (width - s_rich_line.width) / 2;
+                else if (blk->flags & ESPAPERPLAY_READER_BLK_RIGHT)
+                    align = width - s_rich_line.width;
+                if (align < 0)
+                    align = 0;
+                for (int r = 0; r < s_rich_line.count; r++) {
+                    const espaperplay_reader_fragment_t *f = &s_rich_line.fragments[r];
+                    s_segs[nsegs++] = (reader_seg_t){.blk = blk,
+                                                     .off = f->off,
+                                                     .len = f->len,
+                                                     .flags = f->flags,
+                                                     .scale = f->scale,
+                                                     .image = -1,
+                                                     .x = quote + inset + align + f->x,
+                                                     .y = y + s_rich_line.ascent - f->ascent +
+                                                          (lh - s_rich_line.height) / 2,
+                                                     .w = f->width + 8};
+                }
+                y += lh;
+                p = s_rich_line.next;
+                line++;
+                /* Empty lines count too, and a huge line index must not wrap. */
+                if (y >= s_content_h)
+                    break;
+            }
+            if (p >= end) {
+                y += (blk->layout & ESPAPERPLAY_READER_LAYOUT_AFTER) ? reader_metric(blk->after)
+                                                                     : READER_PAR_SPACE;
+                b++;
+                li = 0;
+            } else {
+                li = line;
                 break;
             }
             continue;
@@ -450,7 +564,7 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
         const uint32_t blk_end = blk->off + blk->len;
         /* 跳过 li 行（页起点在块中间） */
         uint32_t p = blk->off;
-        for (uint16_t k = 0; k < li; k++) {
+        for (uint32_t k = 0; k < li; k++) {
             const uint32_t adv = rdr_next_line(text, 0, p, blk_end, font, &attr);
             if (adv == 0) {
                 break;
@@ -490,6 +604,7 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
         s_segs[nsegs].off = seg_start;
         s_segs[nsegs].len = p - seg_start;
         s_segs[nsegs].flags = blk->flags;
+        s_segs[nsegs].scale = 0;
         s_segs[nsegs].image = -1;
         s_segs[nsegs].y = y - lines * lh;
         s_segs[nsegs].x = quote ? READER_QUOTE_INDENT : 0;
@@ -502,7 +617,7 @@ static bool reader_paginate_from(reader_pos_t pos, reader_pos_t *next_out, int *
             b++;
             li = 0;
         } else {
-            li = (uint16_t)(li + lines);
+            li += lines;
             break; /* 页满 */
         }
     }
@@ -533,8 +648,13 @@ static bool rdr_advance_page(void) {
             s_pstart_ch < s_chapter_cnt && s_ch_pages[s_pstart_ch] == READER_CH_PAGES_UNSET) {
             s_ch_pages[s_pstart_ch] = (uint32_t)s_pstart_cnt;
         }
+        /* The disk format uses 16-bit line numbers; exceptionally long blocks
+         * remain readable using 32-bit RAM positions without a truncated cache. */
+        bool cacheable = true;
+        for (int i = 0; i < s_pstart_cnt; i++)
+            if (s_pstarts[i].line > UINT16_MAX) cacheable = false;
         /* 分页缓存异步落盘（字号/内容区变化经 font_key 自动失效） */
-        if (reached_end && s_pstart_ch >= 0 && s_pstart_cnt > 1) {
+        if (cacheable && reached_end && s_pstart_ch >= 0 && s_pstart_cnt > 1) {
             uint32_t *bt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint32_t),
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             uint16_t *lt = heap_caps_malloc((size_t)s_pstart_cnt * sizeof(uint16_t),
@@ -911,16 +1031,23 @@ static void reader_render_page(void) {
         lv_obj_set_pos(lbl, sg->x, sg->y);
         lv_obj_set_width(lbl, sg->w);
         /* 段落对齐（CSS text-align / align 属性） */
-        if ((sg->flags & ESPAPERPLAY_READER_BLK_CENTER) != 0) {
+        if (!sg->scale && (sg->flags & ESPAPERPLAY_READER_BLK_CENTER) != 0) {
             lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-        } else if ((sg->flags & ESPAPERPLAY_READER_BLK_RIGHT) != 0) {
+        } else if (!sg->scale && (sg->flags & ESPAPERPLAY_READER_BLK_RIGHT) != 0) {
             lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_RIGHT, 0);
         }
         lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
         lv_obj_set_style_pad_all(lbl, 0, 0);
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_label_set_long_mode(lbl, sg->scale ? LV_LABEL_LONG_CLIP : LV_LABEL_LONG_WRAP);
         lv_obj_remove_flag(lbl, LV_OBJ_FLAG_SCROLLABLE);
-        lv_font_t *font = reader_block_font(sg->flags);
+        lv_font_t *font =
+            sg->scale ? reader_span_font(sg->flags, sg->scale) : reader_block_font(sg->flags);
+        lv_text_decor_t decor = LV_TEXT_DECOR_NONE;
+        if (sg->flags & ESPAPERPLAY_READER_BLK_UNDERLINE)
+            decor |= LV_TEXT_DECOR_UNDERLINE;
+        if (sg->flags & ESPAPERPLAY_READER_BLK_STRIKE)
+            decor |= LV_TEXT_DECOR_STRIKETHROUGH;
+        lv_obj_set_style_text_decor(lbl, decor, 0);
         if (font != NULL) {
             lv_obj_set_style_text_font(lbl, font, 0);
         }

@@ -8,9 +8,24 @@
 #define RP_STYLE_INDENT 8
 #define RP_STYLE_HIDDEN 16
 #define RP_STYLE_SPACE 32
+#define RP_STYLE_SIZE 64
+#define RP_STYLE_LINE 128
+#define RP_STYLE_BEFORE 256
+#define RP_STYLE_AFTER 512
+#define RP_STYLE_DECORATION 1024
+/* CSS value before computation: hundredths, unit 0=em, 1=root em, 2=px. */
+typedef struct {
+    int16_t value;
+    uint8_t unit;
+} rp_length_t;
 typedef struct {
     uint16_t flags;
-    bool indent, hidden, pre;
+    bool hidden, pre;
+    uint16_t scale, line_height, layout;
+    int16_t indent, before, after;
+    rp_length_t size_value, indent_value, line_value, before_value, after_value;
+    unsigned inherit, initial;
+
 } rp_style_t;
 typedef struct {
     char selector[160];

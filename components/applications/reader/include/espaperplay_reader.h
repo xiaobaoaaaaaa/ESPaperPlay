@@ -184,6 +184,9 @@ int espaperplay_reader_pagen_load(int chapter, uint32_t font_key, uint32_t *bloc
 void espaperplay_reader_pagen_save_async(int chapter, uint32_t font_key, int cnt,
                                          const uint32_t *blocks, const uint16_t *lines);
 
+/* 段内样式与章节正文同生命周期；TXT 返回空表。 */
+const espaperplay_reader_span_t *espaperplay_reader_spans(int *count);
+
 #ifdef __cplusplus
 }
 #endif

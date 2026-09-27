@@ -33,7 +33,7 @@ static esp_lv_fs_handle_t s_fs_handle;
  * 逐出仍在使用的字体，导致 LVGL 持有野指针而崩溃（InstrFetchProhibited）。
  * 容量设为 20 以容纳所有页面（8 档）+ SD/Flash 双份 + 余量，避免正常使用
  * 中触发逐出（逐出会释放仍被 LVGL 持有的字体，导致野指针）。 */
-#define ESPAPERPLAY_FONTS_CACHE_CNT 20
+#define ESPAPERPLAY_FONTS_CACHE_CNT 48
 
 typedef struct {
     char name[64]; /* 实际生效的字体文件名（缓存键） */

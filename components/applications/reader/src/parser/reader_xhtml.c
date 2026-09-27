@@ -13,6 +13,7 @@ void rp_content_free(rp_content_t *c) {
     rp_free(c->text);
     rp_free(c->blocks);
     rp_free(c->images);
+    rp_free(c->spans);
     memset(c, 0, sizeof(*c));
 }
 static bool reserve(void **p, size_t size, int *cap, int need, int max) {
@@ -48,6 +49,20 @@ static bool put(rp_content_t *c, const char *s, size_t len) {
         c->text = p;
         c->text_cap = n;
     }
+    if (len) {
+        espaperplay_reader_span_t *last = c->span_count ? &c->spans[c->span_count - 1] : NULL;
+        uint16_t scale = c->text_scale ? c->text_scale : 100;
+        if (last && last->off + last->len == c->text_len && last->flags == c->text_flags &&
+            last->scale == scale)
+            last->len += len;
+        else {
+            if (!reserve((void **)&c->spans, sizeof(*c->spans), &c->span_cap, c->span_count + 1,
+                         RP_MAX_SPANS))
+                return false;
+            c->spans[c->span_count++] = (espaperplay_reader_span_t){
+                .off = c->text_len, .len = len, .flags = c->text_flags, .scale = scale};
+        }
+    }
     memcpy(c->text + c->text_len, s, len);
     c->text_len += len;
     c->text[c->text_len] = 0;
@@ -66,6 +81,15 @@ static bool flush(rp_content_t *c) {
     if (c->text_len > c->paragraph &&
         !block(c, c->paragraph, c->text_len - c->paragraph, c->paragraph_flags, -1))
         return false;
+    if (c->text_len > c->paragraph) {
+        espaperplay_reader_block_t *b = &c->blocks[c->block_count - 1];
+        b->scale = c->paragraph_style.scale;
+        b->indent = c->paragraph_style.indent;
+        b->before = c->paragraph_style.before;
+        b->after = c->paragraph_style.after;
+        b->line_height = c->paragraph_style.line_height;
+        b->layout = c->paragraph_style.layout;
+    }
     c->paragraph = c->text_len;
     c->paragraph_flags = 0;
     return true;
@@ -95,11 +119,7 @@ static bool begin_text(rp_content_t *c, rp_element_t *stack, int depth) {
             break;
         }
     c->paragraph_flags = style.flags;
-    if (style.indent && !(style.flags & (C | R | ESPAPERPLAY_READER_BLK_HEAD_MASK))) {
-        if (!put(c, "\xe3\x80\x80\xe3\x80\x80", 6))
-            return false;
-        c->paragraph_flags |= ESPAPERPLAY_READER_BLK_INDENTED;
-    }
+    c->paragraph_style = style;
     for (int i = depth - 1; i >= 0; i--)
         if (!strcmp(stack[i].name, "li") && stack[i].list_number) {
             char prefix[32];
@@ -115,7 +135,10 @@ static bool begin_text(rp_content_t *c, rp_element_t *stack, int depth) {
     return true;
 }
 static bool codepoint(rp_content_t *c, rp_element_t *stack, int depth, uint32_t cp) {
-    bool pre = depth && stack[depth - 1].style.pre;
+    const rp_style_t style = depth ? stack[depth - 1].style : (rp_style_t){.scale = 100};
+    c->text_flags = style.flags;
+    c->text_scale = style.scale;
+    bool pre = style.pre;
     if (!pre && (cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t' || cp == '\f')) {
         if (c->text_len > c->paragraph)
             c->pending_space = true;
@@ -249,6 +272,11 @@ esp_err_t rp_content_document(epub_zip_t *zip, const char *path, const char *htm
                 el->style = stack[depth - 1].style;
                 el->skip = stack[depth - 1].skip;
             }
+            if (!el->style.scale)
+                el->style.scale = 100;
+            /* Margins belong to each box, unlike font/indent/line-height. */
+            el->style.before = el->style.after = 0;
+            el->style.layout = 0;
             el->style.hidden = false;
             el->block = is_block(t.name);
             if (el->block)
@@ -272,6 +300,22 @@ esp_err_t rp_content_document(epub_zip_t *zip, const char *path, const char *htm
                 el->style.flags |= C;
             if (t.name[0] == 'h' && t.name[1] >= '1' && t.name[1] <= '6' && !t.name[2])
                 el->style.flags |= B | ((t.name[1] - '0') << ESPAPERPLAY_READER_BLK_HEAD_SHIFT);
+            if (t.name[0] == 'h' && t.name[1] >= '1' && t.name[1] <= '6' && !t.name[2]) {
+                static const uint16_t sizes[] = {160, 140, 120, 100, 100, 100};
+                el->style.scale = sizes[t.name[1] - '1'];
+            }
+            if (!strcmp(t.name, "small"))
+                el->style.scale = el->style.scale * 80 / 100;
+            if (!strcmp(t.name, "big"))
+                el->style.scale = el->style.scale * 120 / 100;
+            if (el->style.scale < 50)
+                el->style.scale = 50;
+            if (el->style.scale > 200)
+                el->style.scale = 200;
+            if (!strcmp(t.name, "u"))
+                el->style.flags |= ESPAPERPLAY_READER_BLK_UNDERLINE;
+            if (!strcmp(t.name, "s") || !strcmp(t.name, "del") || !strcmp(t.name, "strike"))
+                el->style.flags |= ESPAPERPLAY_READER_BLK_STRIKE;
             if (!strcmp(t.name, "pre"))
                 el->style.pre = true;
             char inline_style[1024], align[24];

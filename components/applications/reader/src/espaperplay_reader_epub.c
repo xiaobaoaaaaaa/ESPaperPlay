@@ -21,7 +21,7 @@
  * A generation identifies a live session; the stable token identifies disk caches. */
 #define EPUB_CACHE_DIR ESPAPERPLAY_SYSTEM_SD_DIR "/cache/reader"
 #define EPUB_CACHE_MAGIC 0x43525045u
-#define EPUB_ENGINE_VERSION 0x45505204u
+#define EPUB_ENGINE_VERSION 0x45505206u
 static const char *TAG = "ESPaperPlay_READER";
 typedef struct {
     uint32_t token;
@@ -31,6 +31,8 @@ typedef struct {
     size_t text_len;
     espaperplay_reader_block_t *blocks;
     int block_cnt;
+    espaperplay_reader_span_t *spans;
+    int span_cnt;
     int *images;
     int image_cnt;
     esp_err_t status;
@@ -67,6 +69,7 @@ static void book_unlock(void) {}
 static void epub_packet_free(epub_packet_t *p) {
     rp_free(p->text);
     rp_free(p->blocks);
+    rp_free(p->spans);
     rp_free(p->images);
     memset(p, 0, sizeof(*p));
     p->chapter = -1;
@@ -121,6 +124,8 @@ static esp_err_t produce(int idx, bool write_cache, epub_packet_t *out) {
     out->text_len = content.text_len;
     out->blocks = content.blocks;
     out->block_cnt = content.block_count;
+    out->spans = content.spans;
+    out->span_cnt = content.span_count;
     out->images = content.images;
     out->image_cnt = content.image_count;
     snprintf(out->title, sizeof(out->title), "%s", first->title[0] ? first->title : content.title);
@@ -330,6 +335,11 @@ const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *count) {
     if (count)
         *count = s_live.block_cnt;
     return s_live.blocks;
+}
+const espaperplay_reader_span_t *espaperplay_reader_epub_spans(int *count) {
+    if (count)
+        *count = s_live.span_cnt;
+    return s_live.spans;
 }
 static void descriptor(lv_image_dsc_t *d, const epub_img_out_t *out) {
     memset(d, 0, sizeof(*d));

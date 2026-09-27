@@ -200,6 +200,13 @@ const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt) {
     return s_txt.blocks;
 }
 
+const espaperplay_reader_span_t *espaperplay_reader_spans(int *count) {
+    if (count)
+        *count = 0;
+    return s_open && s_fmt == ESPAPERPLAY_READER_FMT_EPUB ? espaperplay_reader_epub_spans(count)
+                                                          : NULL;
+}
+
 esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,
                                    const lv_image_dsc_t **out_dsc) {
     if (!s_open) {

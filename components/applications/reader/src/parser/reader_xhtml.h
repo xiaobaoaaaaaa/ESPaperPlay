@@ -8,7 +8,10 @@ typedef struct {
     int block_count, block_cap;
     int *images;
     int image_count, image_cap;
-    uint16_t paragraph_flags;
+    espaperplay_reader_span_t *spans;
+    int span_count, span_cap;
+    rp_style_t paragraph_style;
+    uint16_t paragraph_flags, text_flags, text_scale;
     bool pending_space;
     char title[128];
 } rp_content_t;

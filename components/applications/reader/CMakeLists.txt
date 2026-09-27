@@ -8,6 +8,7 @@ idf_component_register(
          "src/parser/reader_package.c"
          "src/parser/reader_css.c"
          "src/parser/reader_xhtml.c"
+         "src/parser/reader_layout.c"
          "src/parser/reader_image.c"
          "src/espaperplay_reader_cover.c"
          "src/espaperplay_reader_pagen.c"

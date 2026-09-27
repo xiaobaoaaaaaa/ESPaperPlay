@@ -41,11 +41,24 @@ extern "C" {
 #define ESPAPERPLAY_READER_BLK_HEAD_LEVEL(flags) \
     ((int)(((flags) >> ESPAPERPLAY_READER_BLK_HEAD_SHIFT) & 0x7u))
 
-/** 文档块。 */
+/** 段内样式；off/len 是章节文本的 UTF-8 字节区间。 */
+typedef struct {
+    uint32_t off, len;
+    uint16_t flags, scale; /*!< 字号为用户正文字号的百分比（100=正文） */
+} espaperplay_reader_span_t;
+
+#define ESPAPERPLAY_READER_BLK_UNDERLINE (1u << 9)
+#define ESPAPERPLAY_READER_BLK_STRIKE (1u << 10)
+#define ESPAPERPLAY_READER_LAYOUT_BEFORE 1u
+#define ESPAPERPLAY_READER_LAYOUT_AFTER 2u
+
+/** 文档块。新增长度按用户正文字号的 1/64 计，0 表示无显式设置。 */
 typedef struct {
     uint32_t off;   /*!< 文本块：章节文本 blob 内的起始偏移 */
     uint32_t len;   /*!< 文本块：字节长度（不含 NUL；内部 '\n' 为强制换行） */
     uint16_t flags; /*!< ESPAPERPLAY_READER_BLK_* 样式位 */
+    uint16_t scale, line_height, layout;
+    int16_t indent, before, after;
     int32_t image;  /*!< >=0：图片块（章节内图片 id）；<0：文本块 */
 } espaperplay_reader_block_t;
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Private cache serialization, included by the EPUB session owner. */
-#define EPUB_CACHE_VER 3u
+#define EPUB_CACHE_VER 4u
 
 /** 缓存路径：书指纹 + 章节号（指纹含 mtime/size，书变更自动换名失效）。 */
 static void epub_cache_path(char *buf, size_t n, uint32_t token, int idx) {
@@ -25,8 +25,8 @@ static espcache_result_t epub_cache_read_fn(FILE *f, void *ud) {
         hdr[2] != token) {
         return ESPCACHE_CORRUPT;
     }
-    if (cnts[0] < 0 || cnts[0] > 20000 || cnts[1] < 0 || cnts[1] > 256 ||
-        hdr[4] > RP_MAX_TEXT) {
+    if (cnts[0] < 0 || cnts[0] > 20000 || cnts[1] < 0 || cnts[1] > 256 || hdr[4] > RP_MAX_TEXT ||
+        hdr[5] > RP_MAX_SPANS) {
         return ESPCACHE_CORRUPT;
     }
     memset(pkt, 0, sizeof(*pkt));
@@ -38,6 +38,7 @@ static espcache_result_t epub_cache_read_fn(FILE *f, void *ud) {
     pkt->title[sizeof(pkt->title) - 1] = '\0';
     pkt->block_cnt = cnts[0];
     pkt->image_cnt = cnts[1];
+    pkt->span_cnt = hdr[5];
     pkt->text_len = hdr[4];
     bool bad = false;
     if (pkt->block_cnt > 0) {
@@ -48,6 +49,12 @@ static espcache_result_t epub_cache_read_fn(FILE *f, void *ud) {
                 (size_t)pkt->block_cnt) {
             bad = true;
         }
+    }
+    if (!bad && pkt->span_cnt > 0) {
+        pkt->spans = rp_alloc((size_t)pkt->span_cnt * sizeof(*pkt->spans));
+        if (!pkt->spans ||
+            fread(pkt->spans, sizeof(*pkt->spans), pkt->span_cnt, f) != (size_t)pkt->span_cnt)
+            bad = true;
     }
     if (!bad && pkt->image_cnt > 0) {
         pkt->images = heap_caps_malloc((size_t)pkt->image_cnt * sizeof(int),
@@ -67,7 +74,16 @@ static espcache_result_t epub_cache_read_fn(FILE *f, void *ud) {
     }
     for (int i=0; !bad && i<pkt->block_cnt; i++) {
         const espaperplay_reader_block_t *b=&pkt->blocks[i];
-        bad=b->off>pkt->text_len || b->len>pkt->text_len-b->off || b->image < -1 || b->image>=pkt->image_cnt;
+        bad = b->off > pkt->text_len || b->len > pkt->text_len - b->off || b->image < -1 ||
+              b->image >= pkt->image_cnt || (b->scale && (b->scale < 50 || b->scale > 200)) ||
+              b->line_height > 640 || b->layout > 3 || b->indent < -512 || b->indent > 512 ||
+              b->before < 0 || b->before > 640 || b->after < 0 || b->after > 640;
+    }
+    for (int i = 0; !bad && i < pkt->span_cnt; i++) {
+        const espaperplay_reader_span_t *s = &pkt->spans[i];
+        bad = s->off > pkt->text_len || !s->len || s->len > pkt->text_len - s->off ||
+              s->scale < 50 || s->scale > 200 ||
+              (i && s->off < pkt->spans[i - 1].off + pkt->spans[i - 1].len);
     }
     for (int i=0; !bad && i<pkt->image_cnt; i++) bad=pkt->images[i]<0 || pkt->images[i]>=s_zip.ent_cnt;
     if (!bad && (memchr(pkt->text,0,pkt->text_len) || fgetc(f)!=EOF)) bad=true;
@@ -90,12 +106,9 @@ static bool epub_cache_read(epub_packet_t *pkt, uint32_t token, int idx) {
 /** 写缓存回调：头 + 计数 + 标题 + blocks/images/text 载荷。 */
 static bool epub_cache_write_fn(FILE *f, void *ud) {
     const epub_packet_t *pkt = ud;
-    const uint32_t hdr[6] = {EPUB_CACHE_MAGIC,
-                             EPUB_CACHE_VER,
-                             pkt->token,
-                             (uint32_t)pkt->chapter,
-                             (uint32_t)pkt->text_len,
-                             0};
+    const uint32_t hdr[6] = {
+        EPUB_CACHE_MAGIC,       EPUB_CACHE_VER,          pkt->token,
+        (uint32_t)pkt->chapter, (uint32_t)pkt->text_len, (uint32_t)pkt->span_cnt};
     const int32_t cnts[2] = {pkt->block_cnt, pkt->image_cnt};
     bool ok = fwrite(hdr, sizeof(uint32_t), 6, f) == 6;
     ok = ok && fwrite(cnts, sizeof(int32_t), 2, f) == 2;
@@ -104,6 +117,8 @@ static bool epub_cache_write_fn(FILE *f, void *ud) {
         ok = fwrite(pkt->blocks, sizeof(*pkt->blocks), (size_t)pkt->block_cnt, f) ==
              (size_t)pkt->block_cnt;
     }
+    if (ok && pkt->span_cnt > 0)
+        ok = fwrite(pkt->spans, sizeof(*pkt->spans), pkt->span_cnt, f) == (size_t)pkt->span_cnt;
     if (ok && pkt->image_cnt > 0) {
         ok = fwrite(pkt->images, sizeof(int), (size_t)pkt->image_cnt, f) ==
              (size_t)pkt->image_cnt;

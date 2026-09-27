@@ -137,6 +137,9 @@ esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,
 esp_err_t espaperplay_reader_epub_probe_cover(const char *abs_path, int max_w, int max_h,
                                               lv_image_dsc_t *out_dsc, uint8_t **out_buf);
 
+/* 段内样式与章节正文同生命周期；TXT 返回空表。 */
+const espaperplay_reader_span_t *espaperplay_reader_epub_spans(int *count);
+
 #ifdef __cplusplus
 }
 #endif

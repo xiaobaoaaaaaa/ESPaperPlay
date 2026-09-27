@@ -14,6 +14,7 @@
 #define RP_MAX_TEXT (2u * 1024 * 1024)
 #define RP_MAX_BLOCKS 20000
 #define RP_MAX_IMAGES 256
+#define RP_MAX_SPANS 32768
 #define RP_MAX_DEPTH 64
 static inline void *rp_alloc(size_t n) { return heap_caps_malloc(n, RP_CAPS); }
 static inline void *rp_realloc(void *p, size_t n) { return heap_caps_realloc(p, n, RP_CAPS); }
