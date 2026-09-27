@@ -49,16 +49,19 @@ lv_obj_t *espaperplay_ui_modal_card_create(lv_obj_t *overlay, int w, int h) {
 }
 
 void espaperplay_ui_modal_card_title(lv_obj_t *card, const char *text, int y, int max_w) {
-    lv_obj_t *title = espaperplay_ui_label_create(card, text, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, max_w > 0 ? max_w : LV_PCT(100));
+    lv_obj_update_layout(card);
+    lv_obj_t *title = espaperplay_ui_label_create(card, text, 24, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_width(title, max_w > 0 ? max_w : lv_obj_get_width(card) - 48);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(title, 0, y);
+    lv_obj_set_pos(title, 24, y);
 }
 
 void espaperplay_ui_modal_card_msg(lv_obj_t *card, const char *text, int y, int w) {
-    lv_obj_t *msg = espaperplay_ui_label_create(card, text, 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(msg, w);
-    lv_obj_set_pos(msg, 0, y);
+    lv_obj_update_layout(card);
+    lv_obj_t *msg = espaperplay_ui_label_create(card, text, 16, LV_TEXT_ALIGN_LEFT);
+    const int available = lv_obj_get_width(card) - 48;
+    lv_obj_set_width(msg, w < available ? w : available);
+    lv_obj_set_pos(msg, 24, y);
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
 }
 
@@ -139,11 +142,11 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     /* 面板尺寸（内容驱动，横竖屏自适应）。键盘单独挂全屏 modal 贴底，
      * 避免被面板裁剪（面板仅含标题/输入框/提示/按钮）。 */
     const int panel_w = scr_w - 2 * cfg->margin;
-    const int pad = 10;
-    const int title_h = 30;
+    const int pad = 24;
+    const int title_h = 40;
     const int ta_h = espaperplay_ui_scaled(52) < 40 ? 40 : espaperplay_ui_scaled(52);
     const int status_h = 22;
-    const int bh = espaperplay_ui_modal_btn_h();
+    const int bh = 48;
     const int kb_h = espaperplay_ui_scaled(240) < 170 ? 170 : espaperplay_ui_scaled(240);
     const int panel_h = pad + title_h + 6 + ta_h + 4 + status_h + 6 + bh + pad;
     const int kb_y = scr_h - kb_h - 6;      /* 键盘贴底 */
@@ -156,7 +159,7 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
 
     /* 标题（密码模式时右侧有切换按钮，标题让位）。 */
     espaperplay_ui_modal_card_title(panel, cfg->title, pad,
-                                    cfg->password ? panel_w - 140 : 0);
+                                    cfg->password ? panel_w - 144 : 0);
 
     /* 输入框（一行；FreeType 字体保证已有中文名可见）。 */
     lv_obj_t *ta = lv_textarea_create(panel);
@@ -174,7 +177,8 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     }
     lv_obj_set_style_border_color(ta, lv_color_black(), 0);
     lv_obj_set_style_border_width(ta, ESPAPERPLAY_UI_BORDER, 0);
-    lv_obj_set_style_radius(ta, 6, 0);
+    lv_obj_set_style_radius(ta, ESPAPERPLAY_UI_RADIUS, 0);
+    lv_obj_set_style_bg_color(ta, lv_color_white(), 0);
     lv_obj_set_style_pad_left(ta, 8, 0);
     /* 墨水屏：光标闪烁会触发连续局部刷新，禁用（anim_duration=0 即不闪烁）。
      * 默认主题在 LV_PART_CURSOR|LV_STATE_FOCUSED 上设了 400ms，故默认态与
@@ -200,11 +204,12 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     /* 密码可见性切换（标题右侧）。 */
     if (cfg->password) {
         lv_obj_t *toggle = lv_button_create(panel);
-        lv_obj_set_size(toggle, 120, 30);
-        lv_obj_set_pos(toggle, panel_w - 124, pad);
+        lv_obj_set_size(toggle, 88, 36);
+        lv_obj_set_pos(toggle, panel_w - pad - 88, pad);
+        lv_obj_set_style_shadow_width(toggle, 0, 0);
         lv_obj_set_style_bg_color(toggle, lv_color_white(), 0);
         lv_obj_set_style_border_color(toggle, lv_color_black(), 0);
-        lv_obj_set_style_border_width(toggle, ESPAPERPLAY_UI_BORDER, 0);
+        lv_obj_set_style_border_width(toggle, 0, 0);
         lv_obj_set_style_radius(toggle, 6, 0);
         lv_obj_t *tl = lv_label_create(toggle);
         lv_label_set_text(tl, "显示");
@@ -224,7 +229,9 @@ lv_obj_t *espaperplay_ui_kb_modal_open(const espaperplay_ui_kb_cfg_t *cfg) {
     lv_obj_set_style_border_width(kb, ESPAPERPLAY_UI_BORDER, LV_PART_ITEMS);
     lv_obj_set_style_border_color(kb, lv_color_black(), LV_PART_ITEMS);
     lv_obj_set_style_border_opa(kb, LV_OPA_COVER, LV_PART_ITEMS);
-    lv_obj_set_style_radius(kb, 6, LV_PART_ITEMS);
+    lv_obj_set_style_radius(kb, ESPAPERPLAY_UI_RADIUS, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, lv_color_black(), LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_text_color(kb, lv_color_white(), LV_PART_ITEMS | LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(kb, 0, LV_PART_ITEMS);
     lv_keyboard_set_mode(kb, cfg->numeric ? LV_KEYBOARD_MODE_NUMBER : LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_keyboard_set_textarea(kb, ta);

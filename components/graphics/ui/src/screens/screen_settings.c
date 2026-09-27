@@ -670,12 +670,6 @@ static void settings_back(void) {
 /* 模态：数值步进编辑                                                    */
 /* ------------------------------------------------------------------ */
 
-/** 模态覆盖层点击（点击空白处关闭，不保存）。 */
-static void settings_modal_overlay_cb(lv_event_t *e) {
-    (void)e;
-    settings_modal_close();
-}
-
 /** 模态 [-] 按钮：步进减小（钳制到下限）。 */
 static void settings_modal_minus_cb(lv_event_t *e) {
     lv_event_stop_bubbling(e);
@@ -753,29 +747,16 @@ static void settings_confirm_modal_open(settings_row_t *row, int32_t new_value,
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层（点空白关闭）+ 居中卡片（尺寸按屏高缩放）。 */
-    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
-    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, espaperplay_ui_scaled(340),
-                                                      espaperplay_ui_scaled(250));
-
-    /* 标题 */
-    espaperplay_ui_modal_card_title(card, row->name, espaperplay_ui_scaled(14), 0);
-
-    /* 消息（可换行居中） */
-    lv_obj_t *msg = espaperplay_ui_label_create(card, message, 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(msg, espaperplay_ui_scaled(300));
-    lv_obj_set_pos(msg, espaperplay_ui_scaled(20), espaperplay_ui_scaled(60));
-    lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-
-    /* 取消（白底黑边） */
-    espaperplay_ui_modal_button(card, "取消", espaperplay_ui_scaled(30), espaperplay_ui_scaled(180),
-                                espaperplay_ui_scaled(120), espaperplay_ui_scaled(44), false,
-                                settings_confirm_cancel_cb, NULL);
-
-    /* 确定（黑底白字） */
-    espaperplay_ui_modal_button(card, "确定", espaperplay_ui_scaled(190), espaperplay_ui_scaled(180),
-                                espaperplay_ui_scaled(120), espaperplay_ui_scaled(44), true,
-                                settings_confirm_ok_cb, NULL);
+    const int w = scr_w - 48;
+    s_modal = espaperplay_ui_modal_overlay_create(false, NULL);
+    lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, w, 264);
+    espaperplay_ui_modal_card_title(card, row->name, 24, 0);
+    espaperplay_ui_modal_card_msg(card, message, 78, w - 48);
+    const int bw = (w - 60) / 2;
+    espaperplay_ui_modal_button(card, "取消", 24, 192, bw, 48, false,
+                               settings_confirm_cancel_cb, NULL);
+    espaperplay_ui_modal_button(card, "确定", 36 + bw, 192, bw, 48, true,
+                               settings_confirm_ok_cb, NULL);
 
     ESP_LOGI(TAG, "settings: confirm modal open (%s -> %d)", row->name, (int)new_value);
 }
@@ -871,36 +852,24 @@ static void settings_font_modal_open(void) {
     int32_t scr_w, scr_h;
     espaperplay_ui_screen_size(&scr_w, &scr_h);
 
-    /* 全屏覆盖层（点空白关闭）+ 居中卡片（宽高按屏高缩放，宽不超过屏幕）。 */
-    s_modal = espaperplay_ui_modal_overlay_create(true, settings_modal_overlay_cb);
-    const int card_w = espaperplay_ui_scaled(400) > scr_w - 2 * SETTINGS_MARGIN
-                           ? scr_w - 2 * SETTINGS_MARGIN
-                           : espaperplay_ui_scaled(400);
-    const int card_h = espaperplay_ui_scaled(480);
+    s_modal = espaperplay_ui_modal_overlay_create(false, NULL);
+    const int card_w = scr_w - 48;
+    const int card_h = scr_h < 640 ? scr_h - 64 : 560;
     lv_obj_t *card = espaperplay_ui_modal_card_create(s_modal, card_w, card_h);
-
-    /* 标题 */
-    lv_obj_t *title = espaperplay_ui_label_create(card, "选择字体", 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(title, LV_PCT(100));
-    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(12));
-
-    /* 提示（重启生效） */
-    lv_obj_t *hint = espaperplay_ui_label_create(card, "选择后重启设备生效", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(hint, LV_PCT(100));
-    lv_obj_set_pos(hint, 0, espaperplay_ui_scaled(44));
-
-    /* 字体列表（可滚动） */
+    espaperplay_ui_modal_card_title(card, "选择字体", 24, 0);
+    espaperplay_ui_modal_card_msg(card, "选择后重启设备生效", 70, card_w - 48);
     lv_obj_t *list = lv_obj_create(card);
-    lv_obj_set_size(list, card_w - 24, card_h - espaperplay_ui_scaled(100));
-    lv_obj_set_pos(list, 12, espaperplay_ui_scaled(76));
-    lv_obj_set_style_bg_color(list, lv_color_white(), 0);
+    lv_obj_set_size(list, card_w - 48, card_h - 200);
+    lv_obj_set_pos(list, 24, 108);
+    espaperplay_ui_card_style(list);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_radius(list, 0, 0);
-    lv_obj_set_style_pad_all(list, 0, 0);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
     lv_obj_remove_flag(list, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    espaperplay_ui_modal_button(card, "取消", 24, card_h - 72, card_w - 48, 48,
+                               false, settings_confirm_cancel_cb, NULL);
 
     const char *current = espaperplay_system_get_config()->selected_font;
     if (current[0] == '\0') {
@@ -911,33 +880,34 @@ static void settings_font_modal_open(void) {
         const bool is_builtin = (strcmp(s_font_names[i], ESPAPERPLAY_FONTS_DEFAULT_NAME) == 0);
         const bool is_current = (strcmp(s_font_names[i], current) == 0);
 
-        const int item_h = espaperplay_ui_scaled(44) < 32 ? 32 : espaperplay_ui_scaled(44);
+        const int item_h = 80;
         lv_obj_t *item = lv_obj_create(list);
-        lv_obj_set_size(item, card_w - 24, item_h);
-        lv_obj_set_pos(item, 0, i * (item_h + 2));
-        lv_obj_set_style_bg_color(item, is_current ? lv_color_black() : lv_color_white(), 0);
-        lv_obj_set_style_border_width(item, 0, 0);
-        lv_obj_set_style_radius(item, 6, 0);
-        lv_obj_set_style_pad_all(item, 0, 0);
-        lv_obj_remove_flag(item, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(item, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(item, card_w - 48, item_h);
+        lv_obj_set_pos(item, 0, i * item_h);
+        espaperplay_ui_card_style(item);
+        lv_obj_set_style_radius(item, 0, 0);
+        lv_obj_set_style_border_side(item, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_add_event_cb(item, settings_font_item_cb, LV_EVENT_CLICKED, (void *)s_font_names[i]);
-
-        lv_obj_t *label = lv_label_create(item);
-        lv_label_set_text(label, s_font_names[i]);
-        lv_obj_set_style_text_color(label, is_current ? lv_color_white() : lv_color_black(), 0);
-        lv_obj_set_style_text_font(label, espaperplay_ui_font(16), 0);
-        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
-        lv_obj_set_width(label, card_w - 24 - 70);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
+        lv_obj_t *label = espaperplay_ui_label_create(item, s_font_names[i], 20, LV_TEXT_ALIGN_LEFT);
+        lv_obj_set_pos(label, 0, 10); lv_obj_set_width(label, card_w - 88);
         lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-
-        if (is_builtin) {
-            lv_obj_t *tag = lv_label_create(item);
-            lv_label_set_text(tag, "内置");
-            lv_obj_set_style_text_color(tag, is_current ? lv_color_white() : lv_color_black(), 0);
-            lv_obj_set_style_text_font(tag, espaperplay_ui_font(16), 0);
-            lv_obj_align(tag, LV_ALIGN_RIGHT_MID, -10, 0);
+        char detail[64];
+        snprintf(detail, sizeof(detail), "%s%s", is_builtin ? "内置字体" : "SD 卡字体",
+                 is_current ? " · 当前使用" : "");
+        lv_obj_t *sub = espaperplay_ui_label_create(item, detail, 16, LV_TEXT_ALIGN_LEFT);
+        lv_obj_set_pos(sub, 0, 44); lv_obj_set_width(sub, card_w - 88);
+        lv_obj_t *radio = lv_obj_create(item);
+        espaperplay_ui_card_style(radio);
+        lv_obj_remove_flag(radio, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(radio, 20, 20); lv_obj_set_pos(radio, card_w - 72, 28);
+        lv_obj_set_style_radius(radio, LV_RADIUS_CIRCLE, 0);
+        if (is_current) {
+            lv_obj_t *dot = lv_obj_create(radio);
+            lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_size(dot, 10, 10); lv_obj_center(dot);
+            lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
+            lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_border_width(dot, 0, 0);
         }
     }
 
