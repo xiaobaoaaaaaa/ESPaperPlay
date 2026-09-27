@@ -41,7 +41,7 @@ static const char *TAG = "ESPaperPlay_UI";
  *   点击链路。墨水屏刷新慢（~370ms/次局部刷新），轨迹以连续线段的
  *   形式累积显示，而不是只显示最新坐标点。
  *
- * 布局全部使用百分比（相对屏幕尺寸），适配不同分辨率 / 比例面板：
+ * 左右两列使用相对宽度，纵向为文字保留固定间距并随可用高度重排：
  *   左列（压力测试区）：计数器 / 进度条 / 位移方块 / 状态行 / 触摸画板；
  *   右列（按键+触摸测试区）：最近按键事件 / 累计计数 / 触摸状态与坐标 /
  *   back + clear 按钮。
@@ -64,6 +64,9 @@ typedef struct {
     uint16_t len;            /*!< 已写入点数 */
 } touch_pad_stroke_t;
 
+static lv_obj_t *s_test_body = NULL;
+static lv_obj_t *s_key_title = NULL, *s_touch_title = NULL;
+static lv_obj_t *s_back_button = NULL, *s_clear_button = NULL;
 static lv_obj_t *s_cnt_label = NULL;         /*!< 计数器数字（48 号大字，小区域） */
 static lv_obj_t *s_bar = NULL;               /*!< 进度条（中等区域） */
 static lv_obj_t *s_block = NULL;             /*!< 大黑块（位移 -> 局刷计数） */
@@ -193,6 +196,34 @@ static void pad_stroke_add_point(const lv_point_t *p) {
     lv_line_set_points(s_cur_stroke->line, s_cur_stroke->pts, s_cur_stroke->len);
 }
 
+/* Keep diagnostic fields readable in both 480px and 800px orientations. */
+static void test_layout(void) {
+    const int height = lv_obj_get_height(lv_screen_active()) - 154;
+    lv_obj_set_height(s_test_body, height);
+    const int block_h = height * 12 / 100;
+    const int status_y = 124 + block_h;
+    const int pad_y = status_y + 32;
+    const int touch_y = height / 2 > 160 ? height / 2 : 160;
+    lv_obj_set_y(s_cnt_label, 0);
+    lv_obj_set_y(s_bar, 68); lv_obj_set_height(s_bar, 24);
+    lv_obj_set_y(s_block, 112); lv_obj_set_height(s_block, block_h);
+    lv_obj_set_y(s_status_label, status_y);
+    lv_obj_set_y(s_pad, pad_y); lv_obj_set_height(s_pad, height - pad_y - 16);
+    lv_obj_set_y(s_key_title, 0);
+    lv_obj_set_y(s_last_key_label, 42);
+    lv_obj_set_y(s_key_count_label, 126);
+    lv_obj_set_y(s_touch_title, touch_y);
+    lv_obj_set_y(s_touch_state_label, touch_y + 40);
+    lv_obj_set_y(s_touch_pos_label, touch_y + 64);
+    lv_obj_set_y(s_back_button, height - 60);
+    lv_obj_set_y(s_clear_button, height - 60);
+}
+
+static void test_size_changed(lv_event_t *e) {
+    (void)e;
+    if (s_test_body) test_layout();
+}
+
 /** 测试页构建（页面 enter：屏幕已由页面栈清空）。 */
 static void test_enter(void) {
     lv_obj_t *scr = lv_screen_active();
@@ -200,17 +231,32 @@ static void test_enter(void) {
 
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     espaperplay_ui_status_bar_t *status =
-        espaperplay_ui_status_bar_create(scr, ESPAPERPLAY_UI_HEADER_H, "设备测试", false);
+        espaperplay_ui_status_bar_create(scr, ESPAPERPLAY_UI_HEADER_H, "", false);
     espaperplay_ui_status_bar_refresh(status);
 
+    int32_t scr_w, scr_h;
+    espaperplay_ui_screen_size(&scr_w, &scr_h);
+    lv_obj_t *heading = lv_obj_create(scr);
+    espaperplay_ui_card_style(heading);
+    lv_obj_set_style_border_width(heading, 0, 0);
+    lv_obj_set_size(heading, LV_PCT(100), 120);
+    lv_obj_set_pos(heading, 0, ESPAPERPLAY_UI_HEADER_H);
+    lv_obj_update_layout(heading);
+    espaperplay_ui_page_heading(heading, "设备测试", "检查屏幕与输入，双击按键旋转", test_back_clicked_cb);
+    s_test_body = lv_obj_create(scr);
+    espaperplay_ui_card_style(s_test_body);
+    lv_obj_set_style_border_width(s_test_body, 0, 0);
+    lv_obj_set_size(s_test_body, LV_PCT(100), scr_h - 154);
+    lv_obj_set_pos(s_test_body, 0, 154);
+
     /* ---- 左列：压力测试区（x 2% 起） ---- */
-    s_cnt_label = lv_label_create(scr);
+    s_cnt_label = lv_label_create(s_test_body);
     lv_label_set_text(s_cnt_label, "0");
     lv_obj_set_style_text_color(s_cnt_label, lv_color_black(), 0);
     lv_obj_set_style_text_font(s_cnt_label, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_cnt_label, lv_pct(2), lv_pct(8));
 
-    s_bar = lv_bar_create(scr);
+    s_bar = lv_bar_create(s_test_body);
     lv_obj_set_size(s_bar, lv_pct(25), lv_pct(6));
     lv_obj_set_pos(s_bar, lv_pct(2), lv_pct(20));
     lv_obj_set_style_bg_color(s_bar, lv_color_white(), LV_PART_MAIN);
@@ -221,20 +267,20 @@ static void test_enter(void) {
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
 
     /* 小方块：12% x 12% 屏（≈100x60@800x480），x 在 0..15% 间往复位移。 */
-    s_block = lv_obj_create(scr);
+    s_block = lv_obj_create(s_test_body);
     lv_obj_set_size(s_block, lv_pct(12), lv_pct(12));
     lv_obj_set_pos(s_block, lv_pct(2), lv_pct(30));
     lv_obj_set_style_bg_color(s_block, lv_color_black(), 0);
     lv_obj_set_style_border_width(s_block, 0, 0);
     lv_obj_set_style_radius(s_block, 0, 0);
 
-    s_status_label = lv_label_create(scr);
+    s_status_label = lv_label_create(s_test_body);
     lv_label_set_text(s_status_label, "ui 0  dt 0ms");
     lv_obj_set_style_text_color(s_status_label, lv_color_black(), 0);
     lv_obj_set_pos(s_status_label, lv_pct(2), lv_pct(45));
 
     /* ---- 左列：触摸画板（轨迹绘制区） ---- */
-    s_pad = lv_obj_create(scr);
+    s_pad = lv_obj_create(s_test_body);
     lv_obj_set_size(s_pad, lv_pct(46), lv_pct(40));
     lv_obj_set_pos(s_pad, lv_pct(2), lv_pct(53));
     lv_obj_set_style_bg_color(s_pad, lv_color_white(), 0);
@@ -243,50 +289,49 @@ static void test_enter(void) {
     lv_obj_remove_flag(s_pad, LV_OBJ_FLAG_SCROLLABLE); /* 纯绘制容器 */
 
     /* ---- 右列：按键测试区（x 52% 起） ---- */
-    lv_obj_t *key_title = espaperplay_ui_label_create(scr, "", 20, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(key_title, "按键测试");
-    lv_obj_set_style_text_color(key_title, lv_color_black(), 0);
-    lv_obj_set_pos(key_title, lv_pct(52), lv_pct(10));
+    s_key_title = espaperplay_ui_label_create(s_test_body, "", 20, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(s_key_title, "按键测试");
+    lv_obj_set_style_text_color(s_key_title, lv_color_black(), 0);
+    lv_obj_set_pos(s_key_title, lv_pct(52), lv_pct(10));
 
-    s_last_key_label = lv_label_create(scr);
+    s_last_key_label = lv_label_create(s_test_body);
     lv_label_set_text(s_last_key_label, "last: (none)");
     lv_obj_set_style_text_color(s_last_key_label, lv_color_black(), 0);
     lv_obj_set_style_text_font(s_last_key_label, espaperplay_ui_font(16), 0);
     lv_obj_set_width(s_last_key_label, lv_pct(46));
     lv_obj_set_pos(s_last_key_label, lv_pct(52), lv_pct(18));
 
-    s_key_count_label = lv_label_create(scr);
+    s_key_count_label = lv_label_create(s_test_body);
     lv_label_set_text(s_key_count_label, "keys: 0");
     lv_obj_set_style_text_color(s_key_count_label, lv_color_black(), 0);
     lv_obj_set_pos(s_key_count_label, lv_pct(52), lv_pct(42));
 
     /* ---- 右列：触摸测试区 ---- */
-    lv_obj_t *touch_title = espaperplay_ui_label_create(scr, "", 20, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(touch_title, "触摸测试");
-    lv_obj_set_style_text_color(touch_title, lv_color_black(), 0);
-    lv_obj_set_pos(touch_title, lv_pct(52), lv_pct(54));
+    s_touch_title = espaperplay_ui_label_create(s_test_body, "", 20, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(s_touch_title, "触摸测试");
+    lv_obj_set_style_text_color(s_touch_title, lv_color_black(), 0);
+    lv_obj_set_pos(s_touch_title, lv_pct(52), lv_pct(54));
 
-    s_touch_state_label = lv_label_create(scr);
+    s_touch_state_label = lv_label_create(s_test_body);
     lv_label_set_text(s_touch_state_label, "released  ev=0");
     lv_obj_set_style_text_color(s_touch_state_label, lv_color_black(), 0);
     lv_obj_set_pos(s_touch_state_label, lv_pct(52), lv_pct(62));
 
-    s_touch_pos_label = lv_label_create(scr);
+    s_touch_pos_label = lv_label_create(s_test_body);
     lv_label_set_text(s_touch_pos_label, "x=- y=-");
     lv_obj_set_style_text_color(s_touch_pos_label, lv_color_black(), 0);
     lv_obj_set_style_text_font(s_touch_pos_label, espaperplay_ui_font(16), 0);
     lv_obj_set_width(s_touch_pos_label, lv_pct(46));
     lv_obj_set_pos(s_touch_pos_label, lv_pct(52), lv_pct(70));
 
-    int32_t scr_w, scr_h;
-    espaperplay_ui_screen_size(&scr_w, &scr_h);
-    espaperplay_ui_modal_button(scr, "返回", scr_w * 52 / 100, scr_h * 78 / 100, scr_w * 20 / 100,
+    s_back_button = espaperplay_ui_modal_button(s_test_body, "返回", 0, 0, 96,
                                 ESPAPERPLAY_UI_BUTTON_H, false, test_back_clicked_cb, NULL);
-    espaperplay_ui_modal_button(scr, "清空", scr_w * 74 / 100, scr_h * 78 / 100, scr_w * 20 / 100,
+    lv_obj_set_pos(s_back_button, lv_pct(52), lv_pct(78)); lv_obj_set_width(s_back_button, lv_pct(20));
+    s_clear_button = espaperplay_ui_modal_button(s_test_body, "清空", 0, 0, 96,
                                 ESPAPERPLAY_UI_BUTTON_H, false, test_clear_clicked_cb, NULL);
-    lv_obj_t *hint = espaperplay_ui_label_create(scr, "双击按键旋转屏幕", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_width(hint, lv_pct(46));
-    lv_obj_set_pos(hint, lv_pct(52), lv_pct(89));
+    lv_obj_set_pos(s_clear_button, lv_pct(74), lv_pct(78)); lv_obj_set_width(s_clear_button, lv_pct(20));
+    test_layout();
+    lv_obj_add_event_cb(scr, test_size_changed, LV_EVENT_SIZE_CHANGED, NULL);
 
     s_test_timer = lv_timer_create(test_timer_cb, TEST_UI_PERIOD_MS, NULL);
     s_last_tick_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -305,12 +350,14 @@ static void test_enter(void) {
 
 /** 测试页退出（页面 exit：删除定时器并释放画板笔画，避免离开页面后仍刷新屏幕）。 */
 static void test_exit(void) {
+    lv_obj_remove_event_cb(lv_screen_active(), test_size_changed);
     if (s_test_timer != NULL) {
         lv_timer_delete(s_test_timer);
         s_test_timer = NULL;
     }
     pad_clear_strokes();
     s_pad = NULL;
+    s_test_body = NULL;
     ESP_LOGI(TAG, "test screen exited");
 }
 
