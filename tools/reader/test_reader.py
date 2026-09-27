@@ -60,6 +60,39 @@ class ReaderTests(unittest.TestCase):
     def test_displayed_image_survives_background_chapter_load(self):
         p=self.book(docs=[('a.xhtml',document('<img src="a.png"/>')),('b.xhtml',document('<img src="b.png"/>'))],extra={'a.png':png(),'b.png':png(b'\0\0\xff')})
         self.assertEqual(run('image-lifetime',p)[0],[{'image_lifetime':True}])
+    def test_mixed_style_line_breaking(self):self.assertEqual(run('layout')[0],[{'layout':True}])
+    def spans(self,c):
+        raw=c['text'].encode();return [(raw[o:o+n].decode(),f,z) for o,n,f,z in c['spans']]
+    def test_inline_emphasis_preserves_paragraph(self):
+        c=self.parse(docs=[('a.xhtml',document('<p>A<strong>B<em>C</em>D</strong>E<u>F</u><del>G</del></p>'))])[0]
+        self.assertEqual(c['text'],'ABCDEFG');self.assertEqual(len(c['blocks']),1)
+        self.assertEqual([(t,f&3) for t,f,z in self.spans(c)][:5],[('A',0),('B',1),('C',3),('D',1),('E',0)])
+        self.assertEqual(self.spans(c)[5][1]&512,512);self.assertEqual(self.spans(c)[6][1]&1024,1024)
+    def test_relative_font_sizes_and_inheritance(self):
+        c=self.parse(docs=[('a.xhtml',document('<p>A<span style="font-size:150%">B<span style="font-size:smaller">C</span>D</span>E</p>'))])[0]
+        spans=self.spans(c);self.assertEqual([z for t,f,z in spans],[100,150,125,150,100])
+    def test_css_lengths_spacing_and_indent(self):
+        c=self.parse(docs=[('a.xhtml',document('<p style="font-size:1.5em;text-indent:2em;line-height:1.6;margin:1em 0 2em">A</p><p style="text-indent:-1em;margin-top:0">B</p>'))])[0]
+        self.assertEqual(c['text'],'AB');self.assertEqual(c['layout'][0],[150,192,96,192,153,3]);self.assertEqual(c['layout'][1][1],-64)
+    def test_root_units_and_fixed_sizes(self):
+        c=self.parse(docs=[('a.xhtml',document('<div style="font-size:150%"><p style="font-size:1rem">A</p><p style="font-size:30px;margin-bottom:15pt">B</p></div>'))])[0]
+        self.assertEqual(c['layout'][0][0],100);self.assertEqual(c['layout'][1][0],150);self.assertEqual(c['layout'][1][3],64)
+    def test_margins_do_not_inherit(self):
+        c=self.parse(docs=[('a.xhtml',document('<div style="margin:3em"><p>A</p><p style="margin-top:inherit">B</p></div>'))])[0]
+        self.assertEqual(c['layout'][0][2:4],[0,0]);self.assertEqual(c['layout'][1][2],192)
+    def test_inherit_initial_and_important(self):
+        head='<style>span{font-size:150% !important;text-decoration:underline} p{font-weight:bold}</style>'
+        c=self.parse(docs=[('a.xhtml',document('<p>A<span style="font-size:50%;font-weight:initial">B</span><em style="font-weight:inherit">C</em></p>',head))])[0]
+        spans=self.spans(c);self.assertEqual(spans[1][2],150);self.assertFalse(spans[1][1]&1);self.assertEqual(spans[2][1]&3,3)
+    def test_line_height_multiplier_inherits(self):
+        c=self.parse(docs=[('a.xhtml',document('<div style="line-height:2"><p style="font-size:150%">A</p></div>'))])[0]
+        self.assertEqual(c['layout'][0][4],192)
+    def test_typography_limits_and_invalid_css(self):
+        c=self.parse(docs=[('a.xhtml',document('<p style="font-size:999em;margin:999px;line-height:999em;text-indent:999em">A</p><p style="font-size:nan;line-height:inf;text-indent:garbage">B</p>'))])[0]
+        self.assertEqual(c['layout'][0],[200,512,640,640,640,3]);self.assertEqual(c['layout'][1][0],100)
+    def test_span_budget_failure_is_explicit(self):
+        p=self.book(docs=[('a.xhtml',document('<p>'+('a<b>b</b>'*17000)+'</p>'))]);rows,_=run('epub',p)
+        self.assertTrue(any(r.get('error') for r in rows))
     def test_txt_encodings(self):
         text='开篇𠀀🙂\r\n第二行\r三\n\n终章'
         for enc,bom in [('utf-8',b''),('utf-8',b'\xef\xbb\xbf'),('utf-16le',b'\xff\xfe'),('utf-16be',b'\xfe\xff'),('utf-32le',b'\xff\xfe\0\0'),('utf-32be',b'\0\0\xfe\xff'),('gb18030',b'')]:
@@ -106,7 +139,7 @@ class ReaderTests(unittest.TestCase):
     def test_styles_cascade_all_sheets_inline_and_import(self):
         head='<link rel="stylesheet" href="a.css"/><link rel="stylesheet" href="b.css"/><style>.box p {font-style:italic} #special {text-align:right !important}</style>'
         c=self.parse(docs=[('chapter.xhtml',document('<div class="box"><p class="normal" id="special" style="text-align:center;font-weight:normal">Styled</p><p>Next</p><p class="hidden">NOPE</p></div>',head))],extra={'a.css':'@import "base.css"; p{font-weight:bold;text-indent:2em}', 'base.css':'.hidden{display:none}', 'b.css':'.normal{font-weight:normal;text-indent:0}'})[0]
-        self.assertNotIn('NOPE',c['text']);self.assertEqual(c['blocks'][0][2]&0x8b,0x82);self.assertTrue(c['blocks'][1][2]&1);self.assertTrue(c['blocks'][1][2]&256)
+        self.assertNotIn('NOPE',c['text']);self.assertEqual(c['blocks'][0][2]&0x8b,0x82);self.assertTrue(c['blocks'][1][2]&1);self.assertEqual(c['layout'][1][1],128)
     def test_styles_do_not_leak_documents(self):
         c=self.parse(docs=[('a.xhtml',document('<p>A</p>','<style>p{font-weight:bold}</style>')),('b.xhtml',document('<p>B</p>'))]);self.assertTrue(c[0]['blocks'][0][2]&1);self.assertFalse(c[1]['blocks'][0][2]&1)
     def test_structure_ruby_table_lists_pre(self):
@@ -165,7 +198,7 @@ class ReaderTests(unittest.TestCase):
             with self.subTest(allocation=i):run('epub',p,READER_FAIL_ALLOC=str(i))
     def test_real_sample(self):
         if not SAMPLE:self.skipTest("pass --sample to validate a local EPUB")
-        begin=time.monotonic();rows,stats=run('epub',SAMPLE,READER_IMAGES='1');self.assertEqual(rows[0]['open'],0);self.assertFalse(any(r.get('error') for r in rows));chapters=[r for r in rows if 'text' in r];self.assertEqual(len(chapters),rows[0]['count']);print(f'\nSample: {len(chapters)} chapters, {sum(len(r["blocks"]) for r in chapters)} blocks, {sum("image" in r for r in rows)} images, {time.monotonic()-begin:.3f}s; {stats.strip()}')
+        begin=time.monotonic();rows,stats=run('epub',SAMPLE,READER_IMAGES='1',READER_LAYOUT='1');self.assertEqual(rows[0]['open'],0);self.assertFalse(any(r.get('error') for r in rows));chapters=[r for r in rows if 'text' in r];self.assertEqual(len(chapters),rows[0]['count']);print(f'\nSample: {len(chapters)} chapters, {sum(len(r["blocks"]) for r in chapters)} blocks, {sum("image" in r for r in rows)} images, {time.monotonic()-begin:.3f}s; {stats.strip()}')
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--sample',type=Path);args,remaining=parser.parse_known_args();SAMPLE=args.sample

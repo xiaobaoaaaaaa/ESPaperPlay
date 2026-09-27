@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "espaperplay_reader_epub.h"
+#include "espaperplay_reader_layout.h"
 #include "src/parser/reader_image.h"
 #include "src/parser/reader_package.h"
 #include "src/parser/reader_text.h"
@@ -88,6 +89,18 @@ static void chapter(int idx, const char *title, const char *text, size_t len,
         printf("%s[%u,%u,%u,%d]", i ? "," : "", blocks[i].off, blocks[i].len, blocks[i].flags,
                blocks[i].image);
     }
+    printf("],\"layout\":[");
+    for (int i = 0; i < count; i++)
+        printf("%s[%u,%d,%d,%d,%u,%u]", i ? "," : "", blocks[i].scale, blocks[i].indent,
+               blocks[i].before, blocks[i].after, blocks[i].line_height, blocks[i].layout);
+    printf("],\"spans\":[");
+    int ns = 0;
+    const espaperplay_reader_span_t *spans = espaperplay_reader_epub_spans(&ns);
+    for (int i = 0; i < ns; i++) {
+        assert(spans[i].off <= len && spans[i].len <= len - spans[i].off);
+        printf("%s[%u,%u,%u,%u]", i ? "," : "", spans[i].off, spans[i].len, spans[i].flags,
+               spans[i].scale);
+    }
     puts("]}");
 }
 static void core(void) {
@@ -113,6 +126,49 @@ static void core(void) {
     assert(rp_xml_next(&x, &t) == RP_XML_EOF);
     puts("{\"core\":true}");
 }
+static espaperplay_reader_glyph_t fixed_measure(void *ctx, uint16_t flags, uint16_t scale,
+                                                uint32_t cp, uint32_t next) {
+    (void)ctx;
+    (void)flags;
+    (void)cp;
+    (void)next;
+    return (espaperplay_reader_glyph_t){
+        .width = scale / 10, .ascent = scale / 10, .descent = scale / 20};
+}
+static void layout_test(void) {
+    espaperplay_reader_line_t l;
+    const espaperplay_reader_span_t s[] = {{0, 2, 0, 100}, {2, 2, 1, 200}, {4, 2, 0, 100}};
+    assert(
+        espaperplay_reader_layout_line("abcdef", 0, 6, s, 3, 0, 100, 60, fixed_measure, NULL, &l));
+    assert(l.next == 4 && l.width == 60 && l.height == 30 && l.count == 2);
+    assert(l.fragments[1].x == 20 && l.fragments[1].ascent == 20);
+    assert(espaperplay_reader_layout_line("abcdef", l.next, 6, s, 3, 0, 100, 60, fixed_measure,
+                                          NULL, &l));
+    assert(l.next == 6 && l.width == 20 && l.height == 15);
+    assert(espaperplay_reader_layout_line("one two", 0, 7, NULL, 0, 0, 100, 50, fixed_measure, NULL,
+                                          &l));
+    assert(l.next == 4 && l.width == 40); /* keep the second word whole */
+    assert(espaperplay_reader_layout_line("a\nb", 0, 3, NULL, 0, 0, 100, 100, fixed_measure, NULL,
+                                          &l));
+    assert(l.next == 2 && l.count == 1 && l.fragments[0].len == 1);
+    assert(espaperplay_reader_layout_line("\n", 0, 1, NULL, 0, 0, 100, 0, fixed_measure, NULL, &l));
+    assert(l.next == 1 && l.count == 0 && l.height == 15);
+    assert(espaperplay_reader_layout_line("中", 0, 3, NULL, 0, 0, 100, 0, fixed_measure, NULL, &l));
+    assert(l.next == 3);
+    char many[200];
+    memset(many, 'a', sizeof(many));
+    espaperplay_reader_span_t runs[200];
+    for (int i = 0; i < 200; i++)
+        runs[i] = (espaperplay_reader_span_t){i, 1, i % 2, 100};
+    uint32_t off = 0;
+    while (off < 200) {
+        assert(espaperplay_reader_layout_line(many, off, 200, runs, 200, 0, 100, 10000,
+                                              fixed_measure, NULL, &l));
+        assert(l.next > off && l.count <= ESPAPERPLAY_READER_LINE_RUNS);
+        off = l.next;
+    }
+    puts("{\"layout\":true}");
+}
 int main(int argc, char **argv) {
     if (argc < 2)
         return 2;
@@ -120,6 +176,8 @@ int main(int argc, char **argv) {
         fail_at = strtoul(getenv("READER_FAIL_ALLOC"), NULL, 10);
     if (!strcmp(argv[1], "core"))
         core();
+    else if (!strcmp(argv[1], "layout"))
+        layout_test();
     else if (argc >= 3 && !strcmp(argv[1], "truncated-txt")) {
         rp_text_t book;
         int err = rp_text_open(&book, argv[2]);
@@ -206,6 +264,23 @@ int main(int argc, char **argv) {
                 const char *s = espaperplay_reader_epub_chapter_text(&len);
                 const espaperplay_reader_block_t *b = espaperplay_reader_epub_blocks(&count);
                 chapter(i, espaperplay_reader_epub_chapter_title(), s, len, b, count);
+                if (getenv("READER_LAYOUT")) {
+                    int ns = 0;
+                    const espaperplay_reader_span_t *spans = espaperplay_reader_epub_spans(&ns);
+                    for (int j = 0; j < count; j++) {
+                        uint32_t off = b[j].off, end = off + b[j].len;
+                        while (off < end) {
+                            espaperplay_reader_line_t line;
+                            assert(espaperplay_reader_layout_line(s, off, end, spans, ns,
+                                                                  b[j].flags, b[j].scale, 224,
+                                                                  fixed_measure, NULL, &line));
+                            assert(line.next > off && line.next <= end);
+                            if (line.next < end)
+                                assert(((unsigned char)s[line.next] & 0xc0) != 0x80);
+                            off = line.next;
+                        }
+                    }
+                }
                 if (getenv("READER_IMAGES"))
                     for (int j = 0; j < count; j++)
                         if (b[j].image >= 0) {
