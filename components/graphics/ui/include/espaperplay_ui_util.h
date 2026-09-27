@@ -42,6 +42,13 @@ void espaperplay_ui_nav_select(lv_obj_t *button, bool selected);
 void espaperplay_ui_chevron_create(lv_obj_t *parent, int x, int y, bool back);
 void espaperplay_ui_file_icon_create(lv_obj_t *parent, int x, int y, bool folder);
 
+/** Secondary page heading; parent starts directly below the 30px status bar. */
+void espaperplay_ui_page_heading(lv_obj_t *parent, const char *title,
+    const char *subtitle, lv_event_cb_t back);
+/** Two-line network row shared by settings and device setup. */
+void espaperplay_ui_network_row(lv_obj_t *parent, const char *ssid, const char *detail,
+    int8_t rssi, int y, int height, lv_event_cb_t cb, void *user_data);
+
 /* ------------------------------------------------------------------ */
 /* 屏幕尺寸 / 屏高缩放                                                   */
 /* ------------------------------------------------------------------ */

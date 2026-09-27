@@ -305,3 +305,52 @@ const lv_image_dsc_t *espaperplay_ui_wifi_rssi_icon(int rssi) {
     }
     return &icon_wifi1_16;
 }
+
+void espaperplay_ui_page_heading(lv_obj_t *parent, const char *text,
+                                 const char *subtitle, lv_event_cb_t back) {
+    lv_obj_t *title = espaperplay_ui_label_create(parent, text, 32, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(title, back ? 76 : 24, 18);
+    lv_obj_set_width(title, lv_obj_get_width(parent) - (back ? 100 : 48));
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    if (subtitle) {
+        lv_obj_t *hint = espaperplay_ui_label_create(parent, subtitle, 16, LV_TEXT_ALIGN_LEFT);
+        lv_obj_set_pos(hint, 24, 80);
+        lv_obj_set_width(hint, lv_obj_get_width(parent) - 48);
+        lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    }
+    if (back) {
+        lv_obj_t *button = lv_obj_create(parent);
+        espaperplay_ui_card_style(button);
+        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_size(button, 64, 64);
+        lv_obj_set_pos(button, 4, 8);
+        espaperplay_ui_chevron_create(button, 22, 22, true);
+        lv_obj_add_event_cb(button, back, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+void espaperplay_ui_network_row(lv_obj_t *parent, const char *ssid, const char *detail,
+                                int8_t rssi, int y, int height, lv_event_cb_t cb, void *user_data) {
+    const int width = lv_obj_get_width(parent);
+    lv_obj_t *row = lv_obj_create(parent);
+    espaperplay_ui_card_style(row);
+    lv_obj_set_pos(row, 0, y);
+    lv_obj_set_size(row, width, height);
+    lv_obj_set_style_radius(row, 0, 0);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user_data);
+    lv_obj_t *icon = lv_image_create(row);
+    lv_image_set_src(icon, espaperplay_ui_wifi_rssi_icon(rssi));
+    lv_image_set_pivot(icon, 0, 0);
+    lv_image_set_scale(icon, 384);
+    lv_obj_set_pos(icon, 12, (height - 24) / 2);
+    lv_obj_t *name = espaperplay_ui_label_create(row, ssid, 20, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(name, 56, 12);
+    lv_obj_set_width(name, width - 88);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_t *sub = espaperplay_ui_label_create(row, detail, 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(sub, 56, 46);
+    lv_obj_set_width(sub, width - 88);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
+    espaperplay_ui_chevron_create(row, width - 26, (height - 20) / 2, false);
+}

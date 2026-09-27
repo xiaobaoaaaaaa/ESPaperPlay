@@ -66,7 +66,7 @@ static const char *TAG = "ESPaperPlay_UI";
 #define WIFI_LIST_BAR_H 30                 /* 标题栏高度（基准） */
 #define WIFI_LIST_MIN_H 24                 /* 标题栏最小高度 */
 #define WIFI_LIST_MARGIN ESPAPERPLAY_UI_MARGIN /* 内容与屏幕边缘间距 */
-#define WIFI_LIST_ROW_H 44                 /* 列表行高度（基准） */
+#define WIFI_LIST_ROW_H 88                 /* 列表行高度（基准） */
 #define WIFI_LIST_BTN_H 52                 /* 按钮高度（基准） */
 #define WIFI_LIST_POLL_PERIOD_MS 500       /* 连接状态轮询周期 */
 #define WIFI_LIST_CONNECT_TIMEOUT_MS 45000 /* 连接判定超时 */
@@ -100,7 +100,7 @@ static wifi_list_view_t s_view = WIFI_LIST_VIEW_LIST; /*!< 当前视图 */
 static bool s_page_active = false;                /*!< 页面是否在栈顶（迟到回调守卫） */
 
 static lv_obj_t *s_status_label = NULL; /*!< 状态提示行（扫描中 / 结果数 / 连接反馈） */
-static lv_obj_t *s_list_card = NULL;    /*!< 扫描结果卡片（设置页同款边框，不滚动） */
+static lv_obj_t *s_list_card = NULL;    /*!< 扫描结果视口（无外框，不滚动） */
 static lv_obj_t *s_list = NULL;         /*!< 扫描结果列表滚动区（卡片内嵌） */
 
 /* 扫描结果快照（LVGL 线程内重建列表时拷贝，行点击经下标取回）。 */
@@ -135,6 +135,8 @@ static void wifi_list_open_keyboard(void);
 static void wifi_list_connect_start(const char *pass);
 static void wifi_list_poll_cb(lv_timer_t *timer);
 static void wifi_list_status_set(const char *text);
+static void wifi_list_cancel_connect_cb(lv_event_t *e);
+static void wifi_list_back_cb(lv_event_t *e);
 
 /* ------------------------------------------------------------------ */
 /* 工具函数                                                             */
@@ -381,58 +383,16 @@ static void wifi_list_rebuild_list(void) {
         return;
     }
 
-    const int32_t list_w = lv_obj_get_width(s_list);
-    const int row_h = espaperplay_ui_scaled(WIFI_LIST_ROW_H) < 36 ? 36
-                                                             : espaperplay_ui_scaled(WIFI_LIST_ROW_H);
-
+    lv_obj_update_layout(s_list);
+    const int row_h = WIFI_LIST_ROW_H;
     for (size_t i = 0; i < s_item_count; i++) {
-        const bool is_current = (have_sta && strcmp(s_items[i].ssid, st.ssid) == 0);
-
-        lv_obj_t *row = lv_obj_create(s_list);
-        lv_obj_set_size(row, list_w, row_h);
-        lv_obj_set_pos(row, 0, (int)(i * (row_h + 4)));
-        lv_obj_set_style_bg_color(row, is_current ? lv_color_black() : lv_color_white(), 0);
-        lv_obj_set_style_border_color(row, lv_color_black(), 0);
-        lv_obj_set_style_border_width(row, is_current ? 0 : 1, 0);
-        lv_obj_set_style_radius(row, 6, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(row, wifi_list_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-
-        /* SSID（左，超长省略） */
-        lv_obj_t *label = lv_label_create(row);
-        lv_label_set_text(label, s_items[i].ssid);
-        lv_obj_set_style_text_color(label, is_current ? lv_color_white() : lv_color_black(), 0);
-        lv_obj_set_style_text_font(label, espaperplay_ui_font(16), 0);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 10, 0);
-        lv_obj_set_width(label, list_w - 130);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-
-        /* 信道（信号图标左侧小字，补充强度信息便于区分同名网络） */
-        char ch_buf[12];
-        snprintf(ch_buf, sizeof(ch_buf), "CH%u", (unsigned)s_items[i].channel);
-        lv_obj_t *ch = lv_label_create(row);
-        lv_label_set_text(ch, ch_buf);
-        lv_obj_set_style_text_color(ch, is_current ? lv_color_white() : lv_color_black(), 0);
-        lv_obj_set_style_text_font(ch, espaperplay_ui_font(16), 0);
-        lv_obj_align(ch, LV_ALIGN_RIGHT_MID, -30, 0);
-
-        /* 信号强度图标 */
-        lv_obj_t *icon = lv_image_create(row);
-        lv_image_set_src(icon, espaperplay_ui_wifi_rssi_icon(s_items[i].rssi));
-        lv_obj_set_style_image_recolor(icon, is_current ? lv_color_white() : lv_color_black(), 0);
-        lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
-        lv_obj_align(icon, LV_ALIGN_RIGHT_MID, -10, 0);
-
-        /* 加密标记（信道文字前） */
-        if (s_items[i].auth) {
-            lv_obj_t *lock = lv_label_create(row);
-            lv_label_set_text(lock, "加密");
-            lv_obj_set_style_text_color(lock, is_current ? lv_color_white() : lv_color_black(), 0);
-            lv_obj_set_style_text_font(lock, espaperplay_ui_font(16), 0);
-            lv_obj_align(lock, LV_ALIGN_RIGHT_MID, -76, 0);
-        }
+        const bool current = have_sta && strcmp(s_items[i].ssid, st.ssid) == 0;
+        char detail[80];
+        snprintf(detail, sizeof(detail), "%s%s · 信道 %u",
+                 current ? "已连接 · " : "", s_items[i].auth ? "加密网络" : "开放网络",
+                 (unsigned)s_items[i].channel);
+        espaperplay_ui_network_row(s_list, s_items[i].ssid, detail, s_items[i].rssi,
+            (int)i * row_h, row_h, wifi_list_row_cb, (void *)(intptr_t)i);
     }
 
     char buf[48];
@@ -458,17 +418,21 @@ static void wifi_list_build_list_view(lv_obj_t *parent, int32_t scr_w, int32_t s
     const int btn_h = wifi_list_btn_h();
     const int btn_y = scr_h - btn_h - espaperplay_ui_scaled(16);
 
-    s_status_label = espaperplay_ui_label_create(parent, "正在扫描附近网络…", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_status_label, 0, espaperplay_ui_scaled(6));
+    espaperplay_ui_page_heading(parent, "Wi-Fi 网络", "选择附近的网络以连接设备", wifi_list_back_cb);
+    s_status_label = espaperplay_ui_label_create(parent, "正在扫描附近网络…", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(s_status_label, 24, 124);
+    lv_obj_set_width(s_status_label, scr_w - 48);
+    lv_obj_set_height(s_status_label, 46);
 
-    /* 扫描结果卡片（设置页同款 2px 黑边圆角卡）+ 内嵌滚动区：外卡不滚动，
-     * 行滚动时被内区裁剪，不会压到卡片边框（LVGL 子对象裁剪含边框带）。 */
-    const int card_h = btn_y - espaperplay_ui_scaled(40) - 6; /* 与底部按钮留 6px 间隙 */
-    const int inset = espaperplay_ui_scaled(10) < 6 ? 6 : espaperplay_ui_scaled(10);
+    const int list_y = 180;
+    const int card_h = btn_y - list_y - 16;
+    const int inset = 0;
     s_list_card = lv_obj_create(parent);
     lv_obj_set_size(s_list_card, scr_w - 2 * WIFI_LIST_MARGIN, card_h);
-    lv_obj_set_pos(s_list_card, WIFI_LIST_MARGIN, espaperplay_ui_scaled(40));
+    lv_obj_set_pos(s_list_card, WIFI_LIST_MARGIN, list_y);
     espaperplay_ui_card_style(s_list_card);
+    lv_obj_set_style_border_width(s_list_card, 0, 0);
+    lv_obj_set_style_radius(s_list_card, 0, 0);
 
     /* 内嵌滚动列表（可纵向滚动；EPD 禁弹性滚动与滚动条）。 */
     s_list = lv_obj_create(s_list_card);
@@ -484,7 +448,7 @@ static void wifi_list_build_list_view(lv_obj_t *parent, int32_t scr_w, int32_t s
     lv_obj_remove_flag(s_list, LV_OBJ_FLAG_SCROLL_ELASTIC);
 
     espaperplay_ui_modal_button(parent, "重新扫描", WIFI_LIST_MARGIN, btn_y, scr_w - 2 * WIFI_LIST_MARGIN,
-                     btn_h, false, wifi_list_rescan_cb, NULL);
+                     btn_h, true, wifi_list_rescan_cb, NULL);
 
     /* 首次进入（扫描进行中）：保持空列表与扫描提示，等扫描完成回调重建；
      * 从连接视图返回：s_scan_busy=false，用缓存结果即时重建。 */
@@ -513,18 +477,14 @@ static void wifi_list_cancel_connect_cb(lv_event_t *e) {
 
 /** 构建连接中视图。 */
 static void wifi_list_build_connecting_view(lv_obj_t *parent, int32_t scr_w, int32_t scr_h) {
-    (void)scr_h;
-    lv_obj_t *title = espaperplay_ui_label_create(parent, "正在连接网络", 24, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(title, 0, espaperplay_ui_scaled(70));
-
-    char ssid_line[ESPAPERPLAY_SYSTEM_SSID_MAX_LEN + 16];
-    snprintf(ssid_line, sizeof(ssid_line), "「%s」", s_target_ssid);
-    lv_obj_t *ssid_label = espaperplay_ui_label_create(parent, ssid_line, 20, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(ssid_label, 0, espaperplay_ui_scaled(130));
-
-    s_status_label =
-        espaperplay_ui_label_create(parent, "正在应用网络配置…", 16, LV_TEXT_ALIGN_CENTER);
-    lv_obj_set_pos(s_status_label, 0, espaperplay_ui_scaled(170));
+    espaperplay_ui_page_heading(parent, "连接网络", "请稍候，连接成功后会自动返回列表", wifi_list_back_cb);
+    lv_obj_t *ssid_label = espaperplay_ui_label_create(parent, s_target_ssid, 24, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(ssid_label, 24, 164);
+    lv_obj_set_width(ssid_label, scr_w - 48);
+    lv_label_set_long_mode(ssid_label, LV_LABEL_LONG_WRAP);
+    s_status_label = espaperplay_ui_label_create(parent, "正在应用网络配置…", 16, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_pos(s_status_label, 24, 252);
+    lv_obj_set_width(s_status_label, scr_w - 48);
 
     espaperplay_ui_modal_button(parent, "取消并返回", WIFI_LIST_MARGIN, scr_h - wifi_list_btn_h() -
                                                                  espaperplay_ui_scaled(16),
@@ -557,6 +517,7 @@ static void wifi_list_show_view(wifi_list_view_t view) {
     lv_obj_set_style_pad_all(s_content, 0, 0);
     lv_obj_remove_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
 
+    lv_obj_update_layout(s_content);
     if (view == WIFI_LIST_VIEW_LIST) {
         wifi_list_build_list_view(s_content, scr_w, scr_h - wifi_list_bar_h());
     } else {
@@ -655,6 +616,12 @@ static void wifi_list_connect_start(const char *pass) {
 /* 页面生命周期                                                         */
 /* ------------------------------------------------------------------ */
 
+static void wifi_list_back_cb(lv_event_t *e) {
+    lv_event_stop_bubbling(e);
+    if (s_view == WIFI_LIST_VIEW_CONNECTING) wifi_list_cancel_connect_cb(NULL);
+    else if (espaperplay_ui_page_depth() > 1) espaperplay_ui_page_pop_lv();
+}
+
 /** 列表页构建（页面 enter：屏幕已由页面栈清空）。 */
 static void wifi_list_enter(void) {
     lv_obj_t *scr = lv_screen_active();
@@ -664,7 +631,7 @@ static void wifi_list_enter(void) {
 
     espaperplay_ui_scale_init(WIFI_LIST_REF_H);
     const int bar_h = wifi_list_bar_h();
-    s_bar = espaperplay_ui_status_bar_create(scr, bar_h, "WiFi 网络", false);
+    s_bar = espaperplay_ui_status_bar_create(scr, bar_h, "", false);
 
     s_page_active = true;
     s_view = WIFI_LIST_VIEW_LIST;
