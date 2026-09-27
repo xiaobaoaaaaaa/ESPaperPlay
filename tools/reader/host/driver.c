@@ -128,6 +128,30 @@ int main(int argc, char **argv) {
         err = rp_text_load(&book, book.count - 1);
         printf("{\"error\":%d}\n", err);
         rp_text_close(&book);
+    } else if (argc >= 3 && !strcmp(argv[1], "image-lifetime")) {
+        assert(espaperplay_reader_epub_open(argv[2]) == ESP_OK);
+        assert(espaperplay_reader_epub_load_chapter(0) == ESP_OK);
+        const lv_image_dsc_t *d = NULL;
+        assert(espaperplay_reader_epub_image(0, 240, 320, &d) == ESP_OK);
+        lv_image_dsc_t saved = *d;
+        uint8_t pixels[8];
+        assert(d->data_size == sizeof(pixels));
+        memcpy(pixels, d->data, sizeof(pixels));
+        /* Background pagination replaces the resident chapter, while LVGL
+         * still holds the image descriptor from the visible page. */
+        assert(espaperplay_reader_epub_poll_chapter(1));
+        assert(d->data == saved.data && d->data_size == saved.data_size);
+        assert(!memcmp(saved.data, pixels, sizeof(pixels)));
+        assert(espaperplay_reader_epub_load_chapter(0) == ESP_OK);
+        assert(espaperplay_reader_epub_image(0, 240, 320, &d) == ESP_OK);
+        assert(d->data == saved.data);
+        /* Both chapters use local image id zero, but different ZIP entries. */
+        assert(espaperplay_reader_epub_load_chapter(1) == ESP_OK);
+        assert(espaperplay_reader_epub_image(0, 240, 320, &d) == ESP_OK);
+        assert(d->data_size == sizeof(pixels));
+        assert(memcmp(d->data, pixels, sizeof(pixels)));
+        espaperplay_reader_epub_close();
+        puts("{\"image_lifetime\":true}");
     } else if (argc >= 3 && !strcmp(argv[1], "cover")) {
         lv_image_dsc_t d = {0};
         uint8_t *pixels = NULL;

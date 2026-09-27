@@ -42,7 +42,10 @@ static bool s_open;
 static uint32_t s_token, s_generation;
 static uint8_t *s_image;
 static lv_image_dsc_t s_image_dsc;
-static int s_image_id = -1, s_image_w, s_image_h;
+/* The visible LVGL image outlives the resident chapter during pagination.
+ * Keep one decoded image until the next image request or book close, keyed
+ * by archive entry rather than the chapter-local image index. */
+static int s_image_entry = -1, s_image_w, s_image_h;
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
 static SemaphoreHandle_t s_book_lock, s_slot_lock, s_notify;
 static TaskHandle_t s_worker;
@@ -71,7 +74,7 @@ static void epub_packet_free(epub_packet_t *p) {
 static void image_free(void) {
     rp_free(s_image);
     s_image = NULL;
-    s_image_id = -1;
+    s_image_entry = -1;
     memset(&s_image_dsc, 0, sizeof(s_image_dsc));
 }
 #ifndef ESPAPERPLAY_READER_EPUB_HOST
@@ -128,7 +131,6 @@ static esp_err_t produce(int idx, bool write_cache, epub_packet_t *out) {
     return ESP_OK;
 }
 static void install(epub_packet_t *p) {
-    image_free();
     epub_packet_free(&s_live);
     s_live = *p;
     memset(p, 0, sizeof(*p));
@@ -311,7 +313,6 @@ bool espaperplay_reader_epub_poll_chapter(int idx) {
 #endif
     esp_err_t err = espaperplay_reader_epub_load_chapter(idx);
     if (err != ESP_OK) {
-        image_free();
         epub_packet_free(&s_live);
         s_live.chapter = idx;
         s_live.status = err;
@@ -354,19 +355,20 @@ static esp_err_t decode_entry(epub_zip_t *zip, int zi, int w, int h, epub_img_ou
 esp_err_t espaperplay_reader_epub_image(int id, int w, int h, const lv_image_dsc_t **out) {
     if (!s_open || !out || id < 0 || id >= s_live.image_cnt)
         return ESP_ERR_INVALID_ARG;
-    if (s_image && s_image_id == id && s_image_w == w && s_image_h == h) {
+    const int entry = s_live.images[id];
+    if (s_image && s_image_entry == entry && s_image_w == w && s_image_h == h) {
         *out = &s_image_dsc;
         return ESP_OK;
     }
     image_free();
     epub_img_out_t decoded = {0};
     book_lock();
-    esp_err_t err = decode_entry(&s_zip, s_live.images[id], w, h, &decoded);
+    esp_err_t err = decode_entry(&s_zip, entry, w, h, &decoded);
     book_unlock();
     if (err != ESP_OK)
         return err;
     s_image = decoded.buf;
-    s_image_id = id;
+    s_image_entry = entry;
     s_image_w = w;
     s_image_h = h;
     descriptor(&s_image_dsc, &decoded);

@@ -112,7 +112,7 @@ const espaperplay_reader_block_t *espaperplay_reader_epub_blocks(int *out_cnt);
  * @param img_id 块表中的 image id（章节内序号）。
  * @param max_w 解码预算框宽（像素；渲染层可再等比缩放至实际显示框）。
  * @param max_h 解码预算框高（像素）。
- * @param[out] out_dsc 解码结果（RGB565，缓冲由模块持有，至下次调用/close）。
+ * @param[out] out_dsc 解码结果（RGB565，模块持有，至下次图片调用/close；切换章节不失效）。
  * @return ESP_OK；其他错误码见日志。
  */
 esp_err_t espaperplay_reader_epub_image(int img_id, int max_w, int max_h,

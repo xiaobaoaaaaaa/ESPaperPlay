@@ -164,7 +164,7 @@ const espaperplay_reader_block_t *espaperplay_reader_blocks(int *out_cnt);
  *
  * @param img_id 块表 image id（章节内序号）。
  * @param max_w/max_h 目标框（等比缩放至内接）。
- * @param[out] out_dsc 解码结果（RGB565，模块持有，至下次调用/close）。
+ * @param[out] out_dsc 解码结果（RGB565，模块持有，至下次图片调用/close；切换章节不失效）。
  * @return ESP_OK；TXT 或无图返回 ESP_ERR_NOT_SUPPORTED。
  */
 esp_err_t espaperplay_reader_image(int img_id, int max_w, int max_h,

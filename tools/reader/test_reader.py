@@ -30,9 +30,9 @@ def run(kind,path=None,**env):
 def document(body,head=''):
     return f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Book</title>{head}</head><body>{body}</body></html>'
 
-def png():
+def png(pixel=b'\xff\0\0'):
     def chunk(kind,data):return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
-    return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',2,2,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'\0'+b'\xff\0\0'*2+b'\0'+b'\0\xff\0'*2))+chunk(b'IEND',b'')
+    return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',2,2,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(b'\0'+pixel*2+b'\0'+b'\0\xff\0'*2))+chunk(b'IEND',b'')
 
 def epub(path,docs=None,nav=None,ncx=None,extra=None,opf=None,stored=False):
     docs=docs or [('chapter.xhtml',document('<p>Hello 世界</p>'))]
@@ -57,6 +57,9 @@ class ReaderTests(unittest.TestCase):
     def txt(self,raw):p=self.dir/'book.txt';p.write_bytes(raw);rows,_=run('txt',p);self.assertEqual(rows[0]['open'],0);self.assertFalse(any('error' in r for r in rows));return rows
     def parse(self,**kwargs):rows,_=run('epub',self.book(**kwargs));self.assertEqual(rows[0]['open'],0);self.assertFalse(any('error' in r for r in rows));return rows[1:]
     def test_xml_uri_core(self):self.assertEqual(run('core')[0],[{'core':True}])
+    def test_displayed_image_survives_background_chapter_load(self):
+        p=self.book(docs=[('a.xhtml',document('<img src="a.png"/>')),('b.xhtml',document('<img src="b.png"/>'))],extra={'a.png':png(),'b.png':png(b'\0\0\xff')})
+        self.assertEqual(run('image-lifetime',p)[0],[{'image_lifetime':True}])
     def test_txt_encodings(self):
         text='开篇𠀀🙂\r\n第二行\r三\n\n终章'
         for enc,bom in [('utf-8',b''),('utf-8',b'\xef\xbb\xbf'),('utf-16le',b'\xff\xfe'),('utf-16be',b'\xfe\xff'),('utf-32le',b'\xff\xfe\0\0'),('utf-32be',b'\0\0\xfe\xff'),('gb18030',b'')]:
