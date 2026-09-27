@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 #include "espaperplay_config.h"
 #include "espaperplay_storage.h"
@@ -33,7 +34,7 @@ static const char *TAG = "ESPaperPlay_READER";
 
 #define HIST_LINE_MAX 300      /* 单行缓冲（路径 256 + 分隔符 + 数值） */
 #define HIST_QUEUE_LEN 8       /* 写操作队列长度 */
-#define HIST_WORKER_STACK 8192 /* worker 栈（内部 RAM；含 20 条目数组 ~5.4KB） */
+#define HIST_WORKER_STACK 8192 /* 内部 RAM 栈；历史条目放 PSRAM，留足 FAT 调用余量 */
 #define HIST_WORKER_PRIO 4
 
 /** 写操作类型。 */
@@ -117,7 +118,12 @@ static esp_err_t hist_write_all(const espaperplay_reader_history_entry_t *entrie
 
 /** UPDATE：存在则移到最前并更新，否则插入最前；超出上限淘汰最旧。 */
 static void hist_apply_update(const char *path, uint32_t page, uint32_t total) {
-    espaperplay_reader_history_entry_t arr[ESPAPERPLAY_READER_HISTORY_MAX];
+    espaperplay_reader_history_entry_t *arr = heap_caps_calloc(
+        ESPAPERPLAY_READER_HISTORY_MAX, sizeof(*arr), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!arr) {
+        ESP_LOGW(TAG, "history: no memory for update");
+        return;
+    }
     int cnt = 0;
     (void)espaperplay_reader_history_load(arr, ESPAPERPLAY_READER_HISTORY_MAX, &cnt);
 
@@ -152,11 +158,17 @@ static void hist_apply_update(const char *path, uint32_t page, uint32_t total) {
     if (hist_write_all(arr, cnt) == ESP_OK) {
         ESP_LOGI(TAG, "history: update %s (page %u/%u)", path, (unsigned)page, (unsigned)total);
     }
+    heap_caps_free(arr);
 }
 
 /** REMOVE：删除匹配条目并写回。 */
 static void hist_apply_remove(const char *path) {
-    espaperplay_reader_history_entry_t arr[ESPAPERPLAY_READER_HISTORY_MAX];
+    espaperplay_reader_history_entry_t *arr = heap_caps_calloc(
+        ESPAPERPLAY_READER_HISTORY_MAX, sizeof(*arr), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!arr) {
+        ESP_LOGW(TAG, "history: no memory for update");
+        return;
+    }
     int cnt = 0;
     (void)espaperplay_reader_history_load(arr, ESPAPERPLAY_READER_HISTORY_MAX, &cnt);
 
@@ -169,6 +181,7 @@ static void hist_apply_remove(const char *path) {
     }
     if (idx < 0) {
         ESP_LOGI(TAG, "history: remove %s (not found)", path);
+        heap_caps_free(arr);
         return;
     }
     for (int i = idx; i < cnt - 1; i++) {
@@ -177,6 +190,7 @@ static void hist_apply_remove(const char *path) {
     cnt--;
     (void)hist_write_all(arr, cnt);
     ESP_LOGI(TAG, "history: remove %s", path);
+    heap_caps_free(arr);
 }
 
 /** CLEAR：删除历史文件。 */
@@ -188,7 +202,7 @@ static void hist_apply_clear(void) {
     }
 }
 
-/** worker 任务（内部 RAM 栈；SD 写期间 flash 缓存禁用，栈不能放 PSRAM）。 */
+/** 历史写入串行化；条目数组使用 PSRAM，任务栈供文件系统调用。 */
 static void hist_worker_task(void *arg) {
     (void)arg;
     hist_work_t w;
@@ -203,6 +217,8 @@ static void hist_worker_task(void *arg) {
         } else {
             hist_apply_clear();
         }
+        ESP_LOGI(TAG, "history: worker stack remaining >= %u bytes",
+                 (unsigned)uxTaskGetStackHighWaterMark(NULL));
         s_hist_pending--;
     }
 }
@@ -273,15 +289,21 @@ esp_err_t espaperplay_reader_history_find(const char *path,
     if (path == NULL || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    espaperplay_reader_history_entry_t arr[ESPAPERPLAY_READER_HISTORY_MAX];
+    espaperplay_reader_history_entry_t *arr = heap_caps_calloc(
+        ESPAPERPLAY_READER_HISTORY_MAX, sizeof(*arr), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!arr) {
+        return ESP_ERR_NO_MEM;
+    }
     int cnt = 0;
     (void)espaperplay_reader_history_load(arr, ESPAPERPLAY_READER_HISTORY_MAX, &cnt);
     for (int i = 0; i < cnt; i++) {
         if (strcmp(arr[i].path, path) == 0) {
             *out = arr[i];
+            heap_caps_free(arr);
             return ESP_OK;
         }
     }
+    heap_caps_free(arr);
     return ESP_ERR_NOT_FOUND;
 }
 

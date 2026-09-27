@@ -21,27 +21,41 @@
 
 static const char *TAG = "ESPaperPlay_FS";
 
+/* VFS maps the mount point to "/" for stat(). FAT mkdir(root), however,
+ * returns FR_INVALID_NAME rather than EEXIST. */
+static bool fs_is_directory(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static bool fs_ensure_directory(const char *path) {
+    if (fs_is_directory(path)) return true;
+    if (mkdir(path, 0777) == 0) return true;
+    return errno == EEXIST && fs_is_directory(path);
+}
+
 esp_err_t espaperplay_fs_mkdir_p(const char *path) {
     if (path == NULL || path[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    /* 逐级 mkdir：已存在（EEXIST）视为成功。 */
+    /* 先检查已存在目录，避免对 FAT 挂载根目录调用 mkdir。 */
     char buf[ESPAPERPLAY_FS_NAME_MAX];
     const size_t len = strlen(path);
     if (len >= sizeof(buf)) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (fs_is_directory(path)) return ESP_OK;
     memcpy(buf, path, len + 1);
     for (char *p = buf + 1; *p != '\0'; p++) {
         if (*p == '/') {
             *p = '\0';
-            if (mkdir(buf, 0777) != 0 && errno != EEXIST) {
+            if (!fs_ensure_directory(buf)) {
                 return ESP_FAIL;
             }
             *p = '/';
         }
     }
-    if (mkdir(buf, 0777) != 0 && errno != EEXIST) {
+    if (!fs_ensure_directory(buf)) {
         return ESP_FAIL;
     }
     return ESP_OK;

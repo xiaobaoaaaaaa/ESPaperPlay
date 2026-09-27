@@ -62,8 +62,9 @@ espcache_result_t espcache_read(const char *path, espcache_read_fn fn, void *ud)
 typedef bool (*espcache_write_fn)(FILE *f, void *ud);
 
 /**
- * @brief 原子写缓存：确保父目录 → 写 path.tmp → 成功 rename 原子替换 /
- * 失败删除临时文件。绝不产生半写缓存。
+ * @brief 完整写缓存：确保父目录 → 写并关闭 path.tmp → rename 发布。
+ * FAT 替换已有文件时先删旧缓存，短暂缺失可重建；绝不发布半写缓存。
+ * 失败删除临时文件；同一路径的写入须由调用方串行化。
  * @return true=已落盘（rename 完成）。
  */
 bool espcache_write_atomic(const char *path, espcache_write_fn fn, void *ud);

@@ -10,6 +10,7 @@
  */
 #include "espcache.h"
 
+#include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -57,6 +58,7 @@ bool espcache_write_atomic(const char *path, espcache_write_fn fn, void *ud) {
     memcpy(dir, path, (size_t)(slash - path));
     dir[slash - path] = '\0';
     if (espaperplay_fs_mkdir_p(dir) != ESP_OK) {
+        ESP_LOGW(TAG, "cache mkdir failed: %s", dir);
         return false;
     }
 
@@ -69,11 +71,15 @@ bool espcache_write_atomic(const char *path, espcache_write_fn fn, void *ud) {
         return false;
     }
     const bool ok = fn(f, ud);
-    fclose(f);
-    if (ok) {
-        rename(tmp, path); /* 原子替换，避免半写文件被读到 */
-        return true;
+    const int closed = fclose(f); /* Includes buffered write errors. */
+    if (ok && closed == 0) {
+        if (rename(tmp, path) == 0) return true;
+        /* FAT cannot rename over an existing destination. Only remove a
+         * rebuildable cache after the replacement is completely written.
+         * Readers can observe a miss here, never a partially written file. */
+        if (errno == EEXIST && remove(path) == 0 && rename(tmp, path) == 0) return true;
     }
+    ESP_LOGW(TAG, "cache write failed: %s (errno %d)", path, errno);
     remove(tmp);
     return false;
 }
